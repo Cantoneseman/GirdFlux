@@ -120,12 +120,24 @@ common::Result<FileDownloadOptions> parseFileDownloadOptions(int argc, const cha
                     "--manifest-flush-interval-chunks must be in range 1..65536");
             }
             options.manifestFlushIntervalChunks = parsed.value();
+        } else if (option == "--manifest-flush-policy") {
+            auto parsed = core::session::parseManifestFlushPolicy(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.manifestFlushPolicy = parsed.value();
         } else if (option == "--final-verify-policy") {
             auto parsed = core::session::parseFinalVerifyPolicy(value);
             if (!parsed.isOk()) {
                 return parsed.status();
             }
             options.finalVerifyPolicy = parsed.value();
+        } else if (option == "--commit-sync-policy") {
+            auto parsed = core::session::parseCommitSyncPolicy(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.commitSyncPolicy = parsed.value();
         } else if (option == "--preallocate") {
             auto parsed = storage::parsePreallocateMode(value);
             if (!parsed.isOk()) {
@@ -226,8 +238,11 @@ std::string fileDownloadUsage(const char* programName) {
            " --host <server-ip> --port <port> --output <path> --connections <N> "
            "--buffer-size <bytes> --transfer-id <id> [--checksum <crc32c|none>] "
            "[--checksum-backend <auto|software|hardware>] "
+           "[--manifest-flush-policy <every_n_chunks|final_only>] "
            "[--manifest-flush-interval-chunks <N>] "
-           "[--final-verify-policy <full|verified_chunks>] [--preallocate <off|full>] "
+           "[--final-verify-policy <full|verified_chunks>] "
+           "[--commit-sync-policy <none|fsync_file|fsync_file_and_dir>] "
+           "[--preallocate <off|full>] "
            "[--file-io-backend <posix|io_uring>] [--file-io-buffer-size <bytes>] "
            "[--file-io-queue-depth <N>] [--file-io-batch-size <N>] "
            "[--file-io-advice <off|sequential|noreuse|dontneed|sequential_dontneed>] "

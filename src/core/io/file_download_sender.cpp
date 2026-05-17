@@ -454,6 +454,7 @@ common::Status runFramedFileSenderOnListener(const FileDownloadSenderOptions& op
               << " file_io_batch_size=" << options.fileIo.batchSize
               << " file_io_advice=" << storage::fileIoAdviceName(options.fileIo.advice);
     metrics::appendPhaseStats(std::cout, phaseStats);
+    metrics::appendRetrSenderAliases(std::cout, phaseStats);
     storage::appendFileIoStats(std::cout, fileIoStats);
     std::cout << '\n' << std::flush;
     return common::Status::ok();

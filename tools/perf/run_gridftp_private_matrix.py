@@ -24,92 +24,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-
-CSV_FIELDS = [
-    "timestamp",
-    "mode",
-    "direction",
-    "bytes",
-    "connections",
-    "chunk_size",
-    "buffer_size",
-    "checksum_algorithm",
-    "checksum_backend",
-    "preallocate",
-    "file_io_backend",
-    "file_io_buffer_size",
-    "file_io_queue_depth",
-    "file_io_batch_size",
-    "file_io_advice",
-    "repeat_index",
-    "elapsed",
-    "throughput_gbps",
-    "skipped_bytes",
-    "resent_bytes",
-    "verified_bytes",
-    "manifest_flush_count",
-    "manifest_flush_policy",
-    "final_verify_policy",
-    "final_verify_policy_effective",
-    "stage_recv_seconds",
-    "stage_recv_bytes",
-    "stage_send_seconds",
-    "stage_send_bytes",
-    "stage_read_seconds",
-    "stage_read_bytes",
-    "stage_write_seconds",
-    "stage_write_bytes",
-    "stage_checksum_seconds",
-    "stage_checksum_bytes",
-    "stage_manifest_flush_seconds",
-    "stage_manifest_flush_bytes",
-    "stage_resume_precheck_seconds",
-    "stage_resume_precheck_bytes",
-    "stage_final_verify_seconds",
-    "stage_final_verify_bytes",
-    "stage_rename_commit_seconds",
-    "stage_rename_commit_bytes",
-    "stage_overall_seconds",
-    "stage_overall_bytes",
-    "stage_read_calls",
-    "stage_write_calls",
-    "stage_read_avg_bytes_per_call",
-    "stage_write_avg_bytes_per_call",
-    "file_io_wait_seconds",
-    "file_io_wait_bytes",
-    "io_uring_submit_count",
-    "io_uring_wait_count",
-    "io_uring_completion_count",
-    "io_uring_sqe_count",
-    "io_uring_partial_completion_count",
-    "io_uring_retry_count",
-    "io_uring_avg_bytes_per_sqe",
-    "host_baseline_csv",
-    "storage_bench_csv",
-    "source_sha256",
-    "dest_sha256",
-    "result",
-    "server_log",
-    "client_log",
-    "server_hostname",
-    "client_hostname",
-    "server_kernel",
-    "client_kernel",
-    "server_cpu_flags",
-    "client_cpu_flags",
-    "server_fs_type",
-    "client_fs_type",
-    "server_free_bytes",
-    "client_free_bytes",
-    "transfer_id",
-    "control_port",
-    "data_port_base",
-    "temp_root",
-    "remote_path",
-    "local_path",
-    "error",
-]
-
 UPLOAD_CLIENT_ROLE = "file_client"
 UPLOAD_SERVER_ROLE = "file_server"
 DOWNLOAD_SENDER_ROLE = "file_download_sender"
@@ -160,6 +74,109 @@ IO_URING_SUMMARY_FIELDS = [
     "io_uring_avg_bytes_per_sqe",
 ]
 
+ROLE_METRIC_FIELDS = [
+    "elapsed",
+    "throughput_gbps",
+    "skipped_bytes",
+    "resent_bytes",
+    "verified_bytes",
+    "manifest_flush_count",
+    "manifest_flush_policy",
+    "manifest_flush_interval_chunks",
+    "final_verify_policy",
+    "final_verify_policy_effective",
+    "commit_sync_policy",
+    "preallocate",
+    "file_io_backend",
+    "file_io_buffer_size",
+    "file_io_queue_depth",
+    "file_io_batch_size",
+    "file_io_advice",
+]
+
+PHASE_ALIAS_FIELDS = [
+    "data_receive_seconds",
+    "data_receive_bytes",
+    "temp_write_seconds",
+    "temp_write_bytes",
+    "checksum_seconds",
+    "checksum_bytes",
+    "manifest_flush_seconds",
+    "manifest_flush_bytes",
+    "final_verify_seconds",
+    "final_verify_bytes",
+    "finalize_rename_seconds",
+    "finalize_rename_bytes",
+    "source_read_seconds",
+    "source_read_bytes",
+    "network_send_seconds",
+    "network_send_bytes",
+    "download_temp_write_seconds",
+    "download_temp_write_bytes",
+]
+
+CSV_FIELDS = [
+    "timestamp",
+    "mode",
+    "direction",
+    "bytes",
+    "connections",
+    "chunk_size",
+    "buffer_size",
+    "checksum_algorithm",
+    "checksum_backend",
+    "preallocate",
+    "file_io_backend",
+    "file_io_buffer_size",
+    "file_io_queue_depth",
+    "file_io_batch_size",
+    "file_io_advice",
+    "repeat_index",
+    "elapsed",
+    "throughput_gbps",
+    "skipped_bytes",
+    "resent_bytes",
+    "verified_bytes",
+    "manifest_flush_count",
+    "manifest_flush_policy",
+    "manifest_flush_interval_chunks",
+    "commit_sync_policy",
+    "final_verify_policy",
+    "final_verify_policy_effective",
+    *STAGE_FIELDS,
+    *PHASE_ALIAS_FIELDS,
+    *[f"sender_{field}" for field in ROLE_METRIC_FIELDS],
+    *[f"sender_{field}" for field in STAGE_FIELDS],
+    *[f"sender_{field}" for field in PHASE_ALIAS_FIELDS],
+    *[f"receiver_{field}" for field in ROLE_METRIC_FIELDS],
+    *[f"receiver_{field}" for field in STAGE_FIELDS],
+    *[f"receiver_{field}" for field in PHASE_ALIAS_FIELDS],
+    "host_baseline_csv",
+    "storage_bench_csv",
+    "source_sha256",
+    "dest_sha256",
+    "result",
+    "server_log",
+    "client_log",
+    "server_hostname",
+    "client_hostname",
+    "server_kernel",
+    "client_kernel",
+    "server_cpu_flags",
+    "client_cpu_flags",
+    "server_fs_type",
+    "client_fs_type",
+    "server_free_bytes",
+    "client_free_bytes",
+    "transfer_id",
+    "control_port",
+    "data_port_base",
+    "temp_root",
+    "remote_path",
+    "local_path",
+    "error",
+]
+
 
 @dataclass(frozen=True)
 class Case:
@@ -171,6 +188,9 @@ class Case:
     buffer_size: int
     checksum: str
     preallocate: str
+    manifest_flush_policy: str
+    manifest_flush_interval_chunks: int
+    commit_sync_policy: str
     final_verify_policy: str
     file_io_backend: str
     file_io_buffer_size: int
@@ -505,8 +525,12 @@ def start_control_server(args: argparse.Namespace, case: Case, root: Path, serve
         case.checksum,
         "--checksum-backend",
         args.checksum_backend,
+        "--manifest-flush-policy",
+        case.manifest_flush_policy,
         "--manifest-flush-interval-chunks",
-        str(args.manifest_flush_interval_chunks),
+        str(case.manifest_flush_interval_chunks),
+        "--commit-sync-policy",
+        case.commit_sync_policy,
         "--final-verify-policy",
         case.final_verify_policy,
         "--preallocate",
@@ -647,8 +671,12 @@ def run_download_client(
         shlex.quote(args.checksum_backend),
         "--transfer-id",
         shlex.quote(transfer_id),
+        "--manifest-flush-policy",
+        shlex.quote(case.manifest_flush_policy),
         "--manifest-flush-interval-chunks",
-        str(args.manifest_flush_interval_chunks),
+        str(case.manifest_flush_interval_chunks),
+        "--commit-sync-policy",
+        shlex.quote(case.commit_sync_policy),
         "--final-verify-policy",
         shlex.quote(case.final_verify_policy),
         "--preallocate",
@@ -866,7 +894,9 @@ def initial_row(args: argparse.Namespace, case: Case, env: EnvironmentSnapshot, 
         "resent_bytes": "",
         "verified_bytes": "",
         "manifest_flush_count": "",
-        "manifest_flush_policy": f"every_{args.manifest_flush_interval_chunks}_chunks",
+        "manifest_flush_policy": case.manifest_flush_policy,
+        "manifest_flush_interval_chunks": str(case.manifest_flush_interval_chunks),
+        "commit_sync_policy": case.commit_sync_policy,
         "final_verify_policy": case.final_verify_policy,
         "final_verify_policy_effective": "",
         "host_baseline_csv": args.host_baseline_csv or "",
@@ -894,8 +924,11 @@ def initial_row(args: argparse.Namespace, case: Case, env: EnvironmentSnapshot, 
         "local_path": "",
         "error": "",
     }
-    for field in STAGE_FIELDS:
+    for field in STAGE_FIELDS + PHASE_ALIAS_FIELDS:
         row[field] = ""
+    for prefix in ("sender", "receiver"):
+        for field in ROLE_METRIC_FIELDS + STAGE_FIELDS + PHASE_ALIAS_FIELDS:
+            row[f"{prefix}_{field}"] = ""
     return row
 
 
@@ -903,11 +936,11 @@ def fill_metrics(row: dict[str, str], direction: str, server_text: str, client_t
     receiver_role = UPLOAD_SERVER_ROLE if direction.startswith("stor") else DOWNLOAD_CLIENT_ROLE
     receiver_text = server_text if direction.startswith("stor") else client_text
     receiver_metrics = parse_role_metrics(receiver_text, receiver_role)
-    fallback_role = UPLOAD_CLIENT_ROLE if direction.startswith("stor") else DOWNLOAD_SENDER_ROLE
-    fallback_text = client_text if direction.startswith("stor") else server_text
-    fallback_metrics = parse_role_metrics(fallback_text, fallback_role)
+    sender_role = UPLOAD_CLIENT_ROLE if direction.startswith("stor") else DOWNLOAD_SENDER_ROLE
+    sender_text = client_text if direction.startswith("stor") else server_text
+    sender_metrics = parse_role_metrics(sender_text, sender_role)
 
-    metrics = receiver_metrics or fallback_metrics
+    metrics = receiver_metrics or sender_metrics
     row["elapsed"] = metrics.get("elapsed_seconds", "")
     row["throughput_gbps"] = metrics.get("throughput_gbps", "")
     row["checksum_backend"] = metrics.get("checksum_backend", row["checksum_backend"])
@@ -916,6 +949,10 @@ def fill_metrics(row: dict[str, str], direction: str, server_text: str, client_t
     row["verified_bytes"] = metrics.get("verified_bytes", "")
     row["manifest_flush_count"] = metrics.get("manifest_flush_count", "")
     row["manifest_flush_policy"] = metrics.get("manifest_flush_policy", row["manifest_flush_policy"])
+    row["manifest_flush_interval_chunks"] = metrics.get(
+        "manifest_flush_interval_chunks", row["manifest_flush_interval_chunks"]
+    )
+    row["commit_sync_policy"] = metrics.get("commit_sync_policy", row["commit_sync_policy"])
     row["final_verify_policy"] = metrics.get("final_verify_policy", row["final_verify_policy"])
     row["final_verify_policy_effective"] = metrics.get("final_verify_policy_effective", "")
     row["preallocate"] = metrics.get("preallocate", row["preallocate"])
@@ -924,11 +961,39 @@ def fill_metrics(row: dict[str, str], direction: str, server_text: str, client_t
     row["file_io_queue_depth"] = metrics.get("file_io_queue_depth", row["file_io_queue_depth"])
     row["file_io_batch_size"] = metrics.get("file_io_batch_size", row["file_io_batch_size"])
     row["file_io_advice"] = metrics.get("file_io_advice", row["file_io_advice"])
-    for field in STAGE_FIELDS:
+    for field in STAGE_FIELDS + PHASE_ALIAS_FIELDS:
         row[field] = metrics.get(field, "")
 
+    role_metrics = {"sender": sender_metrics, "receiver": receiver_metrics}
+    for prefix, values in role_metrics.items():
+        if not values:
+            continue
+        role_map = {
+            "elapsed": "elapsed_seconds",
+            "throughput_gbps": "throughput_gbps",
+            "skipped_bytes": "skipped_bytes",
+            "resent_bytes": "resent_bytes",
+            "verified_bytes": "verified_bytes",
+            "manifest_flush_count": "manifest_flush_count",
+            "manifest_flush_policy": "manifest_flush_policy",
+            "manifest_flush_interval_chunks": "manifest_flush_interval_chunks",
+            "final_verify_policy": "final_verify_policy",
+            "final_verify_policy_effective": "final_verify_policy_effective",
+            "commit_sync_policy": "commit_sync_policy",
+            "preallocate": "preallocate",
+            "file_io_backend": "file_io_backend",
+            "file_io_buffer_size": "file_io_buffer_size",
+            "file_io_queue_depth": "file_io_queue_depth",
+            "file_io_batch_size": "file_io_batch_size",
+            "file_io_advice": "file_io_advice",
+        }
+        for field, source_key in role_map.items():
+            row[f"{prefix}_{field}"] = values.get(source_key, "")
+        for field in STAGE_FIELDS + PHASE_ALIAS_FIELDS:
+            row[f"{prefix}_{field}"] = values.get(field, "")
 
-SUMMARY_FIELDS = [
+
+SUMMARY_GROUP_FIELDS = [
     "mode",
     "direction",
     "bytes",
@@ -943,38 +1008,36 @@ SUMMARY_FIELDS = [
     "file_io_queue_depth",
     "file_io_batch_size",
     "file_io_advice",
+    "manifest_flush_policy",
+    "manifest_flush_interval_chunks",
+    "commit_sync_policy",
     "final_verify_policy",
     "final_verify_policy_effective",
+]
+
+SUMMARY_METRIC_FIELDS = [
+    "throughput_gbps",
+    "elapsed",
+    *STAGE_FIELDS,
+    *PHASE_ALIAS_FIELDS,
+    *[f"sender_{field}" for field in ROLE_METRIC_FIELDS],
+    *[f"sender_{field}" for field in STAGE_FIELDS],
+    *[f"sender_{field}" for field in PHASE_ALIAS_FIELDS],
+    *[f"receiver_{field}" for field in ROLE_METRIC_FIELDS],
+    *[f"receiver_{field}" for field in STAGE_FIELDS],
+    *[f"receiver_{field}" for field in PHASE_ALIAS_FIELDS],
+]
+
+SUMMARY_FIELDS = [
+    *SUMMARY_GROUP_FIELDS,
     "repeat_count",
     "pass_count",
     "fail_count",
-    "throughput_gbps_min",
-    "throughput_gbps_median",
-    "throughput_gbps_max",
-    "elapsed_min",
-    "elapsed_median",
-    "elapsed_max",
-    "io_uring_submit_count_min",
-    "io_uring_submit_count_median",
-    "io_uring_submit_count_max",
-    "io_uring_wait_count_min",
-    "io_uring_wait_count_median",
-    "io_uring_wait_count_max",
-    "io_uring_completion_count_min",
-    "io_uring_completion_count_median",
-    "io_uring_completion_count_max",
-    "io_uring_sqe_count_min",
-    "io_uring_sqe_count_median",
-    "io_uring_sqe_count_max",
-    "io_uring_partial_completion_count_min",
-    "io_uring_partial_completion_count_median",
-    "io_uring_partial_completion_count_max",
-    "io_uring_retry_count_min",
-    "io_uring_retry_count_median",
-    "io_uring_retry_count_max",
-    "io_uring_avg_bytes_per_sqe_min",
-    "io_uring_avg_bytes_per_sqe_median",
-    "io_uring_avg_bytes_per_sqe_max",
+    *[
+        f"{field}_{stat}"
+        for field in SUMMARY_METRIC_FIELDS
+        for stat in ("min", "median", "max")
+    ],
 ]
 
 
@@ -1006,6 +1069,9 @@ def summarize_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
             row["file_io_queue_depth"],
             row["file_io_batch_size"],
             row["file_io_advice"],
+            row["manifest_flush_policy"],
+            row["manifest_flush_interval_chunks"],
+            row["commit_sync_policy"],
             row["final_verify_policy"],
             row["final_verify_policy_effective"],
         )
@@ -1013,26 +1079,16 @@ def summarize_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
 
     summaries: list[dict[str, str]] = []
     for key, grouped_rows in sorted(groups.items()):
-        throughput = float_values(grouped_rows, "throughput_gbps")
-        elapsed = float_values(grouped_rows, "elapsed")
         pass_count = sum(1 for row in grouped_rows if row["result"] == "pass")
-        summary = dict(zip(SUMMARY_FIELDS[:16], key, strict=True))
+        summary = dict(zip(SUMMARY_GROUP_FIELDS, key, strict=True))
         summary.update(
             {
                 "repeat_count": str(len(grouped_rows)),
                 "pass_count": str(pass_count),
                 "fail_count": str(len(grouped_rows) - pass_count),
-                "throughput_gbps_min": f"{min(throughput):.6f}" if throughput else "",
-                "throughput_gbps_median": f"{statistics.median(throughput):.6f}"
-                if throughput
-                else "",
-                "throughput_gbps_max": f"{max(throughput):.6f}" if throughput else "",
-                "elapsed_min": f"{min(elapsed):.6f}" if elapsed else "",
-                "elapsed_median": f"{statistics.median(elapsed):.6f}" if elapsed else "",
-                "elapsed_max": f"{max(elapsed):.6f}" if elapsed else "",
             }
         )
-        for field in IO_URING_SUMMARY_FIELDS:
+        for field in SUMMARY_METRIC_FIELDS:
             values = float_values(grouped_rows, field)
             summary[f"{field}_min"] = f"{min(values):.6f}" if values else ""
             summary[f"{field}_median"] = f"{statistics.median(values):.6f}" if values else ""
@@ -1046,6 +1102,8 @@ def run_case(args: argparse.Namespace, case: Case, run_root: Path, env: Environm
         f"case{case.index:04d}_r{case.repeat_index:02d}_{case.direction}_bytes{case.total_bytes}_"
         f"c{case.connections}_chunk{case.chunk_size}_buf{case.buffer_size}_{case.checksum}_"
         f"pre{case.preallocate}_fv{case.final_verify_policy}_"
+        f"mfp{case.manifest_flush_policy}_mfi{case.manifest_flush_interval_chunks}_"
+        f"csp{case.commit_sync_policy}_"
         f"fiobuf{case.file_io_buffer_size}_fioqd{case.file_io_queue_depth}_"
         f"fiobs{case.file_io_batch_size}_fioadv{case.file_io_advice}"
     )
@@ -1139,6 +1197,21 @@ def generate_cases(args: argparse.Namespace) -> list[Case]:
     buffer_sizes = parse_int_list(args.buffer_sizes or default_buffer_sizes)
     checksums = parse_choice_list(args.checksums or default_checksums, {"crc32c", "none"}, "checksum")
     preallocates = parse_choice_list(args.preallocates, {"off", "full"}, "preallocate")
+    manifest_flush_policies = parse_choice_list(
+        args.manifest_flush_policies or args.manifest_flush_policy,
+        {"every_n_chunks", "final_only"},
+        "manifest flush policy",
+    )
+    manifest_flush_intervals = parse_int_list(
+        args.manifest_flush_interval_chunks_list or str(args.manifest_flush_interval_chunks)
+    )
+    if any(value <= 0 or value > 65536 for value in manifest_flush_intervals):
+        raise SystemExit("--manifest-flush-interval-chunks values must be in range 1..65536")
+    commit_sync_policies = parse_choice_list(
+        args.commit_sync_policies or args.commit_sync_policy,
+        {"none", "fsync_file", "fsync_file_and_dir"},
+        "commit sync policy",
+    )
     file_io_backends = parse_choice_list(
         args.file_io_backends, {"posix", "io_uring"}, "file IO backend"
     )
@@ -1169,38 +1242,44 @@ def generate_cases(args: argparse.Namespace) -> list[Case]:
                     for buffer_size in buffer_sizes:
                         for checksum in checksums:
                             for preallocate in preallocates:
-                                for file_io_backend in file_io_backends:
-                                    for file_io_buffer_size in file_io_buffer_sizes:
-                                        for file_io_queue_depth in file_io_queue_depths:
-                                            batch_sizes = (
-                                                file_io_batch_sizes
-                                                if file_io_batch_sizes is not None
-                                                else [file_io_queue_depth]
-                                            )
-                                            for file_io_batch_size in batch_sizes:
-                                                for file_io_advice in file_io_advices:
-                                                    for final_verify_policy in final_verify_policies:
-                                                        for repeat_index in range(args.repeat):
-                                                            cases.append(
-                                                                Case(
-                                                                    index=index,
-                                                                    direction=direction,
-                                                                    total_bytes=total_bytes,
-                                                                    connections=connection,
-                                                                    chunk_size=chunk_size,
-                                                                    buffer_size=buffer_size,
-                                                                    checksum=checksum,
-                                                                    preallocate=preallocate,
-                                                                    final_verify_policy=final_verify_policy,
-                                                                    file_io_backend=file_io_backend,
-                                                                    file_io_buffer_size=file_io_buffer_size,
-                                                                    file_io_queue_depth=file_io_queue_depth,
-                                                                    file_io_batch_size=file_io_batch_size,
-                                                                    file_io_advice=file_io_advice,
-                                                                    repeat_index=repeat_index,
-                                                                )
-                                                            )
-                                                            index += 1
+                                for manifest_flush_policy in manifest_flush_policies:
+                                    for manifest_flush_interval in manifest_flush_intervals:
+                                        for commit_sync_policy in commit_sync_policies:
+                                            for file_io_backend in file_io_backends:
+                                                for file_io_buffer_size in file_io_buffer_sizes:
+                                                    for file_io_queue_depth in file_io_queue_depths:
+                                                        batch_sizes = (
+                                                            file_io_batch_sizes
+                                                            if file_io_batch_sizes is not None
+                                                            else [file_io_queue_depth]
+                                                        )
+                                                        for file_io_batch_size in batch_sizes:
+                                                            for file_io_advice in file_io_advices:
+                                                                for final_verify_policy in final_verify_policies:
+                                                                    for repeat_index in range(args.repeat):
+                                                                        cases.append(
+                                                                            Case(
+                                                                                index=index,
+                                                                                direction=direction,
+                                                                                total_bytes=total_bytes,
+                                                                                connections=connection,
+                                                                                chunk_size=chunk_size,
+                                                                                buffer_size=buffer_size,
+                                                                                checksum=checksum,
+                                                                                preallocate=preallocate,
+                                                                                manifest_flush_policy=manifest_flush_policy,
+                                                                                manifest_flush_interval_chunks=manifest_flush_interval,
+                                                                                commit_sync_policy=commit_sync_policy,
+                                                                                final_verify_policy=final_verify_policy,
+                                                                                file_io_backend=file_io_backend,
+                                                                                file_io_buffer_size=file_io_buffer_size,
+                                                                                file_io_queue_depth=file_io_queue_depth,
+                                                                                file_io_batch_size=file_io_batch_size,
+                                                                                file_io_advice=file_io_advice,
+                                                                                repeat_index=repeat_index,
+                                                                            )
+                                                                        )
+                                                                        index += 1
     return cases
 
 
@@ -1244,7 +1323,16 @@ def main() -> int:
     parser.add_argument("--buffer-sizes", help="comma list, supports KiB/MiB/GiB suffixes")
     parser.add_argument("--checksums", help="comma list: crc32c,none")
     parser.add_argument("--checksum-backend", choices=["auto", "software", "hardware"], default="auto")
+    parser.add_argument(
+        "--manifest-flush-policy",
+        choices=["every_n_chunks", "final_only"],
+        default="every_n_chunks",
+    )
+    parser.add_argument("--manifest-flush-policies", help="comma list: every_n_chunks,final_only")
     parser.add_argument("--manifest-flush-interval-chunks", type=int, default=16)
+    parser.add_argument("--manifest-flush-interval-chunks-list", help="comma list of chunk counts")
+    parser.add_argument("--commit-sync-policy", choices=["none", "fsync_file", "fsync_file_and_dir"], default="none")
+    parser.add_argument("--commit-sync-policies", help="comma list: none,fsync_file,fsync_file_and_dir")
     parser.add_argument("--final-verify-policy", choices=["full", "verified_chunks"], default="full")
     parser.add_argument("--final-verify-policies", help="comma list: full,verified_chunks")
     parser.add_argument("--preallocates", default="off", help="comma list: off,full")
@@ -1288,7 +1376,8 @@ def main() -> int:
             print(
                 f"[{case.index + 1}/{len(cases)}] {case.direction} bytes={case.total_bytes} "
                 f"connections={case.connections} chunk={case.chunk_size} buffer={case.buffer_size} "
-                f"checksum={case.checksum}",
+                f"checksum={case.checksum} manifest_flush={case.manifest_flush_policy}/"
+                f"{case.manifest_flush_interval_chunks} commit_sync={case.commit_sync_policy}",
                 flush=True,
             )
             row = run_case(args, case, run_root, env)

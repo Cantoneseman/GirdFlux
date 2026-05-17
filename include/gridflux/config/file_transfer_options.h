@@ -5,7 +5,9 @@
 
 #include "gridflux/checksum/checksum.h"
 #include "gridflux/common/status.h"
+#include "gridflux/core/session/commit_sync_policy.h"
 #include "gridflux/core/session/final_verify_policy.h"
+#include "gridflux/core/session/manifest_flush_policy.h"
 #include "gridflux/storage/file_io.h"
 #include "gridflux/storage/preallocate_mode.h"
 
@@ -29,8 +31,11 @@ struct FileTransferOptions {
     std::string transferId;
     checksum::ChecksumAlgorithm checksumAlgorithm = checksum::ChecksumAlgorithm::Crc32c;
     checksum::ChecksumBackend checksumBackend = checksum::ChecksumBackend::Auto;
+    core::session::ManifestFlushPolicy manifestFlushPolicy =
+        core::session::ManifestFlushPolicy::EveryNChunks;
     std::uint64_t manifestFlushIntervalChunks = 16;
     core::session::FinalVerifyPolicy finalVerifyPolicy = core::session::FinalVerifyPolicy::Full;
+    core::session::CommitSyncPolicy commitSyncPolicy = core::session::CommitSyncPolicy::None;
     storage::PreallocateMode preallocateMode = storage::PreallocateMode::Off;
     storage::FileIoConfig fileIo;
     bool overwrite = false;

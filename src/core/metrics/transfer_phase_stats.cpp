@@ -16,6 +16,12 @@ void appendPhase(std::ostream& stream, const char* name, const TransferPhaseStat
            << "_bytes=" << stats.bytes(phase);
 }
 
+void appendAlias(std::ostream& stream, const char* name, const TransferPhaseStats& stats,
+                 TransferPhase phase) {
+    stream << ' ' << name << "_seconds=" << stats.seconds(phase) << ' ' << name
+           << "_bytes=" << stats.bytes(phase);
+}
+
 }  // namespace
 
 void TransferPhaseStats::add(TransferPhase phase, std::chrono::steady_clock::duration duration,
@@ -117,6 +123,28 @@ void appendPhaseStats(std::ostream& stream, const TransferPhaseStats& stats) {
     appendPhase(stream, "final_verify", stats, TransferPhase::FinalVerify);
     appendPhase(stream, "rename_commit", stats, TransferPhase::RenameCommit);
     appendPhase(stream, "overall", stats, TransferPhase::Overall);
+}
+
+void appendStorReceiverAliases(std::ostream& stream, const TransferPhaseStats& stats) {
+    appendAlias(stream, "data_receive", stats, TransferPhase::Recv);
+    appendAlias(stream, "temp_write", stats, TransferPhase::Write);
+    appendAlias(stream, "checksum", stats, TransferPhase::Checksum);
+    appendAlias(stream, "manifest_flush", stats, TransferPhase::ManifestFlush);
+    appendAlias(stream, "final_verify", stats, TransferPhase::FinalVerify);
+    appendAlias(stream, "finalize_rename", stats, TransferPhase::RenameCommit);
+}
+
+void appendRetrSenderAliases(std::ostream& stream, const TransferPhaseStats& stats) {
+    appendAlias(stream, "source_read", stats, TransferPhase::Read);
+    appendAlias(stream, "network_send", stats, TransferPhase::Send);
+    appendAlias(stream, "checksum", stats, TransferPhase::Checksum);
+}
+
+void appendRetrReceiverAliases(std::ostream& stream, const TransferPhaseStats& stats) {
+    appendAlias(stream, "download_temp_write", stats, TransferPhase::Write);
+    appendAlias(stream, "manifest_flush", stats, TransferPhase::ManifestFlush);
+    appendAlias(stream, "final_verify", stats, TransferPhase::FinalVerify);
+    appendAlias(stream, "finalize_rename", stats, TransferPhase::RenameCommit);
 }
 
 }  // namespace gridflux::core::metrics

@@ -101,7 +101,8 @@ TEST(TransferSessionTest, FlushesManifestAfterConfiguredVerifiedChunkInterval) {
 
     auto created = gridflux::core::session::TransferSession::createNew(
         path, transferId, 2048, 1024, gridflux::checksum::ChecksumAlgorithm::None,
-        gridflux::checksum::ChecksumBackend::Auto, 2);
+        gridflux::checksum::ChecksumBackend::Auto,
+        gridflux::core::session::ManifestFlushPolicy::EveryNChunks, 2);
     ASSERT_TRUE(created.isOk()) << created.status().message();
     ASSERT_TRUE(created.value().save().isOk());
 
@@ -119,6 +120,32 @@ TEST(TransferSessionTest, FlushesManifestAfterConfiguredVerifiedChunkInterval) {
     cleanupSessionFiles(path, transferId);
 }
 
+TEST(TransferSessionTest, FinalOnlyManifestFlushDefersUntilForcedFlush) {
+    const std::string path = outputPath("gridflux-session-final-only-flush");
+    const std::string transferId = "session-final-only-flush";
+    cleanupSessionFiles(path, transferId);
+
+    auto created = gridflux::core::session::TransferSession::createNew(
+        path, transferId, 2048, 1024, gridflux::checksum::ChecksumAlgorithm::None,
+        gridflux::checksum::ChecksumBackend::Auto,
+        gridflux::core::session::ManifestFlushPolicy::FinalOnly, 1);
+    ASSERT_TRUE(created.isOk()) << created.status().message();
+    ASSERT_TRUE(created.value().save().isOk());
+
+    ASSERT_TRUE(created.value().recordCompletedRange(0, 1024).isOk());
+    ASSERT_TRUE(created.value().recordCompletedRange(1024, 1024).isOk());
+    auto loaded = gridflux::checkpoint::ManifestStore::load(created.value().manifestPath());
+    ASSERT_TRUE(loaded.isOk()) << loaded.status().message();
+    EXPECT_TRUE(loaded.value().verifiedChunks.empty());
+
+    ASSERT_TRUE(created.value().flushManifest().isOk());
+    loaded = gridflux::checkpoint::ManifestStore::load(created.value().manifestPath());
+    ASSERT_TRUE(loaded.isOk()) << loaded.status().message();
+    EXPECT_EQ(loaded.value().verifiedChunks.size(), 2U);
+
+    cleanupSessionFiles(path, transferId);
+}
+
 TEST(TransferSessionTest, FailureAndCommitForceManifestFlush) {
     const std::string failedPath = outputPath("gridflux-session-failed-flush");
     const std::string failedTransferId = "session-failed-flush";
@@ -126,7 +153,8 @@ TEST(TransferSessionTest, FailureAndCommitForceManifestFlush) {
 
     auto failed = gridflux::core::session::TransferSession::createNew(
         failedPath, failedTransferId, 1024, 1024, gridflux::checksum::ChecksumAlgorithm::None,
-        gridflux::checksum::ChecksumBackend::Auto, 16);
+        gridflux::checksum::ChecksumBackend::Auto,
+        gridflux::core::session::ManifestFlushPolicy::EveryNChunks, 16);
     ASSERT_TRUE(failed.isOk()) << failed.status().message();
     ASSERT_TRUE(failed.value().save().isOk());
     ASSERT_TRUE(failed.value().recordCompletedRange(0, 1024).isOk());
@@ -144,7 +172,8 @@ TEST(TransferSessionTest, FailureAndCommitForceManifestFlush) {
 
     auto committed = gridflux::core::session::TransferSession::createNew(
         committedPath, committedTransferId, 1024, 1024, gridflux::checksum::ChecksumAlgorithm::None,
-        gridflux::checksum::ChecksumBackend::Auto, 16);
+        gridflux::checksum::ChecksumBackend::Auto,
+        gridflux::core::session::ManifestFlushPolicy::EveryNChunks, 16);
     ASSERT_TRUE(committed.isOk()) << committed.status().message();
     ASSERT_TRUE(committed.value().save().isOk());
     ASSERT_TRUE(committed.value().recordCompletedRange(0, 1024).isOk());

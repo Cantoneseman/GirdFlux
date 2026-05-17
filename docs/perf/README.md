@@ -1,6 +1,6 @@
 # GridFlux 性能基线工具
 
-本目录记录 GridFlux 的可复现性能工具。`run_loopback_matrix.py` 和 `run_private_once.sh` 仍用于 memory-to-memory TCP sink；`run_file_loopback_matrix.py` 和 `run_file_private_once.sh` 用于文件传输基线；`run_gridftp_private_matrix.py` 用于 GridFTP-like framed STOR/RETR 私网矩阵。Phase 2B 起文件传输默认启用 CRC32C chunk checksum，并支持 `--checksum none` 做性能对照。Phase 2C 起 CRC32C 支持 `auto` / `software` / `hardware` backend，`auto` 在 x86 SSE4.2 可用时选择 hardware。Phase 4F 新增可选 file-IO-only `io_uring` prototype；Phase 4G 已在真实 liburing 环境下验证；Phase 4H 增加 queue depth / batching opt-in 维度。默认仍是 POSIX backend，网络仍是 epoll，STOR/RETR 文件数据仍只走 GridFlux framed data channel。
+本目录记录 GridFlux 的可复现性能工具。`run_loopback_matrix.py` 和 `run_private_once.sh` 仍用于 memory-to-memory TCP sink；`run_file_loopback_matrix.py` 和 `run_file_private_once.sh` 用于文件传输基线；`run_gridftp_private_matrix.py` 用于 GridFTP-like framed STOR/RETR 私网矩阵。Phase 2B 起文件传输默认启用 CRC32C chunk checksum，并支持 `--checksum none` 做性能对照。Phase 2C 起 CRC32C 支持 `auto` / `software` / `hardware` backend，`auto` 在 x86 SSE4.2 可用时选择 hardware。Phase 4F 新增可选 file-IO-only `io_uring` prototype；Phase 4G 已在真实 liburing 环境下验证；Phase 4H 增加 queue depth / batching opt-in 维度；Phase 4J 增加 POSIX storage/writeback、manifest flush、checksum 和 final verify 阶段诊断。默认仍是 POSIX backend，网络仍是 epoll，STOR/RETR 文件数据仍只走 GridFlux framed data channel。
 
 ## 基础构建验证
 
@@ -365,6 +365,8 @@ Phase 4B 的诊断/优化参数：
 
 - `--final-verify-policy full|verified_chunks`：默认 `full`，保持完整 temp 重读验证。`verified_chunks` 只在 checksum 启用、verified chunks 覆盖完整文件且 manifest 已成功 flush 时跳过最终重读，否则 C++ 路径会回退到 `full` 并输出 `final_verify_policy_effective=full`。
 - `--manifest-flush-interval-chunks <N>`：默认 `16`，控制 upload/download manifest 批量 flush 间隔；失败、resume precheck 和 commit 前仍强制 flush。
+- `--manifest-flush-policy every_n_chunks|final_only`：Phase 4J 起支持。默认 `every_n_chunks`；`final_only` 仅用于诊断，失败和 commit 前仍强制 flush，崩溃后最多重传未 flush 的 chunk，不允许误提交。
+- `--commit-sync-policy none|fsync_file|fsync_file_and_dir`：Phase 4J 起支持。默认 `none`；fsync 模式仅用于测量 rename/commit 同步成本。
 - `--host-baseline-csv <path>`：把对应 host/link baseline CSV 路径写入每个 matrix row，便于报告关联。
 
 Phase 4C 的矩阵稳定性与存储参数：
@@ -529,6 +531,71 @@ python3 tools/perf/analyze_phase4i.py \
 
 Phase 4I 结论记录在 `docs/perf/PHASE4I_HEAVY_QUEUE_DEPTH_GATE.md`：queue-depth/batching 收益不稳定，未贯穿 STOR/RETR 和 crc32c/none，默认仍保持 POSIX。
 
+Phase 4J POSIX pipeline diagnosis:
+
+```bash
+python3 tools/perf/run_gridftp_private_matrix.py \
+  --smoke \
+  --directions stor,retr \
+  --bytes 1073741824 \
+  --connections 8 \
+  --chunk-sizes 4194304 \
+  --buffer-sizes 262144 \
+  --checksums crc32c,none \
+  --checksum-backend auto \
+  --file-io-backends posix \
+  --file-io-buffer-sizes 262144 \
+  --file-io-advices off \
+  --preallocates off \
+  --manifest-flush-policies every_n_chunks,final_only \
+  --manifest-flush-interval-chunks-list 16,256 \
+  --final-verify-policies full,verified_chunks \
+  --repeat 3 \
+  --remote root@<redacted> \
+  --server-host <redacted> \
+  --local-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --output-dir tools/perf/results \
+  --case-timeout 900
+```
+
+POSIX writeback add-on:
+
+```bash
+python3 tools/perf/run_gridftp_private_matrix.py \
+  --smoke \
+  --directions stor \
+  --bytes 1073741824 \
+  --connections 8 \
+  --chunk-sizes 4194304 \
+  --buffer-sizes 262144 \
+  --checksums none \
+  --file-io-backends posix \
+  --file-io-buffer-sizes 0,262144,1048576,4194304 \
+  --file-io-advices off \
+  --preallocates off \
+  --manifest-flush-policies final_only \
+  --final-verify-policies full \
+  --repeat 3 \
+  --remote root@<redacted> \
+  --server-host <redacted> \
+  --local-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --output-dir tools/perf/results \
+  --case-timeout 900
+```
+
+Phase 4J analysis:
+
+```bash
+python3 tools/perf/analyze_phase4j.py \
+  --matrix-summary-csv tools/perf/results/20260517T154238Z_gridftp-private-matrix-smoke-summary.csv \
+  --matrix-summary-csv tools/perf/results/20260517T160524Z_gridftp-private-matrix-smoke-summary.csv \
+  --output docs/perf/PHASE4J_POSIX_PIPELINE_DIAGNOSIS.md
+```
+
+Phase 4J 结论记录在 `docs/perf/PHASE4J_POSIX_PIPELINE_DIAGNOSIS.md`：STOR median 主要瓶颈是 temp write/writeback；RETR 主要由 receiver download write 与 sender network send 构成；checksum 不是 STOR 主瓶颈，`verified_chunks` 对部分 RETR 场景有 opt-in 收益但默认仍保持 full final verify。
+
 ## Public Release Hygiene
 
 本地 `AGENTS.md` 是私有协作上下文，不得公开发布。公开发布前使用 export gate：
@@ -585,10 +652,10 @@ timestamp,mode,host,port,connections,chunk_size,buffer_size,bytes,checksum_enabl
 GridFTP-like 私网矩阵 CSV 字段：
 
 ```text
-timestamp,mode,direction,bytes,connections,chunk_size,buffer_size,checksum_algorithm,checksum_backend,preallocate,file_io_backend,file_io_buffer_size,file_io_queue_depth,file_io_batch_size,file_io_advice,repeat_index,elapsed,throughput_gbps,skipped_bytes,resent_bytes,verified_bytes,manifest_flush_count,manifest_flush_policy,final_verify_policy,final_verify_policy_effective,stage_recv_seconds,stage_recv_bytes,stage_send_seconds,stage_send_bytes,stage_read_seconds,stage_read_bytes,stage_write_seconds,stage_write_bytes,stage_checksum_seconds,stage_checksum_bytes,stage_manifest_flush_seconds,stage_manifest_flush_bytes,stage_resume_precheck_seconds,stage_resume_precheck_bytes,stage_final_verify_seconds,stage_final_verify_bytes,stage_rename_commit_seconds,stage_rename_commit_bytes,stage_overall_seconds,stage_overall_bytes,stage_read_calls,stage_write_calls,stage_read_avg_bytes_per_call,stage_write_avg_bytes_per_call,file_io_wait_seconds,file_io_wait_bytes,io_uring_submit_count,io_uring_wait_count,io_uring_completion_count,io_uring_sqe_count,io_uring_partial_completion_count,io_uring_retry_count,io_uring_avg_bytes_per_sqe,host_baseline_csv,storage_bench_csv,source_sha256,dest_sha256,result,server_log,client_log,server_hostname,client_hostname,server_kernel,client_kernel,server_cpu_flags,client_cpu_flags,server_fs_type,client_fs_type,server_free_bytes,client_free_bytes
+timestamp,mode,direction,bytes,connections,chunk_size,buffer_size,checksum_algorithm,checksum_backend,preallocate,file_io_backend,file_io_buffer_size,file_io_queue_depth,file_io_batch_size,file_io_advice,repeat_index,elapsed,throughput_gbps,skipped_bytes,resent_bytes,verified_bytes,manifest_flush_count,manifest_flush_policy,manifest_flush_interval_chunks,commit_sync_policy,final_verify_policy,final_verify_policy_effective,stage_*,data_receive_seconds,temp_write_seconds,source_read_seconds,network_send_seconds,download_temp_write_seconds,sender_*,receiver_*,host_baseline_csv,storage_bench_csv,source_sha256,dest_sha256,result,server_log,client_log,server_hostname,client_hostname,server_kernel,client_kernel,server_cpu_flags,client_cpu_flags,server_fs_type,client_fs_type,server_free_bytes,client_free_bytes
 ```
 
-实际 CSV 还会附加 `transfer_id`、端口、临时路径和错误摘要。`throughput_gbps` / `elapsed` 优先使用接收端语义：STOR 取 server receiver，RETR 取 download client receiver。RETR sender 的 `verified_bytes` 表示 sender 已确认/发送的 verified range 字节；download client 的 `verified_bytes` 表示接收端本地校验完成字节。CSV 优先取接收端/client 语义，sender 值保留在原始日志中。
+实际 CSV 还会附加 `transfer_id`、端口、临时路径和错误摘要。`throughput_gbps` / `elapsed` 优先使用接收端语义：STOR 取 server receiver，RETR 取 download client receiver。RETR sender 的 `verified_bytes` 表示 sender 已确认/发送的 verified range 字节；download client 的 `verified_bytes` 表示接收端本地校验完成字节。Phase 4J 起 CSV 同时保留 `sender_*` / `receiver_*` 双侧阶段字段，便于同一 RETR row 同时分析 sender read/send 与 receiver write/final verify。
 
 Phase 4B host baseline CSV 字段：
 

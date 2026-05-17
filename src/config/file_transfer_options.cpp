@@ -166,6 +166,19 @@ common::Result<FileTransferOptions> parseFileTransferOptions(int argc, const cha
             continue;
         }
 
+        if (option == "--manifest-flush-policy") {
+            if (role != FileTransferRole::Server) {
+                return common::Status::invalidArgument("--manifest-flush-policy is server-only");
+            }
+            auto parsed = core::session::parseManifestFlushPolicy(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.manifestFlushPolicy = parsed.value();
+            index += 2;
+            continue;
+        }
+
         if (option == "--final-verify-policy") {
             if (role != FileTransferRole::Server) {
                 return common::Status::invalidArgument("--final-verify-policy is server-only");
@@ -175,6 +188,19 @@ common::Result<FileTransferOptions> parseFileTransferOptions(int argc, const cha
                 return parsed.status();
             }
             options.finalVerifyPolicy = parsed.value();
+            index += 2;
+            continue;
+        }
+
+        if (option == "--commit-sync-policy") {
+            if (role != FileTransferRole::Server) {
+                return common::Status::invalidArgument("--commit-sync-policy is server-only");
+            }
+            auto parsed = core::session::parseCommitSyncPolicy(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.commitSyncPolicy = parsed.value();
             index += 2;
             continue;
         }
@@ -376,10 +402,13 @@ std::string fileTransferUsage(const char* programName, FileTransferRole role) {
     if (role == FileTransferRole::Server) {
         return std::string("Usage: ") + programName +
                " --host <bind-ip> --port <port> --output <path> --connections <N> "
-               "--buffer-size <bytes> [--checksum <crc32c|none>] "
-               "[--checksum-backend <auto|software|hardware>] "
-               "[--manifest-flush-interval-chunks <N>] "
-               "[--final-verify-policy <full|verified_chunks>] [--preallocate <off|full>] "
+           "--buffer-size <bytes> [--checksum <crc32c|none>] "
+           "[--checksum-backend <auto|software|hardware>] "
+           "[--manifest-flush-policy <every_n_chunks|final_only>] "
+           "[--manifest-flush-interval-chunks <N>] "
+           "[--final-verify-policy <full|verified_chunks>] "
+           "[--commit-sync-policy <none|fsync_file|fsync_file_and_dir>] "
+           "[--preallocate <off|full>] "
                "[--file-io-backend <posix|io_uring>] [--file-io-buffer-size <bytes>] "
                "[--file-io-queue-depth <N>] [--file-io-batch-size <N>] "
                "[--file-io-advice <off|sequential|noreuse|dontneed|sequential_dontneed>] "

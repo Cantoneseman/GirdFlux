@@ -105,7 +105,8 @@ common::Status readChecksumForRecord(const storage::PosixFile& file,
 common::Result<TransferSession> TransferSession::createNew(
     const std::string& outputPath, const std::string& transferId, std::uint64_t totalSize,
     std::uint64_t chunkSize, checksum::ChecksumAlgorithm checksumAlgorithm,
-    checksum::ChecksumBackend checksumBackend, std::uint64_t manifestFlushIntervalChunks) {
+    checksum::ChecksumBackend checksumBackend, ManifestFlushPolicy manifestFlushPolicy,
+    std::uint64_t manifestFlushIntervalChunks) {
     const common::Status valid =
         validateSessionInputs(outputPath, transferId, chunkSize, manifestFlushIntervalChunks);
     if (!valid.isOk()) {
@@ -118,6 +119,7 @@ common::Result<TransferSession> TransferSession::createNew(
 
     TransferSession session;
     session.checksumBackend_ = resolvedBackend.value();
+    session.manifestFlushPolicy_ = manifestFlushPolicy;
     session.manifestFlushIntervalChunks_ = manifestFlushIntervalChunks;
     session.manifestPath_ = checkpoint::manifestPathForOutput(outputPath);
     session.manifest_.version = checkpoint::kTransferManifestVersion;
@@ -138,7 +140,8 @@ common::Result<TransferSession> TransferSession::createNew(
 common::Result<TransferSession> TransferSession::resume(
     const std::string& outputPath, const std::string& transferId, std::uint64_t totalSize,
     std::uint64_t chunkSize, checksum::ChecksumAlgorithm checksumAlgorithm,
-    checksum::ChecksumBackend checksumBackend, std::uint64_t manifestFlushIntervalChunks) {
+    checksum::ChecksumBackend checksumBackend, ManifestFlushPolicy manifestFlushPolicy,
+    std::uint64_t manifestFlushIntervalChunks) {
     const common::Status valid =
         validateSessionInputs(outputPath, transferId, chunkSize, manifestFlushIntervalChunks);
     if (!valid.isOk()) {
@@ -163,6 +166,7 @@ common::Result<TransferSession> TransferSession::resume(
 
     TransferSession session;
     session.checksumBackend_ = resolvedBackend.value();
+    session.manifestFlushPolicy_ = manifestFlushPolicy;
     session.manifestFlushIntervalChunks_ = manifestFlushIntervalChunks;
     session.manifestPath_ = manifestPath;
     session.manifest_ = std::move(loaded.value());
@@ -261,7 +265,8 @@ common::Status TransferSession::recordVerifiedChunk(std::uint64_t chunkId, std::
     dirtyVerifiedChunks_ += 1;
     stats_.verifiedBytes = completed_.bytesCompleted();
     stats_.missingChunks = completed_.missingRanges(manifest_.totalSize).size();
-    if (dirtyVerifiedChunks_ >= manifestFlushIntervalChunks_) {
+    if (manifestFlushPolicy_ == ManifestFlushPolicy::EveryNChunks &&
+        dirtyVerifiedChunks_ >= manifestFlushIntervalChunks_) {
         return flushManifest();
     }
     return common::Status::ok();
@@ -335,6 +340,10 @@ const TransferSessionStats& TransferSession::stats() const noexcept { return sta
 
 checksum::ChecksumBackend TransferSession::checksumBackend() const noexcept {
     return checksumBackend_;
+}
+
+ManifestFlushPolicy TransferSession::manifestFlushPolicy() const noexcept {
+    return manifestFlushPolicy_;
 }
 
 std::uint64_t TransferSession::manifestFlushIntervalChunks() const noexcept {

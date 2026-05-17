@@ -2,15 +2,15 @@
 
 ## 当前状态
 
-**阶段：** Phase 4I — io_uring queue-depth 重型采样与决策闸门（已完成）
+**阶段：** Phase 4J — POSIX storage/writeback、checksum 与 final verify 路径瓶颈拆解（已完成）
 
 **已完成：** 项目设计、技术选型、工程规范制定、CMake 工程骨架初始化、GoogleTest 工具链测试、本机与<redacted>二构建验证、GridFTP 源码学习经验整理入设计文档、Phase 1.0 多连接 TCP sink 与本机 loopback 验证、Phase 1.1 性能基线脚本与 loopback smoke matrix、Phase 1.2A offset-aware 单文件传输闭环、Phase 1.2B 文件传输健壮性、Phase 1.3A 文件性能基线自动化、Phase 2A manifest/range-based 断点续传核心、Phase 2B CRC32C chunk checksum 与损坏注入验证、Phase 2C CRC32C backend 自动选择、manifest 批量 flush、恢复统计与 checksum benchmark、Phase 3A GridFTP 风格控制面 STOR 上传与 REST/GFID resume 映射、Phase 3B GridFTP 风格控制面 framed RETR 完整下载、Phase 3C 下载端 manifest/verified_chunks 与 RETR REST/GFID resume、Phase 3D 控制面 SIZE/MDTM/CWD/CDUP/LIST/NLST 与测试工具收敛。
 
-**已完成补充：** Phase 4A 私网 GridFTP-like framed STOR/RETR 性能矩阵脚本、环境指标采集、smoke 矩阵、代表性 1GiB 样本和初步瓶颈判断；Phase 4B 阶段级诊断指标、host/link baseline、download manifest 批量 flush、final verify opt-in policy 和瓶颈报告；Phase 4C 原生 storage benchmark、temp preallocation opt-in、私网矩阵 repeat/summary CSV 和 verified_chunks 可靠性护栏；Phase 4D 文件 IO backend 抽象前置、POSIX file IO advice/buffering 选项、IO call 指标和 storage bench summary；Phase 4E 重型 1GiB repeat=3 storage/private matrix、POSIX knob 默认策略判断和 io_uring Phase 4F 设计闸门；Phase 4F 可选 file-IO-only io_uring backend 原型、CMake/liburing 探测、无 liburing stub fallback、脚本 backend 扫描维度和默认 POSIX 回归验证；Phase 4G 在真实 liburing 环境下完成 POSIX/io_uring storage bench 与私网 STOR/RETR 对照，并新增公开发布脱敏/export 工具链；Phase 4H 完成 file-IO-only io_uring queue depth / batching opt-in prototype、CSV 指标扩展和 smoke/1GiB sample；Phase 4I 完成 storage bench wrapper 修复、1GiB repeat=3 storage/private heavy matrix 和 queue-depth gate 报告。
+**已完成补充：** Phase 4A 私网 GridFTP-like framed STOR/RETR 性能矩阵脚本、环境指标采集、smoke 矩阵、代表性 1GiB 样本和初步瓶颈判断；Phase 4B 阶段级诊断指标、host/link baseline、download manifest 批量 flush、final verify opt-in policy 和瓶颈报告；Phase 4C 原生 storage benchmark、temp preallocation opt-in、私网矩阵 repeat/summary CSV 和 verified_chunks 可靠性护栏；Phase 4D 文件 IO backend 抽象前置、POSIX file IO advice/buffering 选项、IO call 指标和 storage bench summary；Phase 4E 重型 1GiB repeat=3 storage/private matrix、POSIX knob 默认策略判断和 io_uring Phase 4F 设计闸门；Phase 4F 可选 file-IO-only io_uring backend 原型、CMake/liburing 探测、无 liburing stub fallback、脚本 backend 扫描维度和默认 POSIX 回归验证；Phase 4G 在真实 liburing 环境下完成 POSIX/io_uring storage bench 与私网 STOR/RETR 对照，并新增公开发布脱敏/export 工具链；Phase 4H 完成 file-IO-only io_uring queue depth / batching opt-in prototype、CSV 指标扩展和 smoke/1GiB sample；Phase 4I 完成 storage bench wrapper 修复、1GiB repeat=3 storage/private heavy matrix 和 queue-depth gate 报告；Phase 4J 完成 POSIX storage/writeback、checksum、manifest flush 和 final verify 路径诊断，新增双侧 sender/receiver 阶段字段、manifest flush policy 与 commit sync policy opt-in 诊断参数，以及 Phase 4J median 分析报告。
 
 **未开始：** 系统级文件传输调优、raw FTP stream STOR/RETR、GridFTP TLS/GSI、MLST/MLSD、网络 io_uring、多文件目录同步。
 
-**下一步：** Phase 4J 回到 POSIX storage/writeback、checksum 与 final verify 路径分析；不改网络 epoll，不默认启用 io_uring，不改变 checksum/manifest/resume 语义。
+**下一步：** Phase 4K 基于 Phase 4J 结论继续做 POSIX 写入路径专项优化；不改网络 epoll，不默认启用 io_uring，不改变 checksum/manifest/resume 语义。
 
 ---
 
@@ -233,6 +233,16 @@
 
 状态：已完成。本机与<redacted>二默认 Debug full CTest 均为 `140/140` passed；`build-io-uring-real` Release full CTest 均为 `140/140` passed，真实 io_uring smoke 为 `Passed`。storage heavy `1536` rows / `0` failures；private matrix `96` cases / `0` failures，sha256 全一致。结论：queue-depth/batching 收益不稳定，未贯穿 STOR/RETR 与 crc32c/none；默认继续保持 POSIX，io_uring 仍 explicit opt-in，下一步回到 POSIX storage/writeback、checksum、final verify 路径分析。
 
+**4J POSIX storage/writeback、checksum 与 final verify 路径瓶颈拆解**
+
+- STOR/RETR 日志追加角色语义别名：STOR receiver 的 data receive/temp write/checksum/manifest/final verify/finalize；RETR sender 的 source read/network send/checksum；RETR receiver 的 download temp write/manifest/final verify/finalize。
+- `run_gridftp_private_matrix.py` raw CSV 保留接收端主指标，同时新增 `sender_*` / `receiver_*` 阶段、file IO 和 io_uring 指标；summary CSV 对阶段字段输出 min/median/max。
+- 新增 `--manifest-flush-policy every_n_chunks|final_only`，默认 `every_n_chunks`；`final_only` 仅用于诊断，失败/commit 前仍强制 flush，不允许误提交。
+- 新增 `--commit-sync-policy none|fsync_file|fsync_file_and_dir`，默认 `none`；仅用于测量 rename/fsync 成本。
+- 新增 `tools/perf/analyze_phase4j.py` 和 `docs/perf/PHASE4J_POSIX_PIPELINE_DIAGNOSIS.md`，按 repeat=3 median 输出阶段占比和 gate 结论。
+
+状态：已完成。本机与<redacted>二默认 Debug full CTest 均为 `142/142` passed；`build-io-uring-real` Release full CTest 均为 `142/142` passed，真实 io_uring smoke 为 `Passed`。Phase 4J 主私网矩阵 `96/96` pass，writeback add-on `12/12` pass，sha256 全一致。median 结论：STOR 主要瓶颈是 temp write/writeback，最佳 STOR 约 `1.45 Gbps` 且 temp write 占已测阶段约 `89%`；RETR 最佳约 `4.58 Gbps`，主要由 receiver download write 与 sender network send 构成；checksum 对 STOR 影响很小，final verify/verified_chunks 对 RETR 有 opt-in 收益但不改变默认。默认继续保持 POSIX、`final_verify_policy=full`、`preallocate=off`、`manifest_flush_policy=every_n_chunks`。
+
 **产出：** 多后端可切换引擎，各场景性能数据。
 
 ---
@@ -313,6 +323,8 @@
 | 2026-05-17 | Phase 4H 先以 queue depth/batching opt-in 设计推进 | 只扩展 file-IO-only io_uring 原型，不改网络 epoll、不改默认 POSIX、不改变可靠性事实源 |
 | 2026-05-17 | Phase 4H queue depth/batching 原型保持 opt-in | storage/private smoke 和 1GiB sample 均通过，但 median 未证明 queue depth 可稳定替代 POSIX 默认；下一步若继续需做 repeat=3 重型采样或优化 SQE batching |
 | 2026-05-17 | Phase 4I 不继续深化 io_uring batching 默认路径 | repeat=3 1GiB storage/private matrix 全部通过，但 io_uring queue-depth 收益不稳定且未贯穿 STOR/RETR 与 crc32c/none；默认 POSIX 保持不变，下一步回到 POSIX storage/writeback、checksum、final verify 分析 |
+| 2026-05-17 | Phase 4J 继续保持 POSIX 默认并聚焦写入路径 | repeat=3 私网 median 显示 STOR 主要耗时在 temp write/writeback，checksum 不是主瓶颈；RETR 可通过 opt-in verified_chunks 改善但默认仍保持 full final verify |
+| 2026-05-17 | `manifest_flush_policy=final_only` 和 `commit_sync_policy=*` 仅为诊断开关 | final_only 失败/commit 前仍强制 flush，不改变恢复事实源；commit fsync 用于测量 rename/fsync 成本，默认继续 `none` |
 
 ---
 

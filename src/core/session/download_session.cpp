@@ -103,7 +103,8 @@ common::Status validateLoadedManifest(const checkpoint::DownloadManifest& manife
 common::Result<DownloadSession> DownloadSession::createNew(
     const std::string& targetPath, const std::string& sourcePath, const std::string& transferId,
     std::uint64_t totalSize, std::uint64_t chunkSize, checksum::ChecksumAlgorithm checksumAlgorithm,
-    checksum::ChecksumBackend checksumBackend, std::uint64_t manifestFlushIntervalChunks) {
+    checksum::ChecksumBackend checksumBackend, ManifestFlushPolicy manifestFlushPolicy,
+    std::uint64_t manifestFlushIntervalChunks) {
     const common::Status valid =
         validateInputs(targetPath, sourcePath, transferId, chunkSize, manifestFlushIntervalChunks);
     if (!valid.isOk()) {
@@ -116,6 +117,7 @@ common::Result<DownloadSession> DownloadSession::createNew(
 
     DownloadSession session;
     session.checksumBackend_ = resolvedBackend.value();
+    session.manifestFlushPolicy_ = manifestFlushPolicy;
     session.manifestFlushIntervalChunks_ = manifestFlushIntervalChunks;
     session.manifestPath_ = checkpoint::downloadManifestPathForOutput(targetPath);
     session.manifest_.version = checkpoint::kDownloadManifestVersion;
@@ -136,7 +138,8 @@ common::Result<DownloadSession> DownloadSession::createNew(
 common::Result<DownloadSession> DownloadSession::resume(
     const std::string& targetPath, const std::string& sourcePath, const std::string& transferId,
     std::uint64_t totalSize, std::uint64_t chunkSize, checksum::ChecksumAlgorithm checksumAlgorithm,
-    checksum::ChecksumBackend checksumBackend, std::uint64_t manifestFlushIntervalChunks) {
+    checksum::ChecksumBackend checksumBackend, ManifestFlushPolicy manifestFlushPolicy,
+    std::uint64_t manifestFlushIntervalChunks) {
     const common::Status valid =
         validateInputs(targetPath, sourcePath, transferId, chunkSize, manifestFlushIntervalChunks);
     if (!valid.isOk()) {
@@ -161,6 +164,7 @@ common::Result<DownloadSession> DownloadSession::resume(
 
     DownloadSession session;
     session.checksumBackend_ = resolvedBackend.value();
+    session.manifestFlushPolicy_ = manifestFlushPolicy;
     session.manifestFlushIntervalChunks_ = manifestFlushIntervalChunks;
     session.manifestPath_ = manifestPath;
     session.manifest_ = std::move(loaded.value());
@@ -234,7 +238,8 @@ common::Status DownloadSession::recordVerifiedChunk(std::uint64_t chunkId, std::
     stats_.resentBytes += length;
     stats_.verifiedBytes = completed_.bytesCompleted();
     stats_.missingChunks = completed_.missingRanges(manifest_.totalSize).size();
-    if (dirtyVerifiedChunks_ >= manifestFlushIntervalChunks_) {
+    if (manifestFlushPolicy_ == ManifestFlushPolicy::EveryNChunks &&
+        dirtyVerifiedChunks_ >= manifestFlushIntervalChunks_) {
         return flushManifest();
     }
     return common::Status::ok();
@@ -306,6 +311,10 @@ const DownloadSessionStats& DownloadSession::stats() const noexcept { return sta
 
 checksum::ChecksumBackend DownloadSession::checksumBackend() const noexcept {
     return checksumBackend_;
+}
+
+ManifestFlushPolicy DownloadSession::manifestFlushPolicy() const noexcept {
+    return manifestFlushPolicy_;
 }
 
 std::uint64_t DownloadSession::manifestFlushIntervalChunks() const noexcept {

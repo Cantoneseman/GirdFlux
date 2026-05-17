@@ -85,7 +85,9 @@ add_library(gridflux_core STATIC
     src/core/metrics/transfer_phase_stats.cpp
     src/core/protocol/frame.cpp
     src/core/session/download_session.cpp
+    src/core/session/commit_sync_policy.cpp
     src/core/session/final_verify_policy.cpp
+    src/core/session/manifest_flush_policy.cpp
     src/core/session/transfer_session.cpp
     src/protocol/control/control_command.cpp
     src/protocol/control/control_options.cpp

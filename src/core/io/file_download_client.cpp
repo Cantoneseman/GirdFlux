@@ -31,6 +31,21 @@
 namespace gridflux::core::io {
 namespace {
 
+common::Status applyCommitSyncPolicy(const std::string& outputPath,
+                                     session::CommitSyncPolicy policy) {
+    if (policy == session::CommitSyncPolicy::None) {
+        return common::Status::ok();
+    }
+    const common::Status fileStatus = storage::PosixFile::fsyncPath(outputPath);
+    if (!fileStatus.isOk()) {
+        return fileStatus;
+    }
+    if (policy == session::CommitSyncPolicy::FsyncFileAndDir) {
+        return storage::PosixFile::fsyncParentDirectory(outputPath);
+    }
+    return common::Status::ok();
+}
+
 struct DownloadStats {
     std::uint64_t receivedBytes = 0;
     std::uint64_t verifiedBytes = 0;
@@ -268,7 +283,7 @@ common::Result<std::vector<chunk::CompletedRange>> prepareDownloadSession(
             auto resumed = session::DownloadSession::resume(
                 options.path, sourcePath, options.transferId, totalSize, chunkSize,
                 options.checksumAlgorithm, checksumBackend,
-                options.manifestFlushIntervalChunks);
+                options.manifestFlushPolicy, options.manifestFlushIntervalChunks);
             if (!resumed.isOk()) {
                 return resumed.status();
             }
@@ -317,7 +332,7 @@ common::Result<std::vector<chunk::CompletedRange>> prepareDownloadSession(
             auto created = session::DownloadSession::createNew(
                 options.path, sourcePath, options.transferId, totalSize, chunkSize,
                 options.checksumAlgorithm, checksumBackend,
-                options.manifestFlushIntervalChunks);
+                options.manifestFlushPolicy, options.manifestFlushIntervalChunks);
             if (!created.isOk()) {
                 return created.status();
             }
@@ -705,6 +720,11 @@ common::Status runFileDownloadClient(const config::FileDownloadOptions& options)
             (void)state.session.markFailed();
             return renameStatus;
         }
+        const common::Status syncStatus = applyCommitSyncPolicy(options.path, options.commitSyncPolicy);
+        if (!syncStatus.isOk()) {
+            (void)state.session.markFailed();
+            return syncStatus;
+        }
         const common::Status committedStatus = state.session.markCommitted();
         if (!committedStatus.isOk()) {
             return committedStatus;
@@ -733,12 +753,17 @@ common::Status runFileDownloadClient(const config::FileDownloadOptions& options)
               << " resent_bytes=" << state.session.stats().resentBytes
               << " verified_bytes=" << state.session.stats().verifiedBytes
               << " removed_corrupt_chunks=" << state.session.stats().removedCorruptChunks
-              << " manifest_flush_policy=every_"
+              << " manifest_flush_policy="
+              << session::manifestFlushPolicyName(state.session.manifestFlushPolicy())
+              << " manifest_flush_interval_chunks="
+              << state.session.manifestFlushIntervalChunks()
+              << " legacy_manifest_flush_policy=every_"
               << state.session.manifestFlushIntervalChunks() << "_chunks"
               << " manifest_flush_count=" << state.session.stats().manifestFlushCount
               << " final_verify_policy="
               << session::finalVerifyPolicyName(options.finalVerifyPolicy)
               << " final_verify_policy_effective=" << finalVerifyPolicyEffective
+              << " commit_sync_policy=" << session::commitSyncPolicyName(options.commitSyncPolicy)
               << " preallocate=" << storage::preallocateModeName(options.preallocateMode)
               << " file_io_backend=" << storage::fileIoBackendName(options.fileIo.backend)
               << " file_io_buffer_size=" << options.fileIo.bufferSize
@@ -746,6 +771,7 @@ common::Status runFileDownloadClient(const config::FileDownloadOptions& options)
               << " file_io_batch_size=" << options.fileIo.batchSize
               << " file_io_advice=" << storage::fileIoAdviceName(options.fileIo.advice);
     metrics::appendPhaseStats(std::cout, state.phaseStats);
+    metrics::appendRetrReceiverAliases(std::cout, state.phaseStats);
     storage::appendFileIoStats(std::cout, state.fileIoStats);
     std::cout << '\n';
     return common::Status::ok();

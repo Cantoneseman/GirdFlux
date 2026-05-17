@@ -13,7 +13,9 @@ namespace {
 
 using gridflux::checksum::ChecksumAlgorithm;
 using gridflux::checksum::ChecksumBackend;
+using gridflux::core::session::CommitSyncPolicy;
 using gridflux::core::session::FinalVerifyPolicy;
+using gridflux::core::session::ManifestFlushPolicy;
 using gridflux::protocol::control::ControlListEntry;
 using gridflux::protocol::control::ControlPathKind;
 using gridflux::protocol::control::formatList;
@@ -40,8 +42,10 @@ TEST(ControlOptionsTest, ParsesDefaultsAndRequiredRoot) {
     EXPECT_EQ(parsed.value().connections, 1U);
     EXPECT_EQ(parsed.value().checksumAlgorithm, ChecksumAlgorithm::Crc32c);
     EXPECT_EQ(parsed.value().checksumBackend, ChecksumBackend::Auto);
+    EXPECT_EQ(parsed.value().manifestFlushPolicy, ManifestFlushPolicy::EveryNChunks);
     EXPECT_EQ(parsed.value().manifestFlushIntervalChunks, 16U);
     EXPECT_EQ(parsed.value().finalVerifyPolicy, FinalVerifyPolicy::Full);
+    EXPECT_EQ(parsed.value().commitSyncPolicy, CommitSyncPolicy::None);
     EXPECT_EQ(parsed.value().preallocateMode, gridflux::storage::PreallocateMode::Off);
     EXPECT_EQ(parsed.value().fileIo.backend, gridflux::storage::FileIoBackendKind::Posix);
     EXPECT_EQ(parsed.value().fileIo.bufferSize, 0U);
@@ -75,10 +79,14 @@ TEST(ControlOptionsTest, ParsesExplicitOptions) {
                           "none",
                           "--checksum-backend",
                           "software",
+                          "--manifest-flush-policy",
+                          "final_only",
                           "--manifest-flush-interval-chunks",
                           "32",
                           "--final-verify-policy",
                           "verified_chunks",
+                          "--commit-sync-policy",
+                          "fsync_file",
                           "--preallocate",
                           "full",
                           "--file-io-backend",
@@ -103,8 +111,10 @@ TEST(ControlOptionsTest, ParsesExplicitOptions) {
     EXPECT_EQ(parsed.value().bufferSize, 131072U);
     EXPECT_EQ(parsed.value().checksumAlgorithm, ChecksumAlgorithm::None);
     EXPECT_EQ(parsed.value().checksumBackend, ChecksumBackend::Software);
+    EXPECT_EQ(parsed.value().manifestFlushPolicy, ManifestFlushPolicy::FinalOnly);
     EXPECT_EQ(parsed.value().manifestFlushIntervalChunks, 32U);
     EXPECT_EQ(parsed.value().finalVerifyPolicy, FinalVerifyPolicy::VerifiedChunks);
+    EXPECT_EQ(parsed.value().commitSyncPolicy, CommitSyncPolicy::FsyncFile);
     EXPECT_EQ(parsed.value().preallocateMode, gridflux::storage::PreallocateMode::Full);
     EXPECT_EQ(parsed.value().fileIo.backend, gridflux::storage::FileIoBackendKind::IoUring);
     EXPECT_EQ(parsed.value().fileIo.bufferSize, 1048576U);
@@ -131,6 +141,14 @@ TEST(ControlOptionsTest, RejectsInvalidOptions) {
     const char* badFinalVerify[] = {"gridflux-gridftp-server", "--root", "/tmp",
                                     "--final-verify-policy", "fast"};
     EXPECT_FALSE(parseControlServerOptions(5, badFinalVerify).isOk());
+
+    const char* badFlushPolicy[] = {"gridflux-gridftp-server", "--root", "/tmp",
+                                    "--manifest-flush-policy", "sometimes"};
+    EXPECT_FALSE(parseControlServerOptions(5, badFlushPolicy).isOk());
+
+    const char* badCommitSync[] = {"gridflux-gridftp-server", "--root", "/tmp",
+                                   "--commit-sync-policy", "sync_everything"};
+    EXPECT_FALSE(parseControlServerOptions(5, badCommitSync).isOk());
 
     const char* badPreallocate[] = {"gridflux-gridftp-server", "--root", "/tmp",
                                     "--preallocate", "yes"};

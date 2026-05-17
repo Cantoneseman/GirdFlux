@@ -4,6 +4,7 @@
 #include <string>
 
 #include "gridflux/checksum/checksum.h"
+#include "gridflux/core/session/manifest_flush_policy.h"
 #include "gridflux/storage/file_io.h"
 
 namespace gridflux::core::session {
@@ -18,6 +19,7 @@ struct TransferSessionConfig {
     bool resume = false;
     checksum::ChecksumAlgorithm checksumAlgorithm = checksum::ChecksumAlgorithm::Crc32c;
     checksum::ChecksumBackend checksumBackend = checksum::ChecksumBackend::Auto;
+    ManifestFlushPolicy manifestFlushPolicy = ManifestFlushPolicy::EveryNChunks;
     std::uint64_t manifestFlushIntervalChunks = kDefaultManifestFlushIntervalChunks;
     storage::FileIoConfig fileIo;
 };

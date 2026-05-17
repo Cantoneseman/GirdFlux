@@ -9,7 +9,9 @@ namespace {
 using gridflux::checksum::ChecksumAlgorithm;
 using gridflux::checksum::ChecksumBackend;
 using gridflux::config::parseFileDownloadOptions;
+using gridflux::core::session::CommitSyncPolicy;
 using gridflux::core::session::FinalVerifyPolicy;
+using gridflux::core::session::ManifestFlushPolicy;
 
 TEST(FileDownloadOptionsTest, ParsesRequiredAndDefaults) {
     const char* argv[] = {"gridflux-file-download-client", "--output", "/tmp/out.bin",
@@ -24,8 +26,10 @@ TEST(FileDownloadOptionsTest, ParsesRequiredAndDefaults) {
     EXPECT_EQ(parsed.value().transferId, "download-token");
     EXPECT_EQ(parsed.value().checksumAlgorithm, ChecksumAlgorithm::Crc32c);
     EXPECT_EQ(parsed.value().checksumBackend, ChecksumBackend::Auto);
+    EXPECT_EQ(parsed.value().manifestFlushPolicy, ManifestFlushPolicy::EveryNChunks);
     EXPECT_EQ(parsed.value().manifestFlushIntervalChunks, 16U);
     EXPECT_EQ(parsed.value().finalVerifyPolicy, FinalVerifyPolicy::Full);
+    EXPECT_EQ(parsed.value().commitSyncPolicy, CommitSyncPolicy::None);
     EXPECT_EQ(parsed.value().preallocateMode, gridflux::storage::PreallocateMode::Off);
     EXPECT_EQ(parsed.value().fileIo.backend, gridflux::storage::FileIoBackendKind::Posix);
     EXPECT_EQ(parsed.value().fileIo.bufferSize, 0U);
@@ -51,10 +55,14 @@ TEST(FileDownloadOptionsTest, ParsesExplicitOptions) {
                           "none",
                           "--checksum-backend",
                           "software",
+                          "--manifest-flush-policy",
+                          "final_only",
                           "--manifest-flush-interval-chunks",
                           "32",
                           "--final-verify-policy",
                           "verified_chunks",
+                          "--commit-sync-policy",
+                          "fsync_file",
                           "--preallocate",
                           "full",
                           "--file-io-backend",
@@ -81,8 +89,10 @@ TEST(FileDownloadOptionsTest, ParsesExplicitOptions) {
     EXPECT_EQ(parsed.value().bufferSize, 131072U);
     EXPECT_EQ(parsed.value().checksumAlgorithm, ChecksumAlgorithm::None);
     EXPECT_EQ(parsed.value().checksumBackend, ChecksumBackend::Software);
+    EXPECT_EQ(parsed.value().manifestFlushPolicy, ManifestFlushPolicy::FinalOnly);
     EXPECT_EQ(parsed.value().manifestFlushIntervalChunks, 32U);
     EXPECT_EQ(parsed.value().finalVerifyPolicy, FinalVerifyPolicy::VerifiedChunks);
+    EXPECT_EQ(parsed.value().commitSyncPolicy, CommitSyncPolicy::FsyncFile);
     EXPECT_EQ(parsed.value().preallocateMode, gridflux::storage::PreallocateMode::Full);
     EXPECT_EQ(parsed.value().fileIo.backend, gridflux::storage::FileIoBackendKind::IoUring);
     EXPECT_EQ(parsed.value().fileIo.bufferSize, 1048576U);
@@ -132,6 +142,15 @@ TEST(FileDownloadOptionsTest, RejectsInvalidOptions) {
                                       "0"};
     EXPECT_FALSE(parseFileDownloadOptions(7, badFlushInterval).isOk());
 
+    const char* badFlushPolicy[] = {"gridflux-file-download-client",
+                                    "--output",
+                                    "/tmp/out",
+                                    "--transfer-id",
+                                    "id",
+                                    "--manifest-flush-policy",
+                                    "sometimes"};
+    EXPECT_FALSE(parseFileDownloadOptions(7, badFlushPolicy).isOk());
+
     const char* badFinalVerify[] = {"gridflux-file-download-client",
                                     "--output",
                                     "/tmp/out",
@@ -140,6 +159,15 @@ TEST(FileDownloadOptionsTest, RejectsInvalidOptions) {
                                     "--final-verify-policy",
                                     "trust-me"};
     EXPECT_FALSE(parseFileDownloadOptions(7, badFinalVerify).isOk());
+
+    const char* badCommitSync[] = {"gridflux-file-download-client",
+                                   "--output",
+                                   "/tmp/out",
+                                   "--transfer-id",
+                                   "id",
+                                   "--commit-sync-policy",
+                                   "sync_everything"};
+    EXPECT_FALSE(parseFileDownloadOptions(7, badCommitSync).isOk());
 
     const char* badPreallocate[] = {"gridflux-file-download-client",
                                     "--output",

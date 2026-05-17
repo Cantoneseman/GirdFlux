@@ -416,8 +416,10 @@ common::Status runStor(int controlFd, ControlSession& session, PassiveListener* 
     fileOptions.transferId = transferId;
     fileOptions.checksumAlgorithm = controlOptions.checksumAlgorithm;
     fileOptions.checksumBackend = controlOptions.checksumBackend;
+    fileOptions.manifestFlushPolicy = controlOptions.manifestFlushPolicy;
     fileOptions.manifestFlushIntervalChunks = controlOptions.manifestFlushIntervalChunks;
     fileOptions.finalVerifyPolicy = controlOptions.finalVerifyPolicy;
+    fileOptions.commitSyncPolicy = controlOptions.commitSyncPolicy;
     fileOptions.preallocateMode = controlOptions.preallocateMode;
     fileOptions.fileIo = controlOptions.fileIo;
     fileOptions.resume = response.resume;

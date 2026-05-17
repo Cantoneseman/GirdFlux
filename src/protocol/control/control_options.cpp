@@ -192,12 +192,24 @@ common::Result<ControlServerOptions> parseControlServerOptions(int argc, const c
                     "--manifest-flush-interval-chunks must be in range 1..65536");
             }
             options.manifestFlushIntervalChunks = parsed.value();
+        } else if (option == "--manifest-flush-policy") {
+            auto parsed = core::session::parseManifestFlushPolicy(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.manifestFlushPolicy = parsed.value();
         } else if (option == "--final-verify-policy") {
             auto parsed = core::session::parseFinalVerifyPolicy(value);
             if (!parsed.isOk()) {
                 return parsed.status();
             }
             options.finalVerifyPolicy = parsed.value();
+        } else if (option == "--commit-sync-policy") {
+            auto parsed = core::session::parseCommitSyncPolicy(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.commitSyncPolicy = parsed.value();
         } else if (option == "--preallocate") {
             auto parsed = storage::parsePreallocateMode(value);
             if (!parsed.isOk()) {
@@ -284,8 +296,10 @@ std::string controlServerUsage(const char* programName) {
               "[--data-port-base <port>] [--connections <N>] "
               "[--chunk-size <N>] [--buffer-size <N>] "
               "[--checksum crc32c|none] [--checksum-backend auto|software|hardware] "
+              "[--manifest-flush-policy every_n_chunks|final_only] "
               "[--manifest-flush-interval-chunks <N>] "
               "[--final-verify-policy full|verified_chunks] "
+              "[--commit-sync-policy none|fsync_file|fsync_file_and_dir] "
               "[--preallocate off|full] "
               "[--file-io-backend posix|io_uring] [--file-io-buffer-size <bytes>] "
               "[--file-io-queue-depth <N>] [--file-io-batch-size <N>] "

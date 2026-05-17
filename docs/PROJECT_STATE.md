@@ -2856,3 +2856,183 @@ python3 tools/perf/analyze_phase4i.py \
 
 - Phase 4H 1GiB RETR sample 因 download client queue/batch 参数传递问题不作为最终判断；Phase 4I 已用修复后的脚本重跑 repeat=3。
 - <redacted>二历史目录 `build-private-verify-20260515T163633Z` 未删除。
+
+## 2026-05-17 Phase 4J POSIX storage/writeback, checksum, final verify diagnosis
+
+### 实现内容
+
+- 新增 `ManifestFlushPolicy` 与 `CommitSyncPolicy`：
+  - `--manifest-flush-policy every_n_chunks|final_only`，默认 `every_n_chunks`。
+  - `--commit-sync-policy none|fsync_file|fsync_file_and_dir`，默认 `none`。
+  - `final_only` 仅用于诊断，失败/commit 前仍强制 flush，不改变 manifest/verified_chunks 恢复事实源。
+- STOR/RETR key=value 日志追加阶段语义别名：
+  - STOR receiver：`data_receive_seconds`、`temp_write_seconds`、`checksum_seconds`、`manifest_flush_seconds`、`final_verify_seconds`、`finalize_rename_seconds`。
+  - RETR sender：`source_read_seconds`、`network_send_seconds`、`checksum_seconds`。
+  - RETR receiver/download client：`download_temp_write_seconds`、`manifest_flush_seconds`、`final_verify_seconds`、`finalize_rename_seconds`。
+- `tools/perf/run_gridftp_private_matrix.py` 扩展：
+  - 新增 manifest flush policy、manifest flush interval list、commit sync policy 矩阵维度。
+  - Raw CSV 保留接收端主指标，并新增 `sender_*` / `receiver_*` 双侧阶段、file IO 与 io_uring 指标。
+  - Summary CSV 对阶段字段、双侧字段和 io_uring 字段输出 min/median/max。
+- 新增 `tools/perf/analyze_phase4j.py`，生成 `docs/perf/PHASE4J_POSIX_PIPELINE_DIAGNOSIS.md`。
+- 默认值保持不变：`file_io_backend=posix`、`final_verify_policy=full`、`preallocate=off`、`manifest_flush_policy=every_n_chunks`、`commit_sync_policy=none`。
+
+### 本机验证
+
+```bash
+python3 -m py_compile tools/perf/run_gridftp_private_matrix.py tools/perf/analyze_phase4j.py tools/release/check_public_hygiene.py tools/release/export_public_repo.py tools/release/test_public_hygiene.py
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++-13
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+- 结果：默认 Debug build 通过；CTest `142/142` passed。
+- 默认 build 中 `FileIoTest.IoUringContextReadWriteSmokeWhenAvailable` 预期 skipped。
+
+```bash
+cmake -S . -B build-io-uring-real -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13 -DGRIDFLUX_ENABLE_IO_URING=ON
+cmake --build build-io-uring-real
+ctest --test-dir build-io-uring-real --output-on-failure
+ctest --test-dir build-io-uring-real -R FileIoTest.IoUringContextReadWriteSmokeWhenAvailable --output-on-failure
+```
+
+- 结果：real io_uring Release build 通过；CTest `142/142` passed；io_uring smoke 为 `Passed`。
+
+### <redacted>二验证
+
+```bash
+GRIDFLUX_SSH_PASSWORD=<redacted> tools/perf/sync_remote.sh --host root@<redacted> --source /root/projects/GridFlux --target /root/projects/GridFlux
+sshpass -e ssh root@<redacted> 'cd /root/projects/GridFlux && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++-13 && cmake --build build && ctest --test-dir build --output-on-failure'
+sshpass -e ssh root@<redacted> 'cd /root/projects/GridFlux && cmake -S . -B build-io-uring-real -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13 -DGRIDFLUX_ENABLE_IO_URING=ON && cmake --build build-io-uring-real && ctest --test-dir build-io-uring-real --output-on-failure'
+```
+
+- 结果：<redacted>二默认 Debug build/full CTest `142/142` passed。
+- 结果：<redacted>二 `build-io-uring-real` Release/full CTest `142/142` passed；真实 io_uring smoke 在 full CTest 中为 `Passed`。
+- <redacted>二历史目录 `build-private-verify-20260515T163633Z` 未删除。
+
+### Public export gate
+
+```bash
+rm -rf /tmp/gridflux-public
+python3 tools/release/export_public_repo.py --output /tmp/gridflux-public --force
+python3 tools/release/check_public_hygiene.py --path /tmp/gridflux-public --strict
+```
+
+- 结果：public export strict hygiene passed。
+- Export summary：`copied_files=177 skipped_files=1 skipped_dirs=11 skipped_build_dirs=7`。
+
+### Phase 4J smoke / field validation
+
+```bash
+python3 tools/perf/run_gridftp_private_matrix.py \
+  --smoke \
+  --directions stor,retr \
+  --bytes 8388608 \
+  --connections 2 \
+  --chunk-sizes 1048576 \
+  --buffer-sizes 65536 \
+  --checksums none \
+  --checksum-backend auto \
+  --file-io-backends posix \
+  --file-io-buffer-sizes 262144 \
+  --file-io-advices off \
+  --preallocates off \
+  --manifest-flush-policies final_only \
+  --manifest-flush-interval-chunks-list 16 \
+  --final-verify-policies full \
+  --repeat 1 \
+  --remote root@<redacted> \
+  --server-host <redacted> \
+  --local-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --output-dir tools/perf/results \
+  --case-timeout 300
+```
+
+- Raw CSV：`tools/perf/results/20260517T154153Z_gridftp-private-matrix-smoke.csv`
+- Summary CSV：`tools/perf/results/20260517T154153Z_gridftp-private-matrix-smoke-summary.csv`
+- 结果：`cases=2 failures=0`。
+- 字段抽查：STOR row 包含 `data_receive_seconds` / `temp_write_seconds`；RETR row 包含 `sender_source_read_seconds` 和 `receiver_download_temp_write_seconds`。
+
+### Phase 4J 主私网矩阵
+
+```bash
+python3 tools/perf/run_gridftp_private_matrix.py \
+  --smoke \
+  --directions stor,retr \
+  --bytes 1073741824 \
+  --connections 8 \
+  --chunk-sizes 4194304 \
+  --buffer-sizes 262144 \
+  --checksums crc32c,none \
+  --checksum-backend auto \
+  --file-io-backends posix \
+  --file-io-buffer-sizes 262144 \
+  --file-io-advices off \
+  --preallocates off \
+  --manifest-flush-policies every_n_chunks,final_only \
+  --manifest-flush-interval-chunks-list 16,256 \
+  --final-verify-policies full,verified_chunks \
+  --repeat 3 \
+  --remote root@<redacted> \
+  --server-host <redacted> \
+  --local-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --output-dir tools/perf/results \
+  --case-timeout 900
+```
+
+- Raw CSV：`tools/perf/results/20260517T154238Z_gridftp-private-matrix-smoke.csv`
+- Summary CSV：`tools/perf/results/20260517T154238Z_gridftp-private-matrix-smoke-summary.csv`
+- 结果：`cases=96 failures=0`；所有 row sha256 一致。
+
+### POSIX writeback add-on
+
+```bash
+python3 tools/perf/run_gridftp_private_matrix.py \
+  --smoke \
+  --directions stor \
+  --bytes 1073741824 \
+  --connections 8 \
+  --chunk-sizes 4194304 \
+  --buffer-sizes 262144 \
+  --checksums none \
+  --file-io-backends posix \
+  --file-io-buffer-sizes 0,262144,1048576,4194304 \
+  --file-io-advices off \
+  --preallocates off \
+  --manifest-flush-policies final_only \
+  --final-verify-policies full \
+  --repeat 3 \
+  --remote root@<redacted> \
+  --server-host <redacted> \
+  --local-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --output-dir tools/perf/results \
+  --case-timeout 900
+```
+
+- Raw CSV：`tools/perf/results/20260517T160524Z_gridftp-private-matrix-smoke.csv`
+- Summary CSV：`tools/perf/results/20260517T160524Z_gridftp-private-matrix-smoke-summary.csv`
+- 结果：`cases=12 failures=0`；所有 row sha256 一致。
+
+### Phase 4J analysis
+
+```bash
+python3 tools/perf/analyze_phase4j.py \
+  --matrix-summary-csv tools/perf/results/20260517T154238Z_gridftp-private-matrix-smoke-summary.csv \
+  --matrix-summary-csv tools/perf/results/20260517T160524Z_gridftp-private-matrix-smoke-summary.csv \
+  --output docs/perf/PHASE4J_POSIX_PIPELINE_DIAGNOSIS.md
+```
+
+- 报告：`docs/perf/PHASE4J_POSIX_PIPELINE_DIAGNOSIS.md`
+- 主结论：
+  - STOR 最佳 median 约 `1.45 Gbps`，主要瓶颈为 temp write/writeback；最佳 STOR case 中 temp write 占已测阶段约 `89%`。
+  - STOR crc32c 与 none median 接近，checksum 不是当前主瓶颈。
+  - RETR 最佳 median 约 `4.58 Gbps`；主要由 receiver download write 与 sender network send 构成。
+  - `verified_chunks` 对部分 RETR crc32c case 有 opt-in 收益，但 checksum none 会 effective 回退 `full`，默认仍保持 `final_verify_policy=full`。
+  - `manifest_flush_policy=final_only`、较大 interval 和 file IO buffer size 都不满足默认启用条件；保留为诊断/opt-in。
+
+### 状态说明
+
+- Phase 4J 不引入 raw FTP STOR/RETR，不改网络 epoll，不默认启用 io_uring、preallocate full 或 verified_chunks。
+- 默认后端继续为 POSIX；io_uring 仍 explicit opt-in。

@@ -6,6 +6,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <string>
 #include <utility>
@@ -99,6 +100,29 @@ common::Status PosixFile::renamePath(const std::string& from, const std::string&
     return common::Status::ok();
 }
 
+common::Status PosixFile::fsyncPath(const std::string& path) {
+    auto file = openReadOnly(path);
+    if (!file.isOk()) {
+        return file.status();
+    }
+    return file.value().sync();
+}
+
+common::Status PosixFile::fsyncParentDirectory(const std::string& path) {
+    const std::filesystem::path parent =
+        std::filesystem::path(path).parent_path().empty()
+            ? std::filesystem::path(".")
+            : std::filesystem::path(path).parent_path();
+    core::io::UniqueFd fd(::open(parent.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC));
+    if (!fd.isValid()) {
+        return systemStatus("open parent directory", errno);
+    }
+    if (::fsync(fd.get()) != 0) {
+        return systemStatus("fsync parent directory", errno);
+    }
+    return common::Status::ok();
+}
+
 common::Result<std::uint64_t> PosixFile::fileSize() const {
     struct stat statBuffer {};
     if (::fstat(fd_.get(), &statBuffer) != 0) {
@@ -108,6 +132,16 @@ common::Result<std::uint64_t> PosixFile::fileSize() const {
         return common::Status::runtimeError("file size is negative");
     }
     return static_cast<std::uint64_t>(statBuffer.st_size);
+}
+
+common::Status PosixFile::sync() const {
+    if (!isValid()) {
+        return common::Status::invalidArgument("file is not open");
+    }
+    if (::fsync(fd_.get()) != 0) {
+        return systemStatus("fsync", errno);
+    }
+    return common::Status::ok();
 }
 
 common::Status PosixFile::resize(std::uint64_t size) const {

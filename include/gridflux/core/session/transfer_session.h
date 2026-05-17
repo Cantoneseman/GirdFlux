@@ -9,6 +9,7 @@
 #include "gridflux/common/status.h"
 #include "gridflux/core/chunk/range_list.h"
 #include "gridflux/core/metrics/transfer_phase_stats.h"
+#include "gridflux/core/session/manifest_flush_policy.h"
 #include "gridflux/core/session/transfer_session_config.h"
 #include "gridflux/storage/posix_file.h"
 
@@ -32,11 +33,13 @@ class TransferSession {
         const std::string& outputPath, const std::string& transferId, std::uint64_t totalSize,
         std::uint64_t chunkSize, checksum::ChecksumAlgorithm checksumAlgorithm,
         checksum::ChecksumBackend checksumBackend = checksum::ChecksumBackend::Auto,
+        ManifestFlushPolicy manifestFlushPolicy = ManifestFlushPolicy::EveryNChunks,
         std::uint64_t manifestFlushIntervalChunks = kDefaultManifestFlushIntervalChunks);
     [[nodiscard]] static common::Result<TransferSession> resume(
         const std::string& outputPath, const std::string& transferId, std::uint64_t totalSize,
         std::uint64_t chunkSize, checksum::ChecksumAlgorithm checksumAlgorithm,
         checksum::ChecksumBackend checksumBackend = checksum::ChecksumBackend::Auto,
+        ManifestFlushPolicy manifestFlushPolicy = ManifestFlushPolicy::EveryNChunks,
         std::uint64_t manifestFlushIntervalChunks = kDefaultManifestFlushIntervalChunks);
 
     [[nodiscard]] common::Status save();
@@ -54,6 +57,7 @@ class TransferSession {
     [[nodiscard]] std::uint64_t bytesCompleted() const noexcept;
     [[nodiscard]] const TransferSessionStats& stats() const noexcept;
     [[nodiscard]] checksum::ChecksumBackend checksumBackend() const noexcept;
+    [[nodiscard]] ManifestFlushPolicy manifestFlushPolicy() const noexcept;
     [[nodiscard]] std::uint64_t manifestFlushIntervalChunks() const noexcept;
     [[nodiscard]] const checkpoint::TransferManifest& manifest() const noexcept;
     [[nodiscard]] const std::string& manifestPath() const noexcept;
@@ -64,6 +68,7 @@ class TransferSession {
     chunk::RangeList completed_;
     std::string manifestPath_;
     checksum::ChecksumBackend checksumBackend_ = checksum::ChecksumBackend::Software;
+    ManifestFlushPolicy manifestFlushPolicy_ = ManifestFlushPolicy::EveryNChunks;
     std::uint64_t manifestFlushIntervalChunks_ = kDefaultManifestFlushIntervalChunks;
     std::uint64_t dirtyVerifiedChunks_ = 0;
     TransferSessionStats stats_;

@@ -69,5 +69,8 @@ class ScopedPhaseTimer {
 };
 
 void appendPhaseStats(std::ostream& stream, const TransferPhaseStats& stats);
+void appendStorReceiverAliases(std::ostream& stream, const TransferPhaseStats& stats);
+void appendRetrSenderAliases(std::ostream& stream, const TransferPhaseStats& stats);
+void appendRetrReceiverAliases(std::ostream& stream, const TransferPhaseStats& stats);
 
 }  // namespace gridflux::core::metrics

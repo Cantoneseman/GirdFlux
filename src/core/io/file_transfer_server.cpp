@@ -86,6 +86,21 @@ common::Status systemStatus(const char* operation, int errorNumber) {
                                        errorNumber);
 }
 
+common::Status applyCommitSyncPolicy(const std::string& outputPath,
+                                     session::CommitSyncPolicy policy) {
+    if (policy == session::CommitSyncPolicy::None) {
+        return common::Status::ok();
+    }
+    const common::Status fileStatus = storage::PosixFile::fsyncPath(outputPath);
+    if (!fileStatus.isOk()) {
+        return fileStatus;
+    }
+    if (policy == session::CommitSyncPolicy::FsyncFileAndDir) {
+        return storage::PosixFile::fsyncParentDirectory(outputPath);
+    }
+    return common::Status::ok();
+}
+
 common::Status sendAllNonBlocking(int fd, const std::uint8_t* data, std::size_t length,
                                   metrics::TransferPhaseStats* phaseStats = nullptr) {
     metrics::ScopedPhaseTimer timer(phaseStats, metrics::TransferPhase::Send, length);
@@ -347,11 +362,13 @@ common::Status initializeSession(TransferState& transfer,
                              ? session::TransferSession::resume(
                                    options.path, payload.transferId, payload.totalSize,
                                    payload.chunkSize, payload.checksumAlgorithm,
-                                   options.checksumBackend, options.manifestFlushIntervalChunks)
+                                   options.checksumBackend, options.manifestFlushPolicy,
+                                   options.manifestFlushIntervalChunks)
                              : session::TransferSession::createNew(
                                    options.path, payload.transferId, payload.totalSize,
                                    payload.chunkSize, payload.checksumAlgorithm,
-                                   options.checksumBackend, options.manifestFlushIntervalChunks);
+                                   options.checksumBackend, options.manifestFlushPolicy,
+                                   options.manifestFlushIntervalChunks);
     if (!sessionResult.isOk()) {
         transfer.errorCode = sessionResult.status().message().find("manifest") != std::string::npos
                                  ? protocol::FrameStatusCode::ManifestCorrupt
@@ -946,6 +963,16 @@ common::Status runFileTransferServerOnListener(const config::FileTransferOptions
             return renameStatus;
         }
 
+        const common::Status syncStatus =
+            applyCommitSyncPolicy(options.path, options.commitSyncPolicy);
+        if (!syncStatus.isOk()) {
+            (void)sendStatusToConnections(connections, protocol::FrameType::Error,
+                                          protocol::FrameStatusCode::WriteFailed,
+                                          transfer.totalSize, true);
+            markFailedBestEffort(transfer);
+            return syncStatus;
+        }
+
         const common::Status committedStatus = transfer.session.markCommitted();
         if (!committedStatus.isOk()) {
             (void)sendStatusToConnections(connections, protocol::FrameType::Error,
@@ -982,12 +1009,18 @@ common::Status runFileTransferServerOnListener(const config::FileTransferOptions
               << " verified_bytes=" << transfer.session.bytesCompleted()
               << " loaded_verified_chunks=" << stats.loadedVerifiedChunks
               << " removed_corrupt_chunks=" << stats.removedCorruptChunks
-              << " missing_chunks=" << stats.missingChunks << " manifest_flush_policy=every_"
+              << " missing_chunks=" << stats.missingChunks
+              << " manifest_flush_policy="
+              << session::manifestFlushPolicyName(transfer.session.manifestFlushPolicy())
+              << " manifest_flush_interval_chunks="
+              << transfer.session.manifestFlushIntervalChunks()
+              << " legacy_manifest_flush_policy=every_"
               << transfer.session.manifestFlushIntervalChunks() << "_chunks"
               << " manifest_flush_count=" << stats.manifestFlushCount
               << " final_verify_policy="
               << session::finalVerifyPolicyName(options.finalVerifyPolicy)
               << " final_verify_policy_effective=" << finalVerifyPolicyEffective
+              << " commit_sync_policy=" << session::commitSyncPolicyName(options.commitSyncPolicy)
               << " preallocate=" << storage::preallocateModeName(options.preallocateMode)
               << " file_io_backend=" << storage::fileIoBackendName(options.fileIo.backend)
               << " file_io_buffer_size=" << options.fileIo.bufferSize
@@ -995,6 +1028,7 @@ common::Status runFileTransferServerOnListener(const config::FileTransferOptions
               << " file_io_batch_size=" << options.fileIo.batchSize
               << " file_io_advice=" << storage::fileIoAdviceName(options.fileIo.advice);
     metrics::appendPhaseStats(std::cout, transfer.phaseStats);
+    metrics::appendStorReceiverAliases(std::cout, transfer.phaseStats);
     storage::appendFileIoStats(std::cout, transfer.fileIoStats);
     std::cout << '\n' << std::flush;
 
