@@ -79,6 +79,28 @@ Private mode reuses the established private smoke helpers. Passwords must come
 from environment or the local private operator setup; they are not printed or
 written into JSON.
 
+To run the private demo against a token-auth server path, create a private token
+file with owner-only permissions and pass it to the demo runner:
+
+```bash
+umask 077
+printf '%s\n' '<token-value>' > /tmp/gridflux-token.txt
+
+python3 tools/demo/run_alpha_demo.py \
+  --mode private \
+  --build-dir build \
+  --remote <remote> \
+  --remote-root <remote-root> \
+  --server-host <server-host> \
+  --profile tiny \
+  --auth-mode token \
+  --auth-token-file /tmp/gridflux-token.txt \
+  --json-output tools/perf/results/alpha-demo-private-token.json
+```
+
+The token value is not written to demo JSON. See [SECURITY.md](SECURITY.md) for
+the exact alpha auth boundary.
+
 ## Manual Server And CLI Walkthrough
 
 Start a server:
@@ -92,6 +114,21 @@ Start a server:
   --connections 2 \
   --checksum crc32c \
   --checksum-backend auto
+```
+
+Token-auth server:
+
+```bash
+umask 077
+printf '%s\n' '<token-value>' > /tmp/gridflux-token.txt
+
+./build/gridflux-gridftp-server \
+  --host 127.0.0.1 \
+  --port 2121 \
+  --root /tmp/gridflux-demo-root \
+  --data-port-base 20300 \
+  --auth-mode token \
+  --auth-token-file /tmp/gridflux-token.txt
 ```
 
 Directory upload:

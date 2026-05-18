@@ -94,6 +94,7 @@ add_library(gridflux_core STATIC
     src/core/tree/tree_manifest.cpp
     src/core/tree/tree_scan.cpp
     src/protocol/control/control_command.cpp
+    src/protocol/control/control_auth.cpp
     src/protocol/control/control_options.cpp
     src/protocol/control/control_server.cpp
     src/storage/file_io.cpp
@@ -311,6 +312,10 @@ if(GRIDFLUX_BUILD_TESTS)
     add_test(
         NAME gridflux_gridftp_control_list_smoke
         COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/test/run_gridftp_control_list_smoke.py --build-dir ${CMAKE_BINARY_DIR}
+    )
+    add_test(
+        NAME gridflux_gridftp_control_token_smoke
+        COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/test/run_gridftp_control_token_smoke.py --build-dir ${CMAKE_BINARY_DIR}
     )
     add_test(
         NAME gridflux_tree_upload_smoke

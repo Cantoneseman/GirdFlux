@@ -640,6 +640,23 @@ def run_private_demo(args: argparse.Namespace, output_json: Path, timestamp: str
     remote_build_dir = f"{args.remote_root.rstrip('/')}/{Path(args.build_dir).name}"
     port_base = 24000 + (os.getpid() % 1000)
     env = private_env(args.remote)
+    token_file = ""
+    if args.auth_mode == "token":
+        if args.auth_token_file:
+            token_file = args.auth_token_file
+        else:
+            token_dir = Path("/tmp") / f"gridflux-alpha-demo-token-{timestamp}-{os.getpid()}"
+            token_dir.mkdir(parents=True, exist_ok=True)
+            token_path = token_dir / "auth-token.txt"
+            token_path.write_text("phase6a-alpha-demo-token\n", encoding="utf-8")
+            token_path.chmod(0o600)
+            token_file = str(token_path)
+
+    def auth_args() -> list[str]:
+        if args.auth_mode != "token":
+            return []
+        return ["--auth-mode", "token", "--auth-token-file", token_file]
+
     cases = [
         run_private_case(
             "private_stor_and_resume",
@@ -664,7 +681,8 @@ def run_private_demo(args: argparse.Namespace, output_json: Path, timestamp: str
                 "8388608",
                 "--output-dir",
                 str(results_dir),
-            ],
+            ]
+            + auth_args(),
             results_dir / "private_stor_and_resume.log",
             env=env,
         ),
@@ -692,7 +710,8 @@ def run_private_demo(args: argparse.Namespace, output_json: Path, timestamp: str
                 "--resume",
                 "--output-dir",
                 str(results_dir),
-            ],
+            ]
+            + auth_args(),
             results_dir / "private_retr_and_resume.log",
             env=env,
         ),
@@ -717,7 +736,8 @@ def run_private_demo(args: argparse.Namespace, output_json: Path, timestamp: str
                 "2",
                 "--output-dir",
                 str(results_dir),
-            ],
+            ]
+            + auth_args(),
             results_dir / "private_tree.log",
             env=env,
         ),
@@ -745,6 +765,8 @@ def main() -> int:
     parser.add_argument("--dataset-dir", default="")
     parser.add_argument("--profile", choices=sorted(make_demo_dataset.PROFILES), default="tiny")
     parser.add_argument("--seed", type=int, default=20260518)
+    parser.add_argument("--auth-mode", choices=["anonymous", "token"], default="anonymous")
+    parser.add_argument("--auth-token-file", default="")
     parser.add_argument("--json-output", default="")
     parser.add_argument("--keep-workdir", action="store_true")
     args = parser.parse_args()

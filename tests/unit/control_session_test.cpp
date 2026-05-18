@@ -3,6 +3,7 @@
 #include <string>
 
 #include "gridflux/protocol/control/control_command.h"
+#include "gridflux/protocol/control/control_auth.h"
 
 namespace {
 
@@ -38,6 +39,28 @@ TEST(ControlSessionTest, LogsInAndSetsType) {
     EXPECT_TRUE(session.authenticated());
     EXPECT_EQ(replyCode(handle(&session, "TYPE I")), 200);
     EXPECT_TRUE(session.binaryType());
+}
+
+TEST(ControlSessionTest, TokenAuthAllowsPublicCommandsAndProtectsTransfers) {
+    gridflux::protocol::control::ControlAuthConfig auth;
+    auth.mode = gridflux::protocol::control::AuthMode::Token;
+    auth.token = "alpha-token";
+    ControlSession session(auth, 4);
+
+    EXPECT_EQ(replyCode(handle(&session, "FEAT")), 211);
+    EXPECT_EQ(replyCode(handle(&session, "SYST")), 215);
+    EXPECT_EQ(replyCode(handle(&session, "NOOP")), 200);
+    EXPECT_EQ(replyCode(handle(&session, "SIZE file.bin")), 530);
+
+    EXPECT_EQ(replyCode(handle(&session, "USER gridflux")), 530);
+    EXPECT_FALSE(session.authenticated());
+    EXPECT_EQ(replyCode(handle(&session, "USER token")), 331);
+    EXPECT_EQ(replyCode(handle(&session, "PASS wrong-token")), 530);
+    EXPECT_FALSE(session.authenticated());
+    EXPECT_EQ(replyCode(handle(&session, "USER token")), 331);
+    EXPECT_EQ(replyCode(handle(&session, "PASS alpha-token")), 230);
+    EXPECT_TRUE(session.authenticated());
+    EXPECT_EQ(replyCode(handle(&session, "TYPE I")), 200);
 }
 
 TEST(ControlSessionTest, PassiveAndStorFlow) {

@@ -104,11 +104,16 @@ def connect_control(host: str, port: int) -> tuple[socket.socket, bytearray, lis
     raise RuntimeError(f"failed to connect control server: {last_error}")
 
 
-def login_and_epsv(host: str, port: int) -> tuple[socket.socket, bytearray, int]:
+def login_and_epsv(host: str, port: int, args: argparse.Namespace) -> tuple[socket.socket, bytearray, int]:
     sock, buffer, greeting = connect_control(host, port)
     assert reply_code(greeting) == 220, greeting
-    assert reply_code(send_command(sock, buffer, "USER gridflux")) == 331
-    assert reply_code(send_command(sock, buffer, "PASS gridflux")) == 230
+    if args.auth_mode == "token":
+        token = Path(args.auth_token_file).read_text(encoding="utf-8").rstrip("\r\n")
+        assert reply_code(send_command(sock, buffer, "USER token")) == 331
+        assert reply_code(send_command(sock, buffer, "PASS " + token)) == 230
+    else:
+        assert reply_code(send_command(sock, buffer, "USER gridflux")) == 331
+        assert reply_code(send_command(sock, buffer, "PASS gridflux")) == 230
     assert reply_code(send_command(sock, buffer, "TYPE I")) == 200
     epsv = send_command(sock, buffer, "EPSV")
     assert reply_code(epsv) == 229, epsv
@@ -130,6 +135,8 @@ def main() -> int:
     parser.add_argument("--buffer-size", type=int, default=65536)
     parser.add_argument("--checksum", choices=["crc32c", "none"], default="crc32c")
     parser.add_argument("--checksum-backend", choices=["auto", "software", "hardware"], default="auto")
+    parser.add_argument("--auth-mode", choices=["anonymous", "token"], default="anonymous")
+    parser.add_argument("--auth-token-file", default="")
     parser.add_argument("--data-port-base", type=int, default=20300)
     parser.add_argument("--output-dir", default="tools/perf/results")
     parser.add_argument("--resume", action="store_true")
@@ -189,11 +196,13 @@ def main() -> int:
             "--checksum-backend",
             args.checksum_backend,
         ]
+        if args.auth_mode == "token":
+            server_cmd.extend(["--auth-mode", "token", "--auth-token-file", args.auth_token_file])
         with server_log.open("w", encoding="utf-8") as log_handle:
             server = subprocess.Popen(server_cmd, stdout=log_handle, stderr=subprocess.STDOUT)
 
         try:
-            sock, buffer, data_port = login_and_epsv(args.server_host, args.control_port)
+            sock, buffer, data_port = login_and_epsv(args.server_host, args.control_port, args)
             with sock:
                 retr = send_command(sock, buffer, f"RETR {source_name}")
                 assert reply_code(retr) == 150, retr
@@ -223,7 +232,7 @@ def main() -> int:
                     assert reply_code(send_command(sock, buffer, "QUIT")) == 221
 
             if args.resume:
-                sock, buffer, data_port = login_and_epsv(args.server_host, args.control_port)
+                sock, buffer, data_port = login_and_epsv(args.server_host, args.control_port, args)
                 with sock:
                     assert reply_code(send_command(sock, buffer, f"REST GFID:{transfer_id}")) == 350
                     retr = send_command(sock, buffer, f"RETR {source_name}")

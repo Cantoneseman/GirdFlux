@@ -12,18 +12,19 @@
 | [ENGINEERING.md](docs/ENGINEERING.md) | 工程规范、性能基准、验证方案、开发策略 |
 | [DIRECTORY_TRANSFER.md](docs/DIRECTORY_TRANSFER.md) | 多文件/目录传输 alpha 用法、manifest 与恢复边界 |
 | [DEMO.md](docs/DEMO.md) | Alpha demo 数据集、local/private demo runner 与 operator quickstart |
+| [SECURITY.md](docs/SECURITY.md) | Phase 6A token auth alpha 用法、安全边界与 TLS/GSI 后续说明 |
 
 新接手请按 DESIGN → ROADMAP → ENGINEERING 顺序阅读。
 
 ## 项目状态
 
-**当前阶段：** Phase 5D — alpha demo / operator experience 收口（已完成）
+**当前阶段：** Phase 6A — 安全与认证 alpha 设计/原型（进行中）
 
 **技术栈：** C++20 · epoll 网络基线 · POSIX file IO 默认后端 · 可选 file-IO-only io_uring · CMake · Linux only
 
 **目标场景：** 专线 TB 级（主线）· 虚拟网络 · 广域网
 
-**下一步：** 基于 Phase 5D alpha demo 交付层，进入 operator feedback / beta readiness 评估；默认仍保持 POSIX backend，不切换网络 epoll 或 checksum/manifest/resume/final verify 语义。
+**下一步：** 完成 opt-in token auth 的本机/私网 smoke、alpha gate 和 release hygiene 验收；默认仍保持 anonymous/demo 兼容和 POSIX backend，不切换网络 epoll 或 checksum/manifest/resume/final verify 语义。
 
 ## AI 协作
 

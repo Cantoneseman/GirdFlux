@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "gridflux/common/status.h"
+#include "gridflux/protocol/control/control_auth.h"
 
 namespace gridflux::protocol::control {
 
@@ -67,6 +68,7 @@ struct ControlResponse {
 class ControlSession {
    public:
     ControlSession(std::string user, std::string password, std::uint32_t defaultConnections);
+    ControlSession(ControlAuthConfig auth, std::uint32_t defaultConnections);
 
     [[nodiscard]] ControlResponse handleCommand(const ControlCommand& command);
     void markPassiveReady() noexcept;
@@ -83,6 +85,7 @@ class ControlSession {
    private:
     std::string expectedUser_;
     std::string expectedPassword_;
+    ControlAuthConfig auth_;
     std::uint32_t connections_ = 1;
     bool userAccepted_ = false;
     bool authenticated_ = false;

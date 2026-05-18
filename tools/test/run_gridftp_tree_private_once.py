@@ -108,6 +108,8 @@ def start_server(args: argparse.Namespace, root: str, log: Path) -> subprocess.P
         "--checksum-backend",
         args.checksum_backend,
     ]
+    if args.auth_mode == "token":
+        command.extend(["--auth-mode", "token", "--auth-token-file", args.auth_token_file])
     handle = log.open("w", encoding="utf-8")
     process = subprocess.Popen(command, stdout=handle, stderr=subprocess.STDOUT)
     handle.close()
@@ -139,6 +141,8 @@ def main() -> int:
     parser.add_argument("--buffer-size", type=int, default=65536)
     parser.add_argument("--checksum", choices=["crc32c", "none"], default="crc32c")
     parser.add_argument("--checksum-backend", choices=["auto", "software", "hardware"], default="auto")
+    parser.add_argument("--auth-mode", choices=["anonymous", "token"], default="anonymous")
+    parser.add_argument("--auth-token-file", default="")
     parser.add_argument("--output-dir", default="tools/perf/results")
     args = parser.parse_args()
 
@@ -173,6 +177,8 @@ def main() -> int:
             "--checksum-backend",
             args.checksum_backend,
         ]
+        if args.auth_mode == "token":
+            upload_cmd.extend(["--auth-mode", "token", "--auth-token-file", args.auth_token_file])
         run_remote(args.remote, " ".join(shlex.quote(part) for part in upload_cmd))
         remote_hash, count, total = remote_tree_hash(args.remote, remote_source)
         local_hash, _, _ = tree_hash(Path(local_root) / "dataset")
@@ -196,6 +202,8 @@ def main() -> int:
             "--checksum-backend",
             args.checksum_backend,
         ]
+        if args.auth_mode == "token":
+            download_cmd.extend(["--auth-mode", "token", "--auth-token-file", args.auth_token_file])
         run_remote(args.remote, " ".join(shlex.quote(part) for part in download_cmd))
         downloaded_hash, _, _ = remote_tree_hash(args.remote, remote_download)
         if downloaded_hash != local_hash:
@@ -220,6 +228,8 @@ def main() -> int:
             "--max-files",
             "1",
         ]
+        if args.auth_mode == "token":
+            resume_upload_cmd.extend(["--auth-mode", "token", "--auth-token-file", args.auth_token_file])
         run_remote(args.remote, " ".join(shlex.quote(part) for part in resume_upload_cmd), check=False)
         resume_upload_cmd.remove("--max-files")
         resume_upload_cmd.remove("1")
@@ -248,6 +258,8 @@ def main() -> int:
             "--max-files",
             "1",
         ]
+        if args.auth_mode == "token":
+            resume_download_cmd.extend(["--auth-mode", "token", "--auth-token-file", args.auth_token_file])
         run_remote(args.remote, " ".join(shlex.quote(part) for part in resume_download_cmd), check=False)
         resume_download_cmd.remove("--max-files")
         resume_download_cmd.remove("1")

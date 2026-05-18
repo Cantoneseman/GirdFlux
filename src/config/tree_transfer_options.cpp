@@ -6,6 +6,7 @@
 #include <string_view>
 
 #include "gridflux/core/tree/tree_scan.h"
+#include "gridflux/protocol/control/control_auth.h"
 
 namespace gridflux::config {
 namespace {
@@ -165,6 +166,17 @@ common::Result<TreeTransferOptions> parseTreeTransferOptions(int argc, const cha
                 return common::Status::invalidArgument("--max-files must be greater than zero");
             }
             options.maxFiles = parsed.value();
+        } else if (option == "--auth-mode") {
+            auto parsed = protocol::control::parseAuthMode(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.authMode = protocol::control::authModeName(parsed.value());
+        } else if (option == "--auth-token-file") {
+            if (value.empty()) {
+                return common::Status::invalidArgument("--auth-token-file must not be empty");
+            }
+            options.authTokenFile = std::string(value);
         } else if (option == "--user") {
             if (value.empty()) {
                 return common::Status::invalidArgument("--user must not be empty");
@@ -191,6 +203,15 @@ common::Result<TreeTransferOptions> parseTreeTransferOptions(int argc, const cha
     }
     if (!hasDestDir) {
         return common::Status::invalidArgument("--dest-dir is required");
+    }
+    if (options.authMode == "token") {
+        if (options.authTokenFile.empty()) {
+            return common::Status::invalidArgument("--auth-token-file is required in token mode");
+        }
+        auto token = protocol::control::loadTokenFile(options.authTokenFile);
+        if (!token.isOk()) {
+            return token.status();
+        }
     }
     if (role == TreeTransferRole::Upload) {
         const common::Status sourceStatus = validateLocalDirectory(options.sourceDir, "--source-dir");
@@ -228,6 +249,7 @@ std::string treeTransferUsage(const char* programName, TreeTransferRole role) {
            " [--connections <N>] [--file-parallelism <N>] [--chunk-size <bytes>] "
            "[--buffer-size <bytes>] [--checksum <crc32c|none>] "
            "[--checksum-backend <auto|software|hardware>] [--resume] [--max-files <N>] "
+           "[--auth-mode anonymous|token] [--auth-token-file <path>] "
            "[--user <name>] [--password <password>] [--json-summary <path>]";
 }
 

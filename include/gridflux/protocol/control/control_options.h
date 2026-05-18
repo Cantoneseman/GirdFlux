@@ -9,6 +9,7 @@
 #include "gridflux/core/session/commit_sync_policy.h"
 #include "gridflux/core/session/final_verify_policy.h"
 #include "gridflux/core/session/manifest_flush_policy.h"
+#include "gridflux/protocol/control/control_auth.h"
 #include "gridflux/storage/file_io.h"
 #include "gridflux/storage/preallocate_mode.h"
 
@@ -31,6 +32,7 @@ struct ControlServerOptions {
     core::session::CommitSyncPolicy commitSyncPolicy = core::session::CommitSyncPolicy::None;
     storage::PreallocateMode preallocateMode = storage::PreallocateMode::Off;
     storage::FileIoConfig fileIo;
+    ControlAuthConfig auth;
     std::string user = "gridflux";
     std::string password = "gridflux";
 };

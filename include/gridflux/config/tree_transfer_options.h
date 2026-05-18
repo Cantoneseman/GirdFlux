@@ -26,6 +26,8 @@ struct TreeTransferOptions {
     checksum::ChecksumBackend checksumBackend = checksum::ChecksumBackend::Auto;
     bool resume = false;
     std::uint64_t maxFiles = 0;
+    std::string authMode = "anonymous";
+    std::string authTokenFile;
     std::string user = "gridflux";
     std::string password = "gridflux";
     std::string jsonSummaryPath;

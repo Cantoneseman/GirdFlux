@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**阶段：** Phase 5D — alpha demo / operator experience 收口（已完成）
+**阶段：** Phase 6A — 安全与认证 alpha 设计/原型（进行中）
 
 **已完成：** 项目设计、技术选型、工程规范制定、CMake 工程骨架初始化、GoogleTest 工具链测试、本机与<redacted>二构建验证、GridFTP 源码学习经验整理入设计文档、Phase 1.0 多连接 TCP sink 与本机 loopback 验证、Phase 1.1 性能基线脚本与 loopback smoke matrix、Phase 1.2A offset-aware 单文件传输闭环、Phase 1.2B 文件传输健壮性、Phase 1.3A 文件性能基线自动化、Phase 2A manifest/range-based 断点续传核心、Phase 2B CRC32C chunk checksum 与损坏注入验证、Phase 2C CRC32C backend 自动选择、manifest 批量 flush、恢复统计与 checksum benchmark、Phase 3A GridFTP 风格控制面 STOR 上传与 REST/GFID resume 映射、Phase 3B GridFTP 风格控制面 framed RETR 完整下载、Phase 3C 下载端 manifest/verified_chunks 与 RETR REST/GFID resume、Phase 3D 控制面 SIZE/MDTM/CWD/CDUP/LIST/NLST 与测试工具收敛。
 
@@ -10,7 +10,7 @@
 
 **未开始：** 系统级文件传输调优、raw FTP stream STOR/RETR、GridFTP TLS/GSI、MLST/MLSD、网络 io_uring、生产级目录同步。
 
-**下一步：** 基于 Phase 5D alpha demo 交付层，进入 operator feedback / beta readiness 评估；不改网络 epoll，不默认启用 io_uring，不改变 checksum/manifest/resume 语义。
+**下一步：** 完成 opt-in token auth 的本机/私网 smoke、release gate 和 public hygiene 验收；不改网络 epoll，不默认启用 io_uring，不改变 checksum/manifest/resume 语义。
 
 ---
 
@@ -417,6 +417,7 @@
 | 2026-05-18 | Phase 5C artifact manifest 必须在最终报告落盘后生成并本地自检 | 防止 release report、PROJECT_STATE 或 gate JSON 在 manifest 生成后变化导致<redacted>二同步闭环拿到陈旧 hash |
 | 2026-05-18 | Phase 5C tree JSON summary 是 opt-in 可观测性，不改变 CLI 默认输出 | perf matrix 和 release gate 使用结构化摘要减少解析漂移；人工 key=value 输出继续保留 |
 | 2026-05-18 | Phase 5D demo runner 只编排现有 framed transfer 能力 | 让 operator 快速演示和排查，不复制 chunk 级传输逻辑，不改变默认 backend 或可靠性事实源 |
+| 2026-05-18 | Phase 6A token auth 只保护控制面且默认关闭 | 保留 anonymous/demo 兼容；token 只从权限受限文件读取，不进入 CLI 参数、日志、artifact manifest 或 public export；TLS/GSI 留到后续设计 |
 
 ---
 

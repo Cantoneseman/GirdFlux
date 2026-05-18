@@ -266,16 +266,29 @@ common::Result<ControlServerOptions> parseControlServerOptions(int argc, const c
                 return parsed.status();
             }
             options.fileIo.posixWriteStrategy = parsed.value();
+        } else if (option == "--auth-mode") {
+            auto parsed = parseAuthMode(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.auth.mode = parsed.value();
+        } else if (option == "--auth-token-file") {
+            if (value.empty()) {
+                return common::Status::invalidArgument("--auth-token-file must not be empty");
+            }
+            options.auth.tokenFile = std::string(value);
         } else if (option == "--user") {
             if (value.empty()) {
                 return common::Status::invalidArgument("--user must not be empty");
             }
             options.user = std::string(value);
+            options.auth.user = options.user;
         } else if (option == "--password") {
             if (value.empty()) {
                 return common::Status::invalidArgument("--password must not be empty");
             }
             options.password = std::string(value);
+            options.auth.password = options.password;
         } else {
             return common::Status::invalidArgument("unknown option: " + std::string(option));
         }
@@ -296,6 +309,15 @@ common::Result<ControlServerOptions> parseControlServerOptions(int argc, const c
     if (!rootStatus.isOk()) {
         return rootStatus;
     }
+    if (options.auth.mode == AuthMode::Token) {
+        auto token = loadTokenFile(options.auth.tokenFile);
+        if (!token.isOk()) {
+            return token.status();
+        }
+        options.auth.token = token.value();
+        options.user = "token";
+        options.password.clear();
+    }
     return options;
 }
 
@@ -315,6 +337,7 @@ std::string controlServerUsage(const char* programName) {
               "[--file-io-queue-depth <N>] [--file-io-batch-size <N>] "
               "[--file-io-advice off|sequential|noreuse|dontneed|sequential_dontneed] "
               "[--posix-write-strategy auto|direct|coalesced] "
+              "[--auth-mode anonymous|token] [--auth-token-file <path>] "
               "[--user <name>] [--password <password>]";
     return output.str();
 }

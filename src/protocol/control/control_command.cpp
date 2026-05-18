@@ -201,8 +201,14 @@ int replyCode(const ControlResponse& response) noexcept {
 
 ControlSession::ControlSession(std::string user, std::string password,
                                std::uint32_t defaultConnections)
-    : expectedUser_(std::move(user)),
-      expectedPassword_(std::move(password)),
+    : ControlSession(
+          ControlAuthConfig{AuthMode::Anonymous, std::move(user), std::move(password), "", ""},
+          defaultConnections) {}
+
+ControlSession::ControlSession(ControlAuthConfig auth, std::uint32_t defaultConnections)
+    : expectedUser_(auth.mode == AuthMode::Token ? "token" : auth.user),
+      expectedPassword_(auth.mode == AuthMode::Token ? auth.token : auth.password),
+      auth_(std::move(auth)),
       connections_(defaultConnections) {}
 
 ControlResponse ControlSession::handleCommand(const ControlCommand& command) {
@@ -241,6 +247,7 @@ ControlResponse ControlSession::handleCommand(const ControlCommand& command) {
             ControlResponse response;
             response.lines = {"211-Features", " EPSV",
                               " PASV",        " REST GFID",
+                              " AUTH TOKEN",
                               " RETR",        " RETR RESUME",
                               " STOR",        " SIZE",
                               " MDTM",        " LIST",

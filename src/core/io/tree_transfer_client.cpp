@@ -36,6 +36,7 @@
 #include "gridflux/core/io/socket_utils.h"
 #include "gridflux/core/tree/tree_manifest.h"
 #include "gridflux/core/tree/tree_scan.h"
+#include "gridflux/protocol/control/control_auth.h"
 
 namespace gridflux::core::io {
 namespace {
@@ -468,6 +469,13 @@ common::Status ensureControlReady(ControlClient* client, const config::TreeTrans
     const common::Status connectStatus = client->connectTo(options.host, options.port);
     if (!connectStatus.isOk()) {
         return connectStatus;
+    }
+    if (options.authMode == "token") {
+        auto token = protocol::control::loadTokenFile(options.authTokenFile);
+        if (!token.isOk()) {
+            return token.status();
+        }
+        return client->login("token", token.value(), options.connections);
     }
     return client->login(options.user, options.password, options.connections);
 }

@@ -3952,3 +3952,27 @@ Phase 5C 不改变默认传输策略：`file_io_backend=posix`、`final_verify_p
 ### 默认策略
 
 Phase 5D 不改变默认传输策略：`file_io_backend=posix`、`final_verify_policy=full`、`manifest_flush_policy=every_n_chunks`、`preallocate=off`、`posix_write_strategy=auto`。STOR/RETR 文件数据仍只走 GridFlux framed data channel；demo runner 只编排已有能力，不复制 chunk 级传输逻辑。
+
+## 2026-05-18 Phase 6A security/auth alpha 进行中
+
+### 实现范围
+
+- 新增控制面 auth 配置：`--auth-mode anonymous|token` 和 `--auth-token-file <path>`。
+- 默认 `anonymous`，保持现有 `USER gridflux` / `PASS gridflux` 占位认证兼容。
+- `token` 模式要求 `USER token` + `PASS <token>`；token 只从权限受限文件读取，空文件、不可读文件和 group/world 可访问文件会被拒绝。
+- Protected commands 在未认证时返回 `530`；`FEAT`、`SYST`、`NOOP`、`QUIT`、`USER`、`PASS` 保持未登录可用。
+- Tree upload/download clients 新增 `--auth-mode` / `--auth-token-file`，token 模式下内部登录不把 token 写入 JSON summary。
+- 新增 `gridflux_gridftp_control_token_smoke` 和 private token auth smoke helper。
+- `run_alpha_release_gate.py --quick` 增加本地 token auth smoke；`--full` 增加 private token auth smoke。
+- 新增 `docs/SECURITY.md`，明确 Phase 6A 不是 TLS/GSI/生产认证。
+- Public hygiene 增加 token leak fixture；token-like artifact path 继续被 release sync 拒绝。
+
+### 已执行验证
+
+- 通过：`python3 -m py_compile tools/test/run_gridftp_control_token_smoke.py tools/test/run_gridftp_control_token_private_once.py tools/test/run_gridftp_control_private_once.py tools/test/run_gridftp_control_retr_private_once.py tools/test/run_gridftp_tree_private_once.py tools/demo/run_alpha_demo.py tools/release/run_alpha_release_gate.py tools/release/check_public_hygiene.py tools/release/test_public_hygiene.py`。
+- 通过：`cmake --build build -j2`。
+- 通过：`ctest --test-dir build -R "Control(Session|Options)|TreeTransferOptions|gridflux_gridftp_control_token_smoke|release_hygiene" --output-on-failure`，24/24 passed。
+
+### 默认策略
+
+Phase 6A 不改变默认传输策略：`file_io_backend=posix`、`final_verify_policy=full`、`manifest_flush_policy=every_n_chunks`、`preallocate=off`、`posix_write_strategy=auto`。Token auth 是 opt-in control-plane alpha，不加密文件数据，不实现 TLS/GSI/DCAU/PROT。

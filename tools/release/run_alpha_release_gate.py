@@ -394,6 +394,7 @@ def collect_alpha_artifact_paths(
         "docs/ENGINEERING.md",
         "docs/DIRECTORY_TRANSFER.md",
         "docs/DEMO.md",
+        "docs/SECURITY.md",
         "docs/perf/README.md",
         "docs/perf/PHASE5B_TREE_DATASET_MATRIX.md",
         "docs/perf/PHASE5C_TREE_ALPHA_HARDENING.md",
@@ -683,6 +684,7 @@ def main() -> int:
         ("retr_resume_smoke", [sys.executable, "tools/test/run_gridftp_control_retr_resume_smoke.py", "--build-dir", args.build_dir]),
         ("metadata_smoke", [sys.executable, "tools/test/run_gridftp_control_metadata_smoke.py", "--build-dir", args.build_dir]),
         ("list_smoke", [sys.executable, "tools/test/run_gridftp_control_list_smoke.py", "--build-dir", args.build_dir]),
+        ("token_auth_smoke", [sys.executable, "tools/test/run_gridftp_control_token_smoke.py", "--build-dir", args.build_dir]),
         ("tree_upload_smoke", [sys.executable, "tools/test/run_gridftp_tree_upload_smoke.py", "--build-dir", args.build_dir]),
         ("tree_download_smoke", [sys.executable, "tools/test/run_gridftp_tree_download_smoke.py", "--build-dir", args.build_dir]),
         ("tree_resume_smoke", [sys.executable, "tools/test/run_gridftp_tree_resume_smoke.py", "--build-dir", args.build_dir]),
@@ -758,6 +760,27 @@ def main() -> int:
         ]
         alpha_private_step = run_step("alpha_demo_private", alpha_private_command, log_dir, cwd=root)
         steps.append(alpha_private_step)
+
+        private_token_command = [
+            sys.executable,
+            "tools/test/run_gridftp_control_token_private_once.py",
+            "--remote",
+            args.remote,
+            "--server-host",
+            args.server_host,
+            "--local-build-dir",
+            str((root / args.build_dir).resolve()),
+            "--control-port",
+            str(25000 + (os.getpid() % 1000)),
+            "--data-port-base",
+            str(26000 + (os.getpid() % 1000)),
+            "--output-dir",
+            args.results_dir,
+        ]
+        private_token_step = run_step(
+            "private_token_auth_smoke", private_token_command, log_dir, cwd=root
+        )
+        steps.append(private_token_step)
 
         before = set(results_dir.glob("*_gridftp-private-matrix-*.csv"))
         matrix_command = [

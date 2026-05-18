@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <filesystem>
+#include <fstream>
 
 TEST(TreeTransferOptionsTest, ParsesUploadOptions) {
     const std::filesystem::path root =
@@ -37,6 +38,8 @@ TEST(TreeTransferOptionsTest, ParsesUploadOptions) {
                           "alice",
                           "--password",
                           "secret",
+                          "--auth-mode",
+                          "anonymous",
                           "--json-summary",
                           "/tmp/tree-summary.json"};
     auto parsed = gridflux::config::parseTreeTransferOptions(
@@ -48,9 +51,45 @@ TEST(TreeTransferOptionsTest, ParsesUploadOptions) {
     EXPECT_EQ(parsed.value().chunkSize, 4194304U);
     EXPECT_EQ(parsed.value().bufferSize, 262144U);
     EXPECT_EQ(parsed.value().checksumAlgorithm, gridflux::checksum::ChecksumAlgorithm::None);
+    EXPECT_EQ(parsed.value().authMode, "anonymous");
     EXPECT_EQ(parsed.value().user, "alice");
     EXPECT_EQ(parsed.value().jsonSummaryPath, "/tmp/tree-summary.json");
     std::filesystem::remove_all(root);
+}
+
+TEST(TreeTransferOptionsTest, ParsesTokenAuthOptions) {
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() / "gridflux-tree-options-token-root";
+    const std::filesystem::path token =
+        std::filesystem::temp_directory_path() / "gridflux-tree-options-token.txt";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root);
+    {
+        std::ofstream output(token);
+        output << "tree-token\n";
+    }
+    std::filesystem::permissions(token, std::filesystem::perms::owner_read |
+                                            std::filesystem::perms::owner_write);
+    const std::string rootText = root.string();
+    const std::string tokenText = token.string();
+    const char* argv[] = {"gridflux-tree-upload-client", "--source-dir", rootText.c_str(),
+                          "--dest-dir", "remote", "--auth-mode", "token",
+                          "--auth-token-file", tokenText.c_str()};
+    auto parsed = gridflux::config::parseTreeTransferOptions(
+        static_cast<int>(std::size(argv)), argv, gridflux::config::TreeTransferRole::Upload);
+    ASSERT_TRUE(parsed.isOk()) << parsed.status().message();
+    EXPECT_EQ(parsed.value().authMode, "token");
+    EXPECT_EQ(parsed.value().authTokenFile, tokenText);
+
+    const char* missingToken[] = {"gridflux-tree-upload-client", "--source-dir", rootText.c_str(),
+                                  "--dest-dir", "remote", "--auth-mode", "token"};
+    EXPECT_FALSE(gridflux::config::parseTreeTransferOptions(
+                     static_cast<int>(std::size(missingToken)), missingToken,
+                     gridflux::config::TreeTransferRole::Upload)
+                     .isOk());
+
+    std::filesystem::remove_all(root);
+    std::filesystem::remove(token);
 }
 
 TEST(TreeTransferOptionsTest, ParsesDownloadOptionsAndCreatesDestination) {
@@ -100,5 +139,11 @@ TEST(TreeTransferOptionsTest, RejectsInvalidOptions) {
                                     "--json-summary"};
     EXPECT_FALSE(gridflux::config::parseTreeTransferOptions(
                      6, missingSummary, gridflux::config::TreeTransferRole::Upload)
+                     .isOk());
+
+    const char* badAuth[] = {"gridflux-tree-upload-client", "--source-dir", "/tmp",
+                             "--dest-dir", "remote", "--auth-mode", "oauth"};
+    EXPECT_FALSE(gridflux::config::parseTreeTransferOptions(
+                     7, badAuth, gridflux::config::TreeTransferRole::Upload)
                      .isOk());
 }

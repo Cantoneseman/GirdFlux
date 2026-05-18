@@ -73,6 +73,7 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("SSHPASS direct assignment", re.compile(r"\bSSHPASS\s*=\s*['\"]?(?!\$GRIDFLUX_SSH_PASSWORD\b)[^'\"\s]+")),
     ("password assignment", re.compile(r"\b(password|passwd|pwd)\s*[:=]\s*['\"](?!gridflux\b)(?!\*\*\*)(?!<)[^'\"\s|]+['\"]?", re.IGNORECASE)),
     ("secret/token assignment", re.compile(r"\b(api[_-]?key|access[_-]?token|secret[_-]?key)\s*[:=]\s*['\"]?(?!\*\*\*)(?!<)[^'\"\s]+", re.IGNORECASE)),
+    ("auth token literal", re.compile(r"\b(auth[_-]?token|token)\s*[:=]\s*['\"]?(?!\*\*\*)(?!<)(?!REDACTED\b)(?!CHANGEME\b)[A-Za-z0-9._+/=-]{20,}", re.IGNORECASE)),
     ("known private password", re.compile("609" + "@scst")),
     ("known public IP", re.compile(r"\b(120\.79\.11\.149|119\.23\.73\.206)\b")),
     ("known private IP", re.compile(r"\b192\.168\.10\.[12]\b")),

@@ -500,7 +500,7 @@ common::Status runRetr(int controlFd, ControlSession& session, PassiveListener* 
 }
 
 void handleControlConnection(core::io::UniqueFd controlFd, ControlServerOptions options) {
-    ControlSession session(options.user, options.password, options.connections);
+    ControlSession session(options.auth, options.connections);
     PassiveListener passive;
     std::string inputBuffer;
 
@@ -601,7 +601,8 @@ common::Status runControlServer(const ControlServerOptions& options) {
     std::cout << "gridftp_control_server listening host=" << options.host
               << " port=" << options.port << " root=" << options.root
               << " data_port_base=" << options.dataPortBase
-              << " connections=" << options.connections << '\n'
+              << " connections=" << options.connections
+              << " auth_mode=" << authModeName(options.auth.mode) << '\n'
               << std::flush;
 
     while (true) {

@@ -38,6 +38,10 @@ def write_fixture(root: Path) -> None:
         encoding="utf-8",
     )
     (root / "src" / "main.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
+    (root / "src" / "token_fixture.txt").write_text(
+        "auth_" + "tok" + "en=super-secret-token-value-123456\n",
+        encoding="utf-8",
+    )
     (root / "build-verify-20260515T163633Z" / "gridflux_unit_tests").write_bytes(
         b"\x7fELF fake binary with <redacted>"
     )

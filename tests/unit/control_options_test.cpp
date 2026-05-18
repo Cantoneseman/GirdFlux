@@ -18,6 +18,7 @@ using gridflux::core::session::FinalVerifyPolicy;
 using gridflux::core::session::ManifestFlushPolicy;
 using gridflux::protocol::control::ControlListEntry;
 using gridflux::protocol::control::ControlPathKind;
+using gridflux::protocol::control::AuthMode;
 using gridflux::protocol::control::formatList;
 using gridflux::protocol::control::formatMdtmTime;
 using gridflux::protocol::control::formatNlst;
@@ -52,9 +53,59 @@ TEST(ControlOptionsTest, ParsesDefaultsAndRequiredRoot) {
     EXPECT_EQ(parsed.value().fileIo.advice, gridflux::storage::FileIoAdvice::Off);
     EXPECT_EQ(parsed.value().fileIo.posixWriteStrategy,
               gridflux::storage::PosixWriteStrategy::Auto);
+    EXPECT_EQ(parsed.value().auth.mode, AuthMode::Anonymous);
     EXPECT_EQ(parsed.value().user, "gridflux");
 
     std::filesystem::remove_all(root);
+}
+
+TEST(ControlOptionsTest, ParsesTokenAuthAndRejectsBadTokenFiles) {
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() / "gridflux-control-token-root";
+    const std::filesystem::path token =
+        std::filesystem::temp_directory_path() / "gridflux-control-token.txt";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root);
+    {
+        std::ofstream output(token);
+        output << "alpha-token\n";
+    }
+    std::filesystem::permissions(token, std::filesystem::perms::owner_read |
+                                            std::filesystem::perms::owner_write);
+    const std::string rootText = root.string();
+    const std::string tokenText = token.string();
+    const char* argv[] = {"gridflux-gridftp-server", "--root", rootText.c_str(),
+                          "--auth-mode", "token", "--auth-token-file", tokenText.c_str()};
+    auto parsed = parseControlServerOptions(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.isOk()) << parsed.status().message();
+    EXPECT_EQ(parsed.value().auth.mode, AuthMode::Token);
+    EXPECT_EQ(parsed.value().auth.token, "alpha-token");
+    EXPECT_EQ(parsed.value().user, "token");
+
+    const char* missingFile[] = {"gridflux-gridftp-server", "--root", rootText.c_str(),
+                                 "--auth-mode", "token"};
+    EXPECT_FALSE(parseControlServerOptions(static_cast<int>(std::size(missingFile)), missingFile)
+                     .isOk());
+
+    {
+        std::ofstream output(token, std::ios::trunc);
+        output << "open-token";
+    }
+    std::filesystem::permissions(token, std::filesystem::perms::owner_read |
+                                            std::filesystem::perms::owner_write |
+                                            std::filesystem::perms::group_read);
+    EXPECT_FALSE(parseControlServerOptions(static_cast<int>(std::size(argv)), argv).isOk());
+
+    {
+        std::ofstream output(token, std::ios::trunc);
+        output << "\n";
+    }
+    std::filesystem::permissions(token, std::filesystem::perms::owner_read |
+                                            std::filesystem::perms::owner_write);
+    EXPECT_FALSE(parseControlServerOptions(static_cast<int>(std::size(argv)), argv).isOk());
+
+    std::filesystem::remove_all(root);
+    std::filesystem::remove(token);
 }
 
 TEST(ControlOptionsTest, ParsesExplicitOptions) {
