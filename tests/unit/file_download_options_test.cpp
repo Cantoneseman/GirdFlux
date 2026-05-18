@@ -34,6 +34,8 @@ TEST(FileDownloadOptionsTest, ParsesRequiredAndDefaults) {
     EXPECT_EQ(parsed.value().fileIo.backend, gridflux::storage::FileIoBackendKind::Posix);
     EXPECT_EQ(parsed.value().fileIo.bufferSize, 0U);
     EXPECT_EQ(parsed.value().fileIo.advice, gridflux::storage::FileIoAdvice::Off);
+    EXPECT_EQ(parsed.value().fileIo.posixWriteStrategy,
+              gridflux::storage::PosixWriteStrategy::Auto);
     EXPECT_FALSE(parsed.value().overwrite);
     EXPECT_FALSE(parsed.value().resume);
     EXPECT_EQ(parsed.value().maxChunks, 0U);
@@ -75,6 +77,8 @@ TEST(FileDownloadOptionsTest, ParsesExplicitOptions) {
                           "2",
                           "--file-io-advice",
                           "sequential_dontneed",
+                          "--posix-write-strategy",
+                          "coalesced",
                           "--transfer-id",
                           "download-token",
                           "--resume",
@@ -99,6 +103,8 @@ TEST(FileDownloadOptionsTest, ParsesExplicitOptions) {
     EXPECT_EQ(parsed.value().fileIo.queueDepth, 4U);
     EXPECT_EQ(parsed.value().fileIo.batchSize, 2U);
     EXPECT_EQ(parsed.value().fileIo.advice, gridflux::storage::FileIoAdvice::SequentialDontNeed);
+    EXPECT_EQ(parsed.value().fileIo.posixWriteStrategy,
+              gridflux::storage::PosixWriteStrategy::Coalesced);
     EXPECT_TRUE(parsed.value().overwrite);
     EXPECT_TRUE(parsed.value().resume);
     EXPECT_EQ(parsed.value().maxChunks, 3U);
@@ -222,6 +228,24 @@ TEST(FileDownloadOptionsTest, RejectsInvalidOptions) {
                                      "--file-io-advice",
                                      "random"};
     EXPECT_FALSE(parseFileDownloadOptions(7, badFileIoAdvice).isOk());
+
+    const char* badPosixWriteStrategy[] = {"gridflux-file-download-client",
+                                           "--output",
+                                           "/tmp/out",
+                                           "--transfer-id",
+                                           "id",
+                                           "--posix-write-strategy",
+                                           "buffered"};
+    EXPECT_FALSE(parseFileDownloadOptions(7, badPosixWriteStrategy).isOk());
+
+    const char* badCoalescedWithoutBuffer[] = {"gridflux-file-download-client",
+                                               "--output",
+                                               "/tmp/out",
+                                               "--transfer-id",
+                                               "id",
+                                               "--posix-write-strategy",
+                                               "coalesced"};
+    EXPECT_FALSE(parseFileDownloadOptions(7, badCoalescedWithoutBuffer).isOk());
 }
 
 }  // namespace

@@ -45,6 +45,8 @@ TEST(FileTransferOptionsTest, AppliesServerDefaults) {
     EXPECT_EQ(result.value().fileIo.backend, gridflux::storage::FileIoBackendKind::Posix);
     EXPECT_EQ(result.value().fileIo.bufferSize, 0U);
     EXPECT_EQ(result.value().fileIo.advice, gridflux::storage::FileIoAdvice::Off);
+    EXPECT_EQ(result.value().fileIo.posixWriteStrategy,
+              gridflux::storage::PosixWriteStrategy::Auto);
 }
 
 TEST(FileTransferOptionsTest, AppliesClientDefaults) {
@@ -63,6 +65,8 @@ TEST(FileTransferOptionsTest, AppliesClientDefaults) {
     EXPECT_EQ(result.value().fileIo.backend, gridflux::storage::FileIoBackendKind::Posix);
     EXPECT_EQ(result.value().fileIo.bufferSize, 0U);
     EXPECT_EQ(result.value().fileIo.advice, gridflux::storage::FileIoAdvice::Off);
+    EXPECT_EQ(result.value().fileIo.posixWriteStrategy,
+              gridflux::storage::PosixWriteStrategy::Auto);
 }
 
 TEST(FileTransferOptionsTest, ParsesClientOptions) {
@@ -95,6 +99,8 @@ TEST(FileTransferOptionsTest, ParsesClientOptions) {
                                "4",
                                "--file-io-advice",
                                "sequential",
+                               "--posix-write-strategy",
+                               "direct",
                                "--corrupt-chunk",
                                "0",
                                "--duplicate-corrupt-chunk",
@@ -120,6 +126,8 @@ TEST(FileTransferOptionsTest, ParsesClientOptions) {
     EXPECT_EQ(result.value().fileIo.queueDepth, 4U);
     EXPECT_EQ(result.value().fileIo.batchSize, 4U);
     EXPECT_EQ(result.value().fileIo.advice, gridflux::storage::FileIoAdvice::Sequential);
+    EXPECT_EQ(result.value().fileIo.posixWriteStrategy,
+              gridflux::storage::PosixWriteStrategy::Direct);
 }
 
 TEST(FileTransferOptionsTest, ParsesServerFlags) {
@@ -130,7 +138,8 @@ TEST(FileTransferOptionsTest, ParsesServerFlags) {
                "--final-verify-policy", "verified_chunks", "--commit-sync-policy",
                "fsync_file_and_dir", "--preallocate", "full", "--file-io-buffer-size", "2097152",
                "--file-io-backend", "io_uring", "--file-io-queue-depth", "8",
-               "--file-io-batch-size", "2", "--file-io-advice", "dontneed"},
+               "--file-io-batch-size", "2", "--file-io-advice", "dontneed",
+               "--posix-write-strategy", "coalesced"},
               gridflux::config::FileTransferRole::Server);
 
     ASSERT_TRUE(result.isOk()) << result.status().message();
@@ -152,6 +161,8 @@ TEST(FileTransferOptionsTest, ParsesServerFlags) {
     EXPECT_EQ(result.value().fileIo.queueDepth, 8U);
     EXPECT_EQ(result.value().fileIo.batchSize, 2U);
     EXPECT_EQ(result.value().fileIo.advice, gridflux::storage::FileIoAdvice::DontNeed);
+    EXPECT_EQ(result.value().fileIo.posixWriteStrategy,
+              gridflux::storage::PosixWriteStrategy::Coalesced);
 }
 
 TEST(FileTransferOptionsTest, ParsesClientResume) {
@@ -280,6 +291,14 @@ TEST(FileTransferOptionsTest, RejectsInvalidNumericOptions) {
                      .isOk());
     EXPECT_FALSE(parse({"gridflux-file-server", "--output", "/tmp/out", "--file-io-advice",
                         "random"},
+                       gridflux::config::FileTransferRole::Server)
+                     .isOk());
+    EXPECT_FALSE(parse({"gridflux-file-server", "--output", "/tmp/out", "--posix-write-strategy",
+                        "buffered"},
+                       gridflux::config::FileTransferRole::Server)
+                     .isOk());
+    EXPECT_FALSE(parse({"gridflux-file-server", "--output", "/tmp/out", "--posix-write-strategy",
+                        "coalesced"},
                        gridflux::config::FileTransferRole::Server)
                      .isOk());
 }

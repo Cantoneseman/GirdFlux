@@ -55,6 +55,14 @@ STAGE_FIELDS = [
     "stage_write_avg_bytes_per_call",
     "file_io_wait_seconds",
     "file_io_wait_bytes",
+    "write_call_count",
+    "write_syscall_count",
+    "write_retry_count",
+    "write_short_count",
+    "write_zero_count",
+    "write_total_bytes",
+    "write_avg_bytes_per_call",
+    "write_avg_bytes_per_syscall",
     "io_uring_submit_count",
     "io_uring_wait_count",
     "io_uring_completion_count",
@@ -92,6 +100,8 @@ ROLE_METRIC_FIELDS = [
     "file_io_queue_depth",
     "file_io_batch_size",
     "file_io_advice",
+    "posix_write_strategy",
+    "posix_write_strategy_effective",
 ]
 
 PHASE_ALIAS_FIELDS = [
@@ -131,6 +141,8 @@ CSV_FIELDS = [
     "file_io_queue_depth",
     "file_io_batch_size",
     "file_io_advice",
+    "posix_write_strategy",
+    "posix_write_strategy_effective",
     "repeat_index",
     "elapsed",
     "throughput_gbps",
@@ -197,6 +209,7 @@ class Case:
     file_io_queue_depth: int
     file_io_batch_size: int
     file_io_advice: str
+    posix_write_strategy: str
     repeat_index: int
 
 
@@ -545,6 +558,8 @@ def start_control_server(args: argparse.Namespace, case: Case, root: Path, serve
         str(case.file_io_batch_size),
         "--file-io-advice",
         case.file_io_advice,
+        "--posix-write-strategy",
+        case.posix_write_strategy,
     ]
     log_handle = server_log.open("w", encoding="utf-8")
     return subprocess.Popen(
@@ -634,6 +649,8 @@ def run_upload_client(
         str(case.file_io_batch_size),
         "--file-io-advice",
         shlex.quote(case.file_io_advice),
+        "--posix-write-strategy",
+        shlex.quote(case.posix_write_strategy),
     ]
     if resume:
         pieces.append("--resume")
@@ -691,6 +708,8 @@ def run_download_client(
         str(case.file_io_batch_size),
         "--file-io-advice",
         shlex.quote(case.file_io_advice),
+        "--posix-write-strategy",
+        shlex.quote(case.posix_write_strategy),
     ]
     if resume:
         pieces.append("--resume")
@@ -887,6 +906,8 @@ def initial_row(args: argparse.Namespace, case: Case, env: EnvironmentSnapshot, 
         "file_io_queue_depth": str(case.file_io_queue_depth),
         "file_io_batch_size": str(case.file_io_batch_size),
         "file_io_advice": case.file_io_advice,
+        "posix_write_strategy": case.posix_write_strategy,
+        "posix_write_strategy_effective": "",
         "repeat_index": str(case.repeat_index),
         "elapsed": "",
         "throughput_gbps": "",
@@ -961,6 +982,12 @@ def fill_metrics(row: dict[str, str], direction: str, server_text: str, client_t
     row["file_io_queue_depth"] = metrics.get("file_io_queue_depth", row["file_io_queue_depth"])
     row["file_io_batch_size"] = metrics.get("file_io_batch_size", row["file_io_batch_size"])
     row["file_io_advice"] = metrics.get("file_io_advice", row["file_io_advice"])
+    row["posix_write_strategy"] = metrics.get(
+        "posix_write_strategy", row["posix_write_strategy"]
+    )
+    row["posix_write_strategy_effective"] = metrics.get(
+        "posix_write_strategy_effective", row["posix_write_strategy_effective"]
+    )
     for field in STAGE_FIELDS + PHASE_ALIAS_FIELDS:
         row[field] = metrics.get(field, "")
 
@@ -986,6 +1013,8 @@ def fill_metrics(row: dict[str, str], direction: str, server_text: str, client_t
             "file_io_queue_depth": "file_io_queue_depth",
             "file_io_batch_size": "file_io_batch_size",
             "file_io_advice": "file_io_advice",
+            "posix_write_strategy": "posix_write_strategy",
+            "posix_write_strategy_effective": "posix_write_strategy_effective",
         }
         for field, source_key in role_map.items():
             row[f"{prefix}_{field}"] = values.get(source_key, "")
@@ -1008,6 +1037,8 @@ SUMMARY_GROUP_FIELDS = [
     "file_io_queue_depth",
     "file_io_batch_size",
     "file_io_advice",
+    "posix_write_strategy",
+    "posix_write_strategy_effective",
     "manifest_flush_policy",
     "manifest_flush_interval_chunks",
     "commit_sync_policy",
@@ -1051,6 +1082,10 @@ def float_values(rows: list[dict[str, str]], field: str) -> list[float]:
     return values
 
 
+def is_valid_write_strategy_case(strategy: str, file_io_buffer_size: int) -> bool:
+    return not (strategy == "coalesced" and file_io_buffer_size == 0)
+
+
 def summarize_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     groups: dict[tuple[str, ...], list[dict[str, str]]] = {}
     for row in rows:
@@ -1069,6 +1104,8 @@ def summarize_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
             row["file_io_queue_depth"],
             row["file_io_batch_size"],
             row["file_io_advice"],
+            row["posix_write_strategy"],
+            row["posix_write_strategy_effective"],
             row["manifest_flush_policy"],
             row["manifest_flush_interval_chunks"],
             row["commit_sync_policy"],
@@ -1105,7 +1142,7 @@ def run_case(args: argparse.Namespace, case: Case, run_root: Path, env: Environm
         f"mfp{case.manifest_flush_policy}_mfi{case.manifest_flush_interval_chunks}_"
         f"csp{case.commit_sync_policy}_"
         f"fiobuf{case.file_io_buffer_size}_fioqd{case.file_io_queue_depth}_"
-        f"fiobs{case.file_io_batch_size}_fioadv{case.file_io_advice}"
+        f"fiobs{case.file_io_batch_size}_fioadv{case.file_io_advice}_pws{case.posix_write_strategy}"
     )
     case_root = run_root / case_id
     server_root = case_root / "server-root"
@@ -1227,6 +1264,11 @@ def generate_cases(args: argparse.Namespace) -> list[Case]:
         {"off", "sequential", "noreuse", "dontneed", "sequential_dontneed"},
         "file IO advice",
     )
+    posix_write_strategies = parse_choice_list(
+        args.posix_write_strategies,
+        {"auto", "direct", "coalesced"},
+        "posix write strategy",
+    )
     final_verify_policies = parse_choice_list(
         args.final_verify_policies or args.final_verify_policy,
         {"full", "verified_chunks"},
@@ -1247,39 +1289,46 @@ def generate_cases(args: argparse.Namespace) -> list[Case]:
                                         for commit_sync_policy in commit_sync_policies:
                                             for file_io_backend in file_io_backends:
                                                 for file_io_buffer_size in file_io_buffer_sizes:
-                                                    for file_io_queue_depth in file_io_queue_depths:
-                                                        batch_sizes = (
-                                                            file_io_batch_sizes
-                                                            if file_io_batch_sizes is not None
-                                                            else [file_io_queue_depth]
-                                                        )
-                                                        for file_io_batch_size in batch_sizes:
-                                                            for file_io_advice in file_io_advices:
-                                                                for final_verify_policy in final_verify_policies:
-                                                                    for repeat_index in range(args.repeat):
-                                                                        cases.append(
-                                                                            Case(
-                                                                                index=index,
-                                                                                direction=direction,
-                                                                                total_bytes=total_bytes,
-                                                                                connections=connection,
-                                                                                chunk_size=chunk_size,
-                                                                                buffer_size=buffer_size,
-                                                                                checksum=checksum,
-                                                                                preallocate=preallocate,
-                                                                                manifest_flush_policy=manifest_flush_policy,
-                                                                                manifest_flush_interval_chunks=manifest_flush_interval,
-                                                                                commit_sync_policy=commit_sync_policy,
-                                                                                final_verify_policy=final_verify_policy,
-                                                                                file_io_backend=file_io_backend,
-                                                                                file_io_buffer_size=file_io_buffer_size,
-                                                                                file_io_queue_depth=file_io_queue_depth,
-                                                                                file_io_batch_size=file_io_batch_size,
-                                                                                file_io_advice=file_io_advice,
-                                                                                repeat_index=repeat_index,
+                                                    for posix_write_strategy in posix_write_strategies:
+                                                        if not is_valid_write_strategy_case(
+                                                            posix_write_strategy,
+                                                            file_io_buffer_size,
+                                                        ):
+                                                            continue
+                                                        for file_io_queue_depth in file_io_queue_depths:
+                                                            batch_sizes = (
+                                                                file_io_batch_sizes
+                                                                if file_io_batch_sizes is not None
+                                                                else [file_io_queue_depth]
+                                                            )
+                                                            for file_io_batch_size in batch_sizes:
+                                                                for file_io_advice in file_io_advices:
+                                                                    for final_verify_policy in final_verify_policies:
+                                                                        for repeat_index in range(args.repeat):
+                                                                            cases.append(
+                                                                                Case(
+                                                                                    index=index,
+                                                                                    direction=direction,
+                                                                                    total_bytes=total_bytes,
+                                                                                    connections=connection,
+                                                                                    chunk_size=chunk_size,
+                                                                                    buffer_size=buffer_size,
+                                                                                    checksum=checksum,
+                                                                                    preallocate=preallocate,
+                                                                                    manifest_flush_policy=manifest_flush_policy,
+                                                                                    manifest_flush_interval_chunks=manifest_flush_interval,
+                                                                                    commit_sync_policy=commit_sync_policy,
+                                                                                    final_verify_policy=final_verify_policy,
+                                                                                    file_io_backend=file_io_backend,
+                                                                                    file_io_buffer_size=file_io_buffer_size,
+                                                                                    file_io_queue_depth=file_io_queue_depth,
+                                                                                    file_io_batch_size=file_io_batch_size,
+                                                                                    file_io_advice=file_io_advice,
+                                                                                    posix_write_strategy=posix_write_strategy,
+                                                                                    repeat_index=repeat_index,
+                                                                                )
                                                                             )
-                                                                        )
-                                                                        index += 1
+                                                                            index += 1
     return cases
 
 
@@ -1344,6 +1393,11 @@ def main() -> int:
         "--file-io-advices",
         default="off",
         help="comma list: off,sequential,noreuse,dontneed,sequential_dontneed",
+    )
+    parser.add_argument(
+        "--posix-write-strategies",
+        default="auto",
+        help="comma list: auto,direct,coalesced",
     )
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--host-baseline-csv", default="")

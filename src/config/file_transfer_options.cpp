@@ -282,6 +282,16 @@ common::Result<FileTransferOptions> parseFileTransferOptions(int argc, const cha
             continue;
         }
 
+        if (option == "--posix-write-strategy") {
+            auto parsed = storage::parsePosixWriteStrategy(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.fileIo.posixWriteStrategy = parsed.value();
+            index += 2;
+            continue;
+        }
+
         if (option == "--chunk-size") {
             if (role != FileTransferRole::Client) {
                 return common::Status::invalidArgument("--chunk-size is client-only");
@@ -394,6 +404,10 @@ common::Result<FileTransferOptions> parseFileTransferOptions(int argc, const cha
     if (hasFileIoQueueDepth && !hasFileIoBatchSize) {
         options.fileIo.batchSize = options.fileIo.queueDepth;
     }
+    const common::Status fileIoStatus = storage::validateFileIoConfig(options.fileIo);
+    if (!fileIoStatus.isOk()) {
+        return fileIoStatus;
+    }
 
     return options;
 }
@@ -412,6 +426,7 @@ std::string fileTransferUsage(const char* programName, FileTransferRole role) {
                "[--file-io-backend <posix|io_uring>] [--file-io-buffer-size <bytes>] "
                "[--file-io-queue-depth <N>] [--file-io-batch-size <N>] "
                "[--file-io-advice <off|sequential|noreuse|dontneed|sequential_dontneed>] "
+               "[--posix-write-strategy <auto|direct|coalesced>] "
                "[--overwrite] "
                "[--keep-partial] [--resume]";
     }
@@ -423,6 +438,7 @@ std::string fileTransferUsage(const char* programName, FileTransferRole role) {
            "[--file-io-backend <posix|io_uring>] [--file-io-buffer-size <bytes>] "
            "[--file-io-queue-depth <N>] [--file-io-batch-size <N>] "
            "[--file-io-advice <off|sequential|noreuse|dontneed|sequential_dontneed>] "
+           "[--posix-write-strategy <auto|direct|coalesced>] "
            "[--transfer-id <id>] [--resume] [--max-chunks <N>] "
            "[--corrupt-chunk <chunk-id>] [--duplicate-corrupt-chunk <chunk-id>]";
 }

@@ -50,6 +50,8 @@ TEST(ControlOptionsTest, ParsesDefaultsAndRequiredRoot) {
     EXPECT_EQ(parsed.value().fileIo.backend, gridflux::storage::FileIoBackendKind::Posix);
     EXPECT_EQ(parsed.value().fileIo.bufferSize, 0U);
     EXPECT_EQ(parsed.value().fileIo.advice, gridflux::storage::FileIoAdvice::Off);
+    EXPECT_EQ(parsed.value().fileIo.posixWriteStrategy,
+              gridflux::storage::PosixWriteStrategy::Auto);
     EXPECT_EQ(parsed.value().user, "gridflux");
 
     std::filesystem::remove_all(root);
@@ -97,6 +99,8 @@ TEST(ControlOptionsTest, ParsesExplicitOptions) {
                           "8",
                           "--file-io-advice",
                           "noreuse",
+                          "--posix-write-strategy",
+                          "coalesced",
                           "--user",
                           "alice",
                           "--password",
@@ -121,6 +125,8 @@ TEST(ControlOptionsTest, ParsesExplicitOptions) {
     EXPECT_EQ(parsed.value().fileIo.queueDepth, 8U);
     EXPECT_EQ(parsed.value().fileIo.batchSize, 8U);
     EXPECT_EQ(parsed.value().fileIo.advice, gridflux::storage::FileIoAdvice::Noreuse);
+    EXPECT_EQ(parsed.value().fileIo.posixWriteStrategy,
+              gridflux::storage::PosixWriteStrategy::Coalesced);
     EXPECT_EQ(parsed.value().user, "alice");
 
     std::filesystem::remove_all(root);
@@ -173,6 +179,14 @@ TEST(ControlOptionsTest, RejectsInvalidOptions) {
     const char* badFileIoAdvice[] = {"gridflux-gridftp-server", "--root", "/tmp",
                                      "--file-io-advice", "random"};
     EXPECT_FALSE(parseControlServerOptions(5, badFileIoAdvice).isOk());
+
+    const char* badPosixWriteStrategy[] = {"gridflux-gridftp-server", "--root", "/tmp",
+                                           "--posix-write-strategy", "buffered"};
+    EXPECT_FALSE(parseControlServerOptions(5, badPosixWriteStrategy).isOk());
+
+    const char* badCoalescedWithoutBuffer[] = {"gridflux-gridftp-server", "--root", "/tmp",
+                                               "--posix-write-strategy", "coalesced"};
+    EXPECT_FALSE(parseControlServerOptions(5, badCoalescedWithoutBuffer).isOk());
 }
 
 TEST(ControlOptionsTest, ResolvesStorPathInsideRoot) {

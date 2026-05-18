@@ -15,13 +15,13 @@
 
 ## 项目状态
 
-**当前阶段：** Phase 4J — POSIX storage/writeback、checksum 与 final verify 路径瓶颈拆解（已完成）
+**当前阶段：** Phase 4K — POSIX temp write/writeback 专项优化（已完成）
 
 **技术栈：** C++20 · epoll 网络基线 · POSIX file IO 默认后端 · 可选 file-IO-only io_uring · CMake · Linux only
 
 **目标场景：** 专线 TB 级（主线）· 虚拟网络 · 广域网
 
-**下一步：** Phase 4K — 基于 Phase 4J median 结论继续做 POSIX 写入路径专项优化；默认仍保持 POSIX backend，不切换网络 epoll 或 STOR/RETR framed data path。
+**下一步：** Phase 4L — 继续围绕 POSIX 写回路径、RETR 发送/接收阶段和可靠性默认策略做专项评估；默认仍保持 POSIX backend，不切换网络 epoll 或 STOR/RETR framed data path。
 
 ## AI 协作
 

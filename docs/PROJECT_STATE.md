@@ -3036,3 +3036,246 @@ python3 tools/perf/analyze_phase4j.py \
 
 - Phase 4J 不引入 raw FTP STOR/RETR，不改网络 epoll，不默认启用 io_uring、preallocate full 或 verified_chunks。
 - 默认后端继续为 POSIX；io_uring 仍 explicit opt-in。
+
+## 2026-05-17 Phase 4K POSIX temp write/writeback optimization
+
+### 实施内容
+
+- 阅读并延续 Phase 4J 结论：STOR 的主要瓶颈在 temp write/writeback，Phase 4K 只做 POSIX 写入路径诊断和 opt-in 小步实验。
+- `FileIoStats` 新增 POSIX write syscall 级指标：
+  - `write_call_count`
+  - `write_syscall_count`
+  - `write_retry_count`
+  - `write_short_count`
+  - `write_zero_count`
+  - `write_total_bytes`
+  - `write_avg_bytes_per_call`
+  - `write_avg_bytes_per_syscall`
+- POSIX backend 的 `writeAtAll` 统一走带统计的 `pwrite` loop；保留 `PosixFile::writeAtAll` 兼容接口。
+- 新增 `PosixWriteStrategy { auto, direct, coalesced }`：
+  - `auto` 保持既有默认语义：`file_io_buffer_size=0` 直写，`>0` 使用 contiguous coalescing。
+  - `direct` 强制绕过 `BufferedFileWriter`，用于 A/B。
+  - `coalesced` 强制使用 `BufferedFileWriter`，要求 `file_io_buffer_size > 0`。
+- CLI 覆盖：
+  - `gridflux-file-server`
+  - `gridflux-file-client`
+  - `gridflux-file-download-client`
+  - `gridflux-gridftp-server`
+  - `gridflux-storage-bench`
+- `run_storage_bench.py` 增加 `--posix-write-strategies` 与 `--file-io-buffer-sizes`；raw/summary CSV 增加 write syscall 字段。
+- `run_gridftp_private_matrix.py` 增加 `--posix-write-strategies`；raw/summary CSV 增加 requested/effective strategy 与 writer syscall 字段，同时保留 sender/receiver 双侧指标。
+- 新增 `tools/perf/analyze_phase4k.py`，生成 `docs/perf/PHASE4K_POSIX_WRITEBACK_OPTIMIZATION.md`。
+
+### 本机基础验证
+
+```bash
+python3 -m py_compile \
+  tools/benchmark/run_storage_bench.py \
+  tools/benchmark/test_run_storage_bench.py \
+  tools/perf/run_gridftp_private_matrix.py \
+  tools/perf/analyze_phase4k.py
+python3 tools/benchmark/test_run_storage_bench.py
+cmake --build build
+./build/gridflux_unit_tests --gtest_filter='FileIoTest.*:FileTransferOptionsTest.*:FileDownloadOptionsTest.*:ControlOptionsTest.*'
+ctest --test-dir build --output-on-failure
+```
+
+- 结果：通过。
+- Targeted unit tests：`34 passed / 1 skipped`，skipped 为默认 Debug build 中未启用 io_uring 的真实 smoke。
+- 本机 Debug full CTest：`144/144` passed。
+
+### 本机 real io_uring Release 回归
+
+```bash
+cmake -S . -B build-io-uring-real -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_COMPILER=g++-13 \
+  -DGRIDFLUX_ENABLE_IO_URING=ON
+cmake --build build-io-uring-real
+ctest --test-dir build-io-uring-real --output-on-failure
+ctest --test-dir build-io-uring-real \
+  -R FileIoTest.IoUringContextReadWriteSmokeWhenAvailable \
+  --output-on-failure
+```
+
+- 结果：`144/144` passed。
+- `FileIoTest.IoUringContextReadWriteSmokeWhenAvailable`：Passed，不是 Skipped。
+
+### <redacted>二同步与回归
+
+```bash
+GRIDFLUX_SSH_PASSWORD='***' tools/perf/sync_remote.sh \
+  --host root@<redacted> \
+  --source /root/projects/GridFlux \
+  --target /root/projects/GridFlux
+SSHPASS=<redacted> sshpass -e ssh root@<redacted> \
+  'cd /root/projects/GridFlux && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++-13 && cmake --build build && ctest --test-dir build --output-on-failure && cmake -S . -B build-io-uring-real -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13 -DGRIDFLUX_ENABLE_IO_URING=ON && cmake --build build-io-uring-real && ctest --test-dir build-io-uring-real --output-on-failure && ctest --test-dir build-io-uring-real -R FileIoTest.IoUringContextReadWriteSmokeWhenAvailable --output-on-failure'
+```
+
+- 结果：同步通过。
+- <redacted>二 Debug full CTest：`144/144` passed。
+- <redacted>二 real io_uring Release full CTest：`144/144` passed。
+- <redacted>二 real io_uring smoke：Passed。
+- 备注：第一次私网 smoke 因当前 shell 未设置 `GRIDFLUX_SSH_PASSWORD` 失败；第二次误取 AGENTS 表格用户列作为密码失败；随后改为取<redacted>二表格第 6 列密码并同步重建远端后通过。未在命令输出中打印密码。
+- <redacted>二历史 `build-private-verify-20260515T163633Z` 仍作为环境残留保留，未删除。
+
+### Phase 4K smoke / field validation
+
+Local storage smoke:
+
+```bash
+python3 tools/benchmark/run_storage_bench.py \
+  --side local \
+  --build-dir build-io-uring-real \
+  --bytes 8388608 \
+  --modes write,read,rewrite \
+  --file-io-backends posix \
+  --posix-write-strategies auto,direct,coalesced \
+  --file-io-buffer-sizes 0,262144 \
+  --buffer-sizes 262144 \
+  --preallocates off \
+  --iterations 1 \
+  --output-dir tools/perf/results
+```
+
+- CSV：`tools/perf/results/20260517T164426Z_storage-bench.csv`
+- Summary CSV：`tools/perf/results/20260517T164426Z_storage-bench-summary.csv`
+- 结果：`cases=30 failures=0`。
+
+Private STOR/RETR smoke:
+
+```bash
+GRIDFLUX_SSH_PASSWORD='***' python3 tools/perf/run_gridftp_private_matrix.py \
+  --smoke \
+  --directions stor,retr \
+  --bytes 8388608 \
+  --connections 2 \
+  --chunk-sizes 1048576 \
+  --buffer-sizes 65536 \
+  --checksums crc32c \
+  --checksum-backend auto \
+  --file-io-backends posix \
+  --file-io-buffer-sizes 0,262144 \
+  --posix-write-strategies auto,direct,coalesced \
+  --file-io-advices off \
+  --preallocates off \
+  --manifest-flush-policies every_n_chunks \
+  --manifest-flush-interval-chunks-list 16 \
+  --commit-sync-policies none \
+  --final-verify-policies full \
+  --repeat 1 \
+  --remote root@<redacted> \
+  --server-host <redacted> \
+  --local-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --output-dir tools/perf/results \
+  --case-timeout 120
+```
+
+- CSV：`tools/perf/results/20260517T164709Z_gridftp-private-matrix-smoke.csv`
+- Summary CSV：`tools/perf/results/20260517T164709Z_gridftp-private-matrix-smoke-summary.csv`
+- 结果：`cases=10 failures=0`；所有 row sha256 一致。
+
+### Phase 4K storage bench matrix
+
+```bash
+GRIDFLUX_SSH_PASSWORD='***' python3 tools/benchmark/run_storage_bench.py \
+  --side both \
+  --remote root@<redacted> \
+  --build-dir build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --bytes 1073741824 \
+  --modes write,read,rewrite \
+  --file-io-backends posix \
+  --posix-write-strategies auto,direct,coalesced \
+  --file-io-buffer-sizes 0,262144,1048576 \
+  --buffer-sizes 262144,1048576 \
+  --preallocates off \
+  --iterations 3 \
+  --output-dir tools/perf/results
+```
+
+- Raw CSV：`tools/perf/results/20260517T164727Z_storage-bench.csv`
+- Summary CSV：`tools/perf/results/20260517T164727Z_storage-bench-summary.csv`
+- 结果：`cases=384 failures=0`。
+- Summary 字段包含 `posix_write_strategy`、`posix_write_strategy_effective`、`write_syscall_count_*`、`write_retry_count_*`、`write_short_count_*`、`write_zero_count_*`、`write_avg_bytes_per_syscall_*`。
+
+### Phase 4K private matrix
+
+```bash
+GRIDFLUX_SSH_PASSWORD='***' python3 tools/perf/run_gridftp_private_matrix.py \
+  --smoke \
+  --directions stor,retr \
+  --bytes 1073741824 \
+  --connections 8 \
+  --chunk-sizes 4194304 \
+  --buffer-sizes 262144 \
+  --checksums crc32c,none \
+  --checksum-backend auto \
+  --file-io-backends posix \
+  --file-io-buffer-sizes 0,262144,1048576 \
+  --posix-write-strategies auto,direct,coalesced \
+  --file-io-advices off \
+  --preallocates off \
+  --manifest-flush-policies every_n_chunks \
+  --manifest-flush-interval-chunks-list 16 \
+  --commit-sync-policies none \
+  --final-verify-policies full \
+  --repeat 3 \
+  --remote root@<redacted> \
+  --server-host <redacted> \
+  --local-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --output-dir tools/perf/results \
+  --case-timeout 900
+```
+
+- Raw CSV：`tools/perf/results/20260517T171606Z_gridftp-private-matrix-smoke.csv`
+- Summary CSV：`tools/perf/results/20260517T171606Z_gridftp-private-matrix-smoke-summary.csv`
+- 结果：`cases=96 failures=0`；所有 row sha256 一致。
+- Summary 字段包含 `posix_write_strategy`、`posix_write_strategy_effective`、`stage_write_*`、`write_syscall_count_*`、`write_avg_bytes_per_syscall_*`，并继续保留 `sender_*` / `receiver_*` 双侧字段。
+
+### Phase 4K analysis
+
+```bash
+python3 tools/perf/analyze_phase4k.py \
+  --storage-summary-csv tools/perf/results/20260517T164727Z_storage-bench-summary.csv \
+  --matrix-summary-csv tools/perf/results/20260517T171606Z_gridftp-private-matrix-smoke-summary.csv \
+  --output docs/perf/PHASE4K_POSIX_WRITEBACK_OPTIMIZATION.md
+```
+
+- 报告：`docs/perf/PHASE4K_POSIX_WRITEBACK_OPTIMIZATION.md`
+- 主结论：
+  - Storage bench 与 GridFTP-like private matrix 全部零失败。
+  - 没有 POSIX write strategy 满足未来默认启用门槛。
+  - STOR `crc32c` 下 256KiB coalescing 有局部约 `+10%` median 提升，但 `checksum=none` 下同族策略退化，未贯穿 STOR/RETR。
+  - RETR `crc32c` 出现若干 opt-in 提升，但 `checksum=none` 下经常退化且 min/max 波动仍大。
+  - 默认继续 `posix_write_strategy=auto` 且 `file_io_buffer_size=0`。
+  - `direct` / `coalesced` 只作为 opt-in 诊断策略保留。
+
+### Release gate / cleanup
+
+```bash
+python3 -m py_compile \
+  tools/benchmark/run_storage_bench.py \
+  tools/perf/run_gridftp_private_matrix.py \
+  tools/perf/analyze_phase4k.py
+rm -rf /tmp/gridflux-public
+python3 tools/release/export_public_repo.py --output /tmp/gridflux-public --force
+python3 tools/release/check_public_hygiene.py --path /tmp/gridflux-public --strict
+ps -eo pid=,args= | grep -E '[g]ridflux-(gridftp-server|file-)' || true
+SSHPASS=<redacted> sshpass -e ssh root@<redacted> \
+  "ps -eo pid=,args= | grep -E '[g]ridflux-(gridftp-server|file-)' || true"
+```
+
+- 结果：py_compile 通过。
+- Public export strict hygiene：passed。
+- Export summary：`copied_files=180 skipped_files=1 skipped_dirs=11 skipped_build_dirs=7`。
+- 本机最终无 `gridflux-gridftp-server` / `gridflux-file-*` 残留进程。
+- <redacted>二最终无 `gridflux-gridftp-server` / `gridflux-file-*` 残留进程。
+
+### 状态说明
+
+- Phase 4K 不引入 raw FTP STOR/RETR，不改网络 epoll，不默认启用 io_uring、preallocate full、verified_chunks、final_only 或 commit fsync。
+- 默认仍为 `file_io_backend=posix`、`preallocate=off`、`final_verify_policy=full`、`manifest_flush_policy=every_n_chunks`、`commit_sync_policy=none`。
+- POSIX write strategy 默认仍为 `auto`，并保持 `file_io_buffer_size=0`。

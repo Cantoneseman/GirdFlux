@@ -138,12 +138,15 @@ python3 tools/benchmark/run_storage_bench.py \
   --iterations 1 \
   --preallocate off \
   --file-io-backend posix \
-  --file-io-advice off
+  --file-io-advice off \
+  --posix-write-strategy auto \
+  --file-io-buffer-size 0
 ```
 
 `--preallocate full` 使用 `posix_fallocate`。如果系统或文件系统返回错误，命令会失败并记录错误，不会静默降级为 off。
 `--file-io-advice` 支持 `off`、`sequential`、`noreuse`、`dontneed`、`sequential_dontneed`；非 off 会显式调用 `posix_fadvise`，调用失败则当前 case 失败。
 Phase 4F 起 `--file-io-backend` 支持 `posix|io_uring`。`posix` 是默认值；`io_uring` 只有在构建时显式启用 `-DGRIDFLUX_ENABLE_IO_URING=ON` 且探测到 liburing 时可用。Phase 4G 中本机和<redacted>二均已安装 `liburing-dev` 并完成真实 io_uring 构建、CTest 与 POSIX/io_uring 对比；即便如此，默认 backend 仍保持 POSIX。Phase 4H 起 storage bench 和 private matrix 支持 `--file-io-queue-depths` 与 `--file-io-batch-sizes`；未显式传 batch size 时默认跟随 queue depth。queue/batch 只影响 `io_uring` backend，POSIX 路径仅记录参数用于公平 CSV 对照。
+Phase 4K 起 `--posix-write-strategy auto|direct|coalesced` 用于 POSIX temp write/writeback 诊断。默认 `auto` 保持既有语义：`file_io_buffer_size=0` 直写，`>0` 使用 contiguous coalescing；`direct` 强制直写；`coalesced` 要求 `--file-io-buffer-size > 0`。
 
 Phase 4F/4G no-liburing fallback 验证：
 
@@ -596,6 +599,64 @@ python3 tools/perf/analyze_phase4j.py \
 
 Phase 4J 结论记录在 `docs/perf/PHASE4J_POSIX_PIPELINE_DIAGNOSIS.md`：STOR median 主要瓶颈是 temp write/writeback；RETR 主要由 receiver download write 与 sender network send 构成；checksum 不是 STOR 主瓶颈，`verified_chunks` 对部分 RETR 场景有 opt-in 收益但默认仍保持 full final verify。
 
+Phase 4K POSIX writeback strategy matrix:
+
+```bash
+python3 tools/benchmark/run_storage_bench.py \
+  --side both \
+  --remote root@<redacted> \
+  --build-dir build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --bytes 1073741824 \
+  --modes write,read,rewrite \
+  --file-io-backends posix \
+  --posix-write-strategies auto,direct,coalesced \
+  --file-io-buffer-sizes 0,262144,1048576 \
+  --buffer-sizes 262144,1048576 \
+  --preallocates off \
+  --iterations 3 \
+  --output-dir tools/perf/results
+```
+
+```bash
+python3 tools/perf/run_gridftp_private_matrix.py \
+  --smoke \
+  --directions stor,retr \
+  --bytes 1073741824 \
+  --connections 8 \
+  --chunk-sizes 4194304 \
+  --buffer-sizes 262144 \
+  --checksums crc32c,none \
+  --checksum-backend auto \
+  --file-io-backends posix \
+  --file-io-buffer-sizes 0,262144,1048576 \
+  --posix-write-strategies auto,direct,coalesced \
+  --file-io-advices off \
+  --preallocates off \
+  --manifest-flush-policies every_n_chunks \
+  --manifest-flush-interval-chunks-list 16 \
+  --commit-sync-policies none \
+  --final-verify-policies full \
+  --repeat 3 \
+  --remote root@<redacted> \
+  --server-host <redacted> \
+  --local-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --output-dir tools/perf/results \
+  --case-timeout 900
+```
+
+Phase 4K analysis:
+
+```bash
+python3 tools/perf/analyze_phase4k.py \
+  --storage-summary-csv tools/perf/results/20260517T164727Z_storage-bench-summary.csv \
+  --matrix-summary-csv tools/perf/results/20260517T171606Z_gridftp-private-matrix-smoke-summary.csv \
+  --output docs/perf/PHASE4K_POSIX_WRITEBACK_OPTIMIZATION.md
+```
+
+Phase 4K 结论记录在 `docs/perf/PHASE4K_POSIX_WRITEBACK_OPTIMIZATION.md`：没有策略同时稳定改善 STOR 与 RETR；默认继续 `posix_write_strategy=auto` 且 `file_io_buffer_size=0`，`direct` 和 `coalesced` 仅作为 opt-in 诊断策略。
+
 ## Public Release Hygiene
 
 本地 `AGENTS.md` 是私有协作上下文，不得公开发布。公开发布前使用 export gate：
@@ -652,7 +713,7 @@ timestamp,mode,host,port,connections,chunk_size,buffer_size,bytes,checksum_enabl
 GridFTP-like 私网矩阵 CSV 字段：
 
 ```text
-timestamp,mode,direction,bytes,connections,chunk_size,buffer_size,checksum_algorithm,checksum_backend,preallocate,file_io_backend,file_io_buffer_size,file_io_queue_depth,file_io_batch_size,file_io_advice,repeat_index,elapsed,throughput_gbps,skipped_bytes,resent_bytes,verified_bytes,manifest_flush_count,manifest_flush_policy,manifest_flush_interval_chunks,commit_sync_policy,final_verify_policy,final_verify_policy_effective,stage_*,data_receive_seconds,temp_write_seconds,source_read_seconds,network_send_seconds,download_temp_write_seconds,sender_*,receiver_*,host_baseline_csv,storage_bench_csv,source_sha256,dest_sha256,result,server_log,client_log,server_hostname,client_hostname,server_kernel,client_kernel,server_cpu_flags,client_cpu_flags,server_fs_type,client_fs_type,server_free_bytes,client_free_bytes
+timestamp,mode,direction,bytes,connections,chunk_size,buffer_size,checksum_algorithm,checksum_backend,preallocate,file_io_backend,file_io_buffer_size,posix_write_strategy,posix_write_strategy_effective,file_io_queue_depth,file_io_batch_size,file_io_advice,repeat_index,elapsed,throughput_gbps,skipped_bytes,resent_bytes,verified_bytes,manifest_flush_count,manifest_flush_policy,manifest_flush_interval_chunks,commit_sync_policy,final_verify_policy,final_verify_policy_effective,stage_*,write_call_count,write_syscall_count,write_retry_count,write_short_count,write_zero_count,write_total_bytes,write_avg_bytes_per_call,write_avg_bytes_per_syscall,data_receive_seconds,temp_write_seconds,source_read_seconds,network_send_seconds,download_temp_write_seconds,sender_*,receiver_*,host_baseline_csv,storage_bench_csv,source_sha256,dest_sha256,result,server_log,client_log,server_hostname,client_hostname,server_kernel,client_kernel,server_cpu_flags,client_cpu_flags,server_fs_type,client_fs_type,server_free_bytes,client_free_bytes
 ```
 
 实际 CSV 还会附加 `transfer_id`、端口、临时路径和错误摘要。`throughput_gbps` / `elapsed` 优先使用接收端语义：STOR 取 server receiver，RETR 取 download client receiver。RETR sender 的 `verified_bytes` 表示 sender 已确认/发送的 verified range 字节；download client 的 `verified_bytes` 表示接收端本地校验完成字节。Phase 4J 起 CSV 同时保留 `sender_*` / `receiver_*` 双侧阶段字段，便于同一 RETR row 同时分析 sender read/send 与 receiver write/final verify。
@@ -672,7 +733,7 @@ timestamp,hostname,algorithm,backend,bytes,iterations,buffer_size,elapsed_second
 Storage benchmark CSV 字段：
 
 ```text
-timestamp,side,operation,bytes,iterations,buffer_size,preallocate,file_io_backend,file_io_queue_depth,file_io_batch_size,file_io_advice,iteration,aggregate,elapsed_seconds,throughput_gbps,read_call_count,write_call_count,avg_read_bytes_per_call,avg_write_bytes_per_call,file_io_wait_seconds,io_uring_submit_count,io_uring_wait_count,io_uring_completion_count,io_uring_sqe_count,io_uring_partial_completion_count,io_uring_retry_count,io_uring_avg_bytes_per_sqe,hostname,kernel,fs_type,free_bytes,path,log,result,error
+timestamp,side,operation,bytes,iterations,buffer_size,preallocate,file_io_backend,file_io_buffer_size,posix_write_strategy,posix_write_strategy_effective,file_io_queue_depth,file_io_batch_size,file_io_advice,iteration,aggregate,elapsed_seconds,throughput_gbps,read_call_count,write_call_count,avg_read_bytes_per_call,avg_write_bytes_per_call,file_io_wait_seconds,write_syscall_count,write_retry_count,write_short_count,write_zero_count,write_total_bytes,write_avg_bytes_per_syscall,io_uring_submit_count,io_uring_wait_count,io_uring_completion_count,io_uring_sqe_count,io_uring_partial_completion_count,io_uring_retry_count,io_uring_avg_bytes_per_sqe,hostname,kernel,fs_type,free_bytes,path,log,result,error
 ```
 
 Storage bench wrapper 同时生成 `*-summary.csv`，按 side/operation/bytes/buffer/preallocate/file_io_backend/file_io_queue_depth/file_io_batch_size/file_io_advice 分组统计 throughput/elapsed 的 min、median、max。Phase 4I 起 summary 还聚合 io_uring submit/wait/completion/SQE/partial/retry/avg bytes per SQE 的 min、median、max。

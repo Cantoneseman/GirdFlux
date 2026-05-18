@@ -260,6 +260,12 @@ common::Result<ControlServerOptions> parseControlServerOptions(int argc, const c
                 return parsed.status();
             }
             options.fileIo.advice = parsed.value();
+        } else if (option == "--posix-write-strategy") {
+            auto parsed = storage::parsePosixWriteStrategy(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.fileIo.posixWriteStrategy = parsed.value();
         } else if (option == "--user") {
             if (value.empty()) {
                 return common::Status::invalidArgument("--user must not be empty");
@@ -281,6 +287,10 @@ common::Result<ControlServerOptions> parseControlServerOptions(int argc, const c
     }
     if (hasFileIoQueueDepth && !hasFileIoBatchSize) {
         options.fileIo.batchSize = options.fileIo.queueDepth;
+    }
+    const common::Status fileIoStatus = storage::validateFileIoConfig(options.fileIo);
+    if (!fileIoStatus.isOk()) {
+        return fileIoStatus;
     }
     const common::Status rootStatus = validateRoot(options.root);
     if (!rootStatus.isOk()) {
@@ -304,6 +314,7 @@ std::string controlServerUsage(const char* programName) {
               "[--file-io-backend posix|io_uring] [--file-io-buffer-size <bytes>] "
               "[--file-io-queue-depth <N>] [--file-io-batch-size <N>] "
               "[--file-io-advice off|sequential|noreuse|dontneed|sequential_dontneed] "
+              "[--posix-write-strategy auto|direct|coalesced] "
               "[--user <name>] [--password <password>]";
     return output.str();
 }

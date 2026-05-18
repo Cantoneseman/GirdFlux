@@ -73,8 +73,10 @@ void usage(const char* program) {
               << " --path <file> --mode <write|read|rewrite|all> --bytes <N> "
                  "--buffer-size <N> --iterations <N> --preallocate <off|full> "
                  "[--file-io-backend <posix|io_uring>] "
+                 "[--file-io-buffer-size <N>] "
                  "[--file-io-queue-depth <N>] [--file-io-batch-size <N>] "
                  "[--file-io-advice <off|sequential|noreuse|dontneed|sequential_dontneed>] "
+                 "[--posix-write-strategy <auto|direct|coalesced>] "
                  "[--keep-file]\n";
 }
 
@@ -86,9 +88,12 @@ struct Options {
     std::uint64_t iterations = 1;
     gridflux::storage::PreallocateMode preallocateMode = gridflux::storage::PreallocateMode::Off;
     gridflux::storage::FileIoBackendKind fileIoBackend = gridflux::storage::FileIoBackendKind::Posix;
+    std::uint64_t fileIoBufferSize = 0;
     std::uint64_t fileIoQueueDepth = 1;
     std::uint64_t fileIoBatchSize = 1;
     gridflux::storage::FileIoAdvice fileIoAdvice = gridflux::storage::FileIoAdvice::Off;
+    gridflux::storage::PosixWriteStrategy posixWriteStrategy =
+        gridflux::storage::PosixWriteStrategy::Auto;
     bool keepFile = false;
     bool hasFileIoQueueDepth = false;
     bool hasFileIoBatchSize = false;
@@ -163,6 +168,15 @@ gridflux::common::Result<Options> parseOptions(int argc, char** argv) {
                 return parsed.status();
             }
             options.fileIoBackend = parsed.value();
+        } else if (option == "--file-io-buffer-size") {
+            auto parsed = parseUnsigned(value, "--file-io-buffer-size");
+            if (!parsed.isOk() || parsed.value() > 64ULL * 1024ULL * 1024ULL) {
+                return parsed.isOk()
+                           ? gridflux::common::Status::invalidArgument(
+                                 "--file-io-buffer-size must be in range 0..67108864")
+                           : parsed.status();
+            }
+            options.fileIoBufferSize = parsed.value();
         } else if (option == "--file-io-queue-depth") {
             auto parsed = parseUnsigned(value, "--file-io-queue-depth");
             if (!parsed.isOk() || parsed.value() == 0 || parsed.value() > 256) {
@@ -189,6 +203,12 @@ gridflux::common::Result<Options> parseOptions(int argc, char** argv) {
                 return parsed.status();
             }
             options.fileIoAdvice = parsed.value();
+        } else if (option == "--posix-write-strategy") {
+            auto parsed = gridflux::storage::parsePosixWriteStrategy(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.posixWriteStrategy = parsed.value();
         } else {
             return gridflux::common::Status::invalidArgument("unknown option: " +
                                                              std::string(option));
@@ -199,6 +219,18 @@ gridflux::common::Result<Options> parseOptions(int argc, char** argv) {
     }
     if (options.hasFileIoQueueDepth && !options.hasFileIoBatchSize) {
         options.fileIoBatchSize = options.fileIoQueueDepth;
+    }
+    gridflux::storage::FileIoConfig fileIoConfig;
+    fileIoConfig.backend = options.fileIoBackend;
+    fileIoConfig.bufferSize = options.fileIoBufferSize;
+    fileIoConfig.queueDepth = options.fileIoQueueDepth;
+    fileIoConfig.batchSize = options.fileIoBatchSize;
+    fileIoConfig.advice = options.fileIoAdvice;
+    fileIoConfig.posixWriteStrategy = options.posixWriteStrategy;
+    const gridflux::common::Status fileIoStatus =
+        gridflux::storage::validateFileIoConfig(fileIoConfig);
+    if (!fileIoStatus.isOk()) {
+        return fileIoStatus;
     }
     return options;
 }
@@ -235,18 +267,25 @@ gridflux::common::Status writeSequential(const Options& options,
     std::uint64_t completed = 0;
     gridflux::storage::FileIoConfig config;
     config.backend = options.fileIoBackend;
+    config.bufferSize = options.fileIoBufferSize;
     config.queueDepth = options.fileIoQueueDepth;
     config.batchSize = options.fileIoBatchSize;
+    config.advice = options.fileIoAdvice;
+    config.posixWriteStrategy = options.posixWriteStrategy;
     gridflux::storage::FileIoContext context(config);
+    gridflux::storage::BufferedFileWriter writer(file, context, stats);
     while (completed < options.bytes) {
         const std::size_t size = static_cast<std::size_t>(
             std::min<std::uint64_t>(buffer.size(), options.bytes - completed));
-        const gridflux::common::Status status =
-            gridflux::storage::writeAtAll(file, completed, buffer.data(), size, context, stats);
+        const gridflux::common::Status status = writer.write(completed, buffer.data(), size);
         if (!status.isOk()) {
             return status;
         }
         completed += size;
+    }
+    const gridflux::common::Status flushStatus = writer.flush();
+    if (!flushStatus.isOk()) {
+        return flushStatus;
     }
     return file.resize(options.bytes);
 }
@@ -267,8 +306,11 @@ gridflux::common::Status readSequential(const Options& options, std::vector<std:
     std::uint8_t sink = 0;
     gridflux::storage::FileIoConfig config;
     config.backend = options.fileIoBackend;
+    config.bufferSize = options.fileIoBufferSize;
     config.queueDepth = options.fileIoQueueDepth;
     config.batchSize = options.fileIoBatchSize;
+    config.advice = options.fileIoAdvice;
+    config.posixWriteStrategy = options.posixWriteStrategy;
     gridflux::storage::FileIoContext context(config);
     while (completed < options.bytes) {
         const std::size_t size = static_cast<std::size_t>(
@@ -309,6 +351,13 @@ void printResult(BenchMode operation, const Options& options, std::uint64_t iter
     const double bytesProcessed = static_cast<double>(options.bytes) *
                                   static_cast<double>(aggregate ? options.iterations : 1);
     const double gbps = seconds > 0.0 ? (bytesProcessed * 8.0 / seconds) / 1'000'000'000.0 : 0.0;
+    gridflux::storage::FileIoConfig fileIoConfig;
+    fileIoConfig.backend = options.fileIoBackend;
+    fileIoConfig.bufferSize = options.fileIoBufferSize;
+    fileIoConfig.queueDepth = options.fileIoQueueDepth;
+    fileIoConfig.batchSize = options.fileIoBatchSize;
+    fileIoConfig.advice = options.fileIoAdvice;
+    fileIoConfig.posixWriteStrategy = options.posixWriteStrategy;
     std::cout << "storage_bench operation=" << modeName(operation) << " bytes=" << options.bytes
               << " iterations=" << options.iterations << " buffer_size=" << options.bufferSize
               << " iteration=" << iteration << " aggregate=" << (aggregate ? "true" : "false")
@@ -317,13 +366,26 @@ void printResult(BenchMode operation, const Options& options, std::uint64_t iter
               << gridflux::storage::preallocateModeName(options.preallocateMode)
               << " file_io_backend="
               << gridflux::storage::fileIoBackendName(options.fileIoBackend)
+              << " file_io_buffer_size=" << options.fileIoBufferSize
               << " file_io_queue_depth=" << options.fileIoQueueDepth
               << " file_io_batch_size=" << options.fileIoBatchSize
               << " file_io_advice=" << gridflux::storage::fileIoAdviceName(options.fileIoAdvice)
+              << " posix_write_strategy="
+              << gridflux::storage::posixWriteStrategyName(options.posixWriteStrategy)
+              << " posix_write_strategy_effective="
+              << gridflux::storage::posixWriteStrategyName(
+                     gridflux::storage::effectivePosixWriteStrategy(fileIoConfig))
               << " read_call_count=" << stats.readCalls()
               << " write_call_count=" << stats.writeCalls()
+              << " write_syscall_count=" << stats.posixWriteSyscallCount()
+              << " write_retry_count=" << stats.posixWriteRetryCount()
+              << " write_short_count=" << stats.posixWriteShortCount()
+              << " write_zero_count=" << stats.posixWriteZeroCount()
+              << " write_total_bytes=" << stats.writeBytes()
               << " avg_read_bytes_per_call=" << stats.averageReadBytesPerCall()
               << " avg_write_bytes_per_call=" << stats.averageWriteBytesPerCall()
+              << " write_avg_bytes_per_syscall="
+              << stats.posixAverageBytesPerWriteSyscall()
               << " file_io_wait_seconds=" << stats.waitSeconds()
               << " io_uring_submit_count=" << stats.ioUringSubmitCount()
               << " io_uring_wait_count=" << stats.ioUringWaitCount()

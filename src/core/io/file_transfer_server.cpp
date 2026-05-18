@@ -1026,7 +1026,12 @@ common::Status runFileTransferServerOnListener(const config::FileTransferOptions
               << " file_io_buffer_size=" << options.fileIo.bufferSize
               << " file_io_queue_depth=" << options.fileIo.queueDepth
               << " file_io_batch_size=" << options.fileIo.batchSize
-              << " file_io_advice=" << storage::fileIoAdviceName(options.fileIo.advice);
+              << " file_io_advice=" << storage::fileIoAdviceName(options.fileIo.advice)
+              << " posix_write_strategy="
+              << storage::posixWriteStrategyName(options.fileIo.posixWriteStrategy)
+              << " posix_write_strategy_effective="
+              << storage::posixWriteStrategyName(
+                     storage::effectivePosixWriteStrategy(options.fileIo));
     metrics::appendPhaseStats(std::cout, transfer.phaseStats);
     metrics::appendStorReceiverAliases(std::cout, transfer.phaseStats);
     storage::appendFileIoStats(std::cout, transfer.fileIoStats);

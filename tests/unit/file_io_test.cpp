@@ -60,12 +60,31 @@ TEST(FileIoTest, ParsesBackendAndAdvice) {
     ASSERT_TRUE(advice.isOk()) << advice.status().message();
     EXPECT_EQ(advice.value(), gridflux::storage::FileIoAdvice::SequentialDontNeed);
     EXPECT_FALSE(gridflux::storage::parseFileIoAdvice("random").isOk());
+
+    auto strategy = gridflux::storage::parsePosixWriteStrategy("coalesced");
+    ASSERT_TRUE(strategy.isOk()) << strategy.status().message();
+    EXPECT_EQ(strategy.value(), gridflux::storage::PosixWriteStrategy::Coalesced);
+    EXPECT_FALSE(gridflux::storage::parsePosixWriteStrategy("buffered").isOk());
 }
 
 TEST(FileIoTest, DefaultsQueueDepthAndBatchSizeToOne) {
     gridflux::storage::FileIoConfig config;
     EXPECT_EQ(config.queueDepth, 1U);
     EXPECT_EQ(config.batchSize, 1U);
+    EXPECT_EQ(config.posixWriteStrategy, gridflux::storage::PosixWriteStrategy::Auto);
+    EXPECT_EQ(gridflux::storage::effectivePosixWriteStrategy(config),
+              gridflux::storage::PosixWriteStrategy::Direct);
+    config.bufferSize = 1024;
+    EXPECT_EQ(gridflux::storage::effectivePosixWriteStrategy(config),
+              gridflux::storage::PosixWriteStrategy::Coalesced);
+}
+
+TEST(FileIoTest, RejectsCoalescedStrategyWithoutBuffer) {
+    gridflux::storage::FileIoConfig config;
+    config.posixWriteStrategy = gridflux::storage::PosixWriteStrategy::Coalesced;
+    const auto status = gridflux::storage::validateFileIoConfig(config);
+    EXPECT_FALSE(status.isOk());
+    EXPECT_NE(status.message().find("coalesced"), std::string::npos);
 }
 
 TEST(FileIoTest, ContextReportsIoUringAvailability) {
@@ -96,7 +115,10 @@ TEST(FileIoTest, TracksReadAndWriteCalls) {
     ASSERT_TRUE(gridflux::storage::writeAtAll(file, 0, data.data(), data.size(), &stats).isOk());
     EXPECT_EQ(stats.writeCalls(), 1U);
     EXPECT_EQ(stats.writeBytes(), data.size());
+    EXPECT_EQ(stats.posixWriteSyscallCount(), 1U);
+    EXPECT_EQ(stats.posixWriteSyscallBytes(), data.size());
     EXPECT_GT(stats.averageWriteBytesPerCall(), 0.0);
+    EXPECT_GT(stats.posixAverageBytesPerWriteSyscall(), 0.0);
 
     file = gridflux::storage::PosixFile();
     auto inputResult = gridflux::storage::PosixFile::openReadOnly(path.string());
@@ -264,6 +286,32 @@ TEST(FileIoTest, BufferedWriterCoalescesContiguousWritesAndFlushesGaps) {
     EXPECT_EQ(output[2], 'c');
     EXPECT_EQ(output[3], 'd');
     EXPECT_EQ(output[6], 'z');
+
+    std::filesystem::remove(path);
+}
+
+TEST(FileIoTest, DirectStrategyBypassesBufferedWriter) {
+    const std::filesystem::path path = tempPath("gridflux-file-io-direct-strategy-test.bin");
+    std::filesystem::remove(path);
+
+    auto fileResult = gridflux::storage::PosixFile::openWriteTruncate(path.string());
+    ASSERT_TRUE(fileResult.isOk()) << fileResult.status().message();
+    gridflux::storage::PosixFile file = std::move(fileResult.value());
+
+    gridflux::storage::FileIoConfig config;
+    config.bufferSize = 8;
+    config.posixWriteStrategy = gridflux::storage::PosixWriteStrategy::Direct;
+    gridflux::storage::FileIoStats stats;
+    gridflux::storage::BufferedFileWriter writer(file, config, &stats);
+
+    const std::vector<std::uint8_t> first{'a', 'b'};
+    const std::vector<std::uint8_t> second{'c', 'd'};
+    ASSERT_TRUE(writer.write(0, first.data(), first.size()).isOk());
+    ASSERT_TRUE(writer.write(2, second.data(), second.size()).isOk());
+    EXPECT_EQ(stats.writeCalls(), 2U);
+    EXPECT_EQ(stats.posixWriteSyscallCount(), 2U);
+    ASSERT_TRUE(writer.flush().isOk());
+    EXPECT_EQ(stats.writeCalls(), 2U);
 
     std::filesystem::remove(path);
 }

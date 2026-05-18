@@ -1,7 +1,9 @@
 #include "gridflux/storage/file_io.h"
 
 #include <fcntl.h>
+#include <unistd.h>
 
+#include <cerrno>
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -77,6 +79,23 @@ void FileIoStats::recordIoUringRetry() noexcept {
     ioUringRetryCount_.fetch_add(1, std::memory_order_relaxed);
 }
 
+void FileIoStats::recordPosixWriteSyscall(std::uint64_t bytes) noexcept {
+    posixWriteSyscallCount_.fetch_add(1, std::memory_order_relaxed);
+    posixWriteSyscallBytes_.fetch_add(bytes, std::memory_order_relaxed);
+}
+
+void FileIoStats::recordPosixWriteRetry() noexcept {
+    posixWriteRetryCount_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void FileIoStats::recordPosixWriteShort() noexcept {
+    posixWriteShortCount_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void FileIoStats::recordPosixWriteZero() noexcept {
+    posixWriteZeroCount_.fetch_add(1, std::memory_order_relaxed);
+}
+
 void FileIoStats::mergeFrom(const FileIoStats& other) noexcept {
     readCalls_.fetch_add(other.readCalls(), std::memory_order_relaxed);
     writeCalls_.fetch_add(other.writeCalls(), std::memory_order_relaxed);
@@ -93,6 +112,11 @@ void FileIoStats::mergeFrom(const FileIoStats& other) noexcept {
     ioUringPartialCompletionCount_.fetch_add(other.ioUringPartialCompletionCount(),
                                              std::memory_order_relaxed);
     ioUringRetryCount_.fetch_add(other.ioUringRetryCount(), std::memory_order_relaxed);
+    posixWriteSyscallCount_.fetch_add(other.posixWriteSyscallCount(), std::memory_order_relaxed);
+    posixWriteSyscallBytes_.fetch_add(other.posixWriteSyscallBytes(), std::memory_order_relaxed);
+    posixWriteRetryCount_.fetch_add(other.posixWriteRetryCount(), std::memory_order_relaxed);
+    posixWriteShortCount_.fetch_add(other.posixWriteShortCount(), std::memory_order_relaxed);
+    posixWriteZeroCount_.fetch_add(other.posixWriteZeroCount(), std::memory_order_relaxed);
 }
 
 FileIoContext::FileIoContext(FileIoConfig config) noexcept : config_(config) {}
@@ -102,6 +126,10 @@ const FileIoConfig& FileIoContext::config() const noexcept { return config_; }
 FileIoBackendKind FileIoContext::backend() const noexcept { return config_.backend; }
 
 common::Status FileIoContext::validateAvailable() const {
+    const common::Status configStatus = validateFileIoConfig(config_);
+    if (!configStatus.isOk()) {
+        return configStatus;
+    }
     if (fileIoBackendAvailable(config_.backend)) {
         return common::Status::ok();
     }
@@ -174,6 +202,32 @@ double FileIoStats::ioUringAverageBytesPerSqe() const noexcept {
                            static_cast<double>(sqes);
 }
 
+std::uint64_t FileIoStats::posixWriteSyscallCount() const noexcept {
+    return posixWriteSyscallCount_.load(std::memory_order_relaxed);
+}
+
+std::uint64_t FileIoStats::posixWriteSyscallBytes() const noexcept {
+    return posixWriteSyscallBytes_.load(std::memory_order_relaxed);
+}
+
+std::uint64_t FileIoStats::posixWriteRetryCount() const noexcept {
+    return posixWriteRetryCount_.load(std::memory_order_relaxed);
+}
+
+std::uint64_t FileIoStats::posixWriteShortCount() const noexcept {
+    return posixWriteShortCount_.load(std::memory_order_relaxed);
+}
+
+std::uint64_t FileIoStats::posixWriteZeroCount() const noexcept {
+    return posixWriteZeroCount_.load(std::memory_order_relaxed);
+}
+
+double FileIoStats::posixAverageBytesPerWriteSyscall() const noexcept {
+    const std::uint64_t calls = posixWriteSyscallCount();
+    return calls == 0 ? 0.0 : static_cast<double>(posixWriteSyscallBytes()) /
+                                 static_cast<double>(calls);
+}
+
 common::Result<FileIoBackendKind> parseFileIoBackendKind(std::string_view value) {
     if (value == "posix") {
         return FileIoBackendKind::Posix;
@@ -230,6 +284,42 @@ const char* fileIoAdviceName(FileIoAdvice advice) {
     return "off";
 }
 
+common::Result<PosixWriteStrategy> parsePosixWriteStrategy(std::string_view value) {
+    if (value == "auto") {
+        return PosixWriteStrategy::Auto;
+    }
+    if (value == "direct") {
+        return PosixWriteStrategy::Direct;
+    }
+    if (value == "coalesced") {
+        return PosixWriteStrategy::Coalesced;
+    }
+    return common::Status::invalidArgument(
+        "posix write strategy must be auto, direct, or coalesced");
+}
+
+const char* posixWriteStrategyName(PosixWriteStrategy strategy) {
+    switch (strategy) {
+        case PosixWriteStrategy::Auto:
+            return "auto";
+        case PosixWriteStrategy::Direct:
+            return "direct";
+        case PosixWriteStrategy::Coalesced:
+            return "coalesced";
+    }
+    return "auto";
+}
+
+PosixWriteStrategy effectivePosixWriteStrategy(const FileIoConfig& config) noexcept {
+    if (config.posixWriteStrategy == PosixWriteStrategy::Direct) {
+        return PosixWriteStrategy::Direct;
+    }
+    if (config.posixWriteStrategy == PosixWriteStrategy::Coalesced) {
+        return PosixWriteStrategy::Coalesced;
+    }
+    return config.bufferSize > 0 ? PosixWriteStrategy::Coalesced : PosixWriteStrategy::Direct;
+}
+
 bool fileIoBackendAvailable(FileIoBackendKind backend) noexcept {
     switch (backend) {
         case FileIoBackendKind::Posix:
@@ -238,6 +328,20 @@ bool fileIoBackendAvailable(FileIoBackendKind backend) noexcept {
             return GRIDFLUX_HAS_IO_URING != 0;
     }
     return false;
+}
+
+common::Status validateFileIoConfig(const FileIoConfig& config) {
+    if (config.queueDepth == 0 || config.queueDepth > 256) {
+        return common::Status::invalidArgument("file IO queue depth must be in range 1..256");
+    }
+    if (config.batchSize == 0 || config.batchSize > 256) {
+        return common::Status::invalidArgument("file IO batch size must be in range 1..256");
+    }
+    if (config.posixWriteStrategy == PosixWriteStrategy::Coalesced && config.bufferSize == 0) {
+        return common::Status::invalidArgument(
+            "posix write strategy coalesced requires --file-io-buffer-size > 0");
+    }
+    return common::Status::ok();
 }
 
 common::Status applyFileIoAdvice(const PosixFile& file, FileIoAdvice advice, std::uint64_t offset,
@@ -262,6 +366,56 @@ common::Status applyFileIoAdvice(const PosixFile& file, FileIoAdvice advice, std
         if (secondResult != 0) {
             return systemStatus("posix_fadvise", secondResult);
         }
+    }
+    return common::Status::ok();
+}
+
+common::Status posixWriteAtAllWithStats(const PosixFile& file, std::uint64_t offset,
+                                        const std::uint8_t* data, std::size_t length,
+                                        FileIoStats* stats) {
+    if (length == 0) {
+        return common::Status::ok();
+    }
+    if (!file.isValid()) {
+        return common::Status::invalidArgument("file is not open");
+    }
+    if (offset > static_cast<std::uint64_t>(std::numeric_limits<off_t>::max())) {
+        return common::Status::invalidArgument("write offset exceeds off_t range");
+    }
+
+    std::size_t completed = 0;
+    while (completed < length) {
+        const std::uint64_t currentOffset = offset + completed;
+        if (currentOffset > static_cast<std::uint64_t>(std::numeric_limits<off_t>::max())) {
+            return common::Status::invalidArgument("write offset exceeds off_t range");
+        }
+        const std::size_t requested = length - completed;
+        const ssize_t bytes =
+            ::pwrite(file.fd(), data + completed, requested, static_cast<off_t>(currentOffset));
+        if (bytes > 0) {
+            const auto written = static_cast<std::size_t>(bytes);
+            if (stats != nullptr) {
+                stats->recordPosixWriteSyscall(written);
+                if (written < requested) {
+                    stats->recordPosixWriteShort();
+                }
+            }
+            completed += written;
+            continue;
+        }
+        if (bytes < 0 && (errno == EINTR || errno == EAGAIN)) {
+            if (stats != nullptr) {
+                stats->recordPosixWriteRetry();
+            }
+            continue;
+        }
+        if (bytes < 0) {
+            return systemStatus("pwrite", errno);
+        }
+        if (stats != nullptr) {
+            stats->recordPosixWriteZero();
+        }
+        return common::Status::runtimeError("pwrite returned zero bytes");
     }
     return common::Status::ok();
 }
@@ -311,7 +465,7 @@ common::Status writeAtAll(const PosixFile& file, std::uint64_t offset, const std
     common::Status status;
     switch (context.backend()) {
         case FileIoBackendKind::Posix:
-            status = file.writeAtAll(offset, data, length);
+            status = posixWriteAtAllWithStats(file, offset, data, length, stats);
             break;
         case FileIoBackendKind::IoUring:
             status = ioUringWriteAtAll(file, offset, data, length, context.config(), stats);
@@ -327,7 +481,7 @@ common::Status writeAtAll(const PosixFile& file, std::uint64_t offset, const std
 BufferedFileWriter::BufferedFileWriter(const PosixFile& file, const FileIoConfig& config,
                                        FileIoStats* stats)
     : file_(file), context_(config), stats_(stats) {
-    if (config.bufferSize > 0) {
+    if (effectivePosixWriteStrategy(config) == PosixWriteStrategy::Coalesced) {
         buffer_.resize(static_cast<std::size_t>(config.bufferSize));
     }
 }
@@ -335,7 +489,7 @@ BufferedFileWriter::BufferedFileWriter(const PosixFile& file, const FileIoConfig
 BufferedFileWriter::BufferedFileWriter(const PosixFile& file, const FileIoContext& context,
                                        FileIoStats* stats)
     : file_(file), context_(context), stats_(stats) {
-    if (context.config().bufferSize > 0) {
+    if (effectivePosixWriteStrategy(context.config()) == PosixWriteStrategy::Coalesced) {
         buffer_.resize(static_cast<std::size_t>(context.config().bufferSize));
     }
 }
@@ -393,6 +547,14 @@ void appendFileIoStats(std::ostream& stream, const FileIoStats& stats) {
            << " stage_write_avg_bytes_per_call=" << stats.averageWriteBytesPerCall()
            << " file_io_wait_seconds=" << stats.waitSeconds()
            << " file_io_wait_bytes=" << (stats.readBytes() + stats.writeBytes())
+           << " write_call_count=" << stats.writeCalls()
+           << " write_syscall_count=" << stats.posixWriteSyscallCount()
+           << " write_retry_count=" << stats.posixWriteRetryCount()
+           << " write_short_count=" << stats.posixWriteShortCount()
+           << " write_zero_count=" << stats.posixWriteZeroCount()
+           << " write_total_bytes=" << stats.writeBytes()
+           << " write_avg_bytes_per_call=" << stats.averageWriteBytesPerCall()
+           << " write_avg_bytes_per_syscall=" << stats.posixAverageBytesPerWriteSyscall()
            << " io_uring_submit_count=" << stats.ioUringSubmitCount()
            << " io_uring_wait_count=" << stats.ioUringWaitCount()
            << " io_uring_completion_count=" << stats.ioUringCompletionCount()

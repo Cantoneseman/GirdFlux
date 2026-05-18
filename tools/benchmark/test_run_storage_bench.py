@@ -36,16 +36,24 @@ backend = arg("--file-io-backend", "posix")
 queue_depth = arg("--file-io-queue-depth", "1")
 batch_size = arg("--file-io-batch-size", "1")
 advice = arg("--file-io-advice", "off")
+file_io_buffer = arg("--file-io-buffer-size", "0")
+strategy = arg("--posix-write-strategy", "auto")
+effective = "coalesced" if strategy == "coalesced" or (strategy == "auto" and file_io_buffer != "0") else "direct"
 for iteration in range(int(iterations)):
     print(
         "storage_bench "
         f"operation={mode} bytes={bytes_value} iterations={iterations} "
         f"buffer_size={buffer_size} preallocate={preallocate} "
-        f"file_io_backend={backend} file_io_queue_depth={queue_depth} "
-        f"file_io_batch_size={batch_size} file_io_advice={advice} "
+        f"file_io_backend={backend} file_io_buffer_size={file_io_buffer} "
+        f"file_io_queue_depth={queue_depth} file_io_batch_size={batch_size} "
+        f"file_io_advice={advice} posix_write_strategy={strategy} "
+        f"posix_write_strategy_effective={effective} "
         f"iteration={iteration} aggregate=false elapsed_seconds=0.010000 "
         "throughput_gbps=1.000000 read_call_count=1 write_call_count=1 "
+        "write_syscall_count=1 write_retry_count=0 write_short_count=0 "
+        "write_zero_count=0 write_total_bytes=1024 "
         "avg_read_bytes_per_call=1024 avg_write_bytes_per_call=1024 "
+        "write_avg_bytes_per_syscall=1024 "
         "file_io_wait_seconds=0.001000 io_uring_submit_count=2 "
         "io_uring_wait_count=2 io_uring_completion_count=2 io_uring_sqe_count=2 "
         "io_uring_partial_completion_count=0 io_uring_retry_count=0 "
@@ -55,11 +63,16 @@ print(
     "storage_bench "
     f"operation={mode} bytes={bytes_value} iterations={iterations} "
     f"buffer_size={buffer_size} preallocate={preallocate} "
-    f"file_io_backend={backend} file_io_queue_depth={queue_depth} "
-    f"file_io_batch_size={batch_size} file_io_advice={advice} "
+    f"file_io_backend={backend} file_io_buffer_size={file_io_buffer} "
+    f"file_io_queue_depth={queue_depth} file_io_batch_size={batch_size} "
+    f"file_io_advice={advice} posix_write_strategy={strategy} "
+    f"posix_write_strategy_effective={effective} "
     "iteration=aggregate aggregate=true elapsed_seconds=0.010000 "
     "throughput_gbps=1.000000 read_call_count=1 write_call_count=1 "
+    "write_syscall_count=1 write_retry_count=0 write_short_count=0 "
+    "write_zero_count=0 write_total_bytes=1024 "
     "avg_read_bytes_per_call=1024 avg_write_bytes_per_call=1024 "
+    "write_avg_bytes_per_syscall=1024 "
     "file_io_wait_seconds=0.001000 io_uring_submit_count=2 "
     "io_uring_wait_count=2 io_uring_completion_count=2 io_uring_sqe_count=2 "
     "io_uring_partial_completion_count=0 io_uring_retry_count=0 "
@@ -85,8 +98,8 @@ elif command == "hostname":
 elif command == "uname -r":
     print("5.15.0-fake")
 elif "gridflux-storage-bench" in command:
-    print("storage_bench operation=write bytes=1024 iterations=1 buffer_size=1024 preallocate=off file_io_backend=posix file_io_queue_depth=1 file_io_batch_size=1 file_io_advice=off iteration=0 aggregate=false elapsed_seconds=0.010000 throughput_gbps=1.000000 read_call_count=1 write_call_count=1 avg_read_bytes_per_call=1024 avg_write_bytes_per_call=1024 file_io_wait_seconds=0.001000 io_uring_submit_count=2 io_uring_wait_count=2 io_uring_completion_count=2 io_uring_sqe_count=2 io_uring_partial_completion_count=0 io_uring_retry_count=0 io_uring_avg_bytes_per_sqe=512 result=pass")
-    print("storage_bench operation=write bytes=1024 iterations=1 buffer_size=1024 preallocate=off file_io_backend=posix file_io_queue_depth=1 file_io_batch_size=1 file_io_advice=off iteration=aggregate aggregate=true elapsed_seconds=0.010000 throughput_gbps=1.000000 read_call_count=1 write_call_count=1 avg_read_bytes_per_call=1024 avg_write_bytes_per_call=1024 file_io_wait_seconds=0.001000 io_uring_submit_count=2 io_uring_wait_count=2 io_uring_completion_count=2 io_uring_sqe_count=2 io_uring_partial_completion_count=0 io_uring_retry_count=0 io_uring_avg_bytes_per_sqe=512 result=pass")
+    print("storage_bench operation=write bytes=1024 iterations=1 buffer_size=1024 preallocate=off file_io_backend=posix file_io_buffer_size=0 file_io_queue_depth=1 file_io_batch_size=1 file_io_advice=off posix_write_strategy=auto posix_write_strategy_effective=direct iteration=0 aggregate=false elapsed_seconds=0.010000 throughput_gbps=1.000000 read_call_count=1 write_call_count=1 write_syscall_count=1 write_retry_count=0 write_short_count=0 write_zero_count=0 write_total_bytes=1024 avg_read_bytes_per_call=1024 avg_write_bytes_per_call=1024 write_avg_bytes_per_syscall=1024 file_io_wait_seconds=0.001000 io_uring_submit_count=2 io_uring_wait_count=2 io_uring_completion_count=2 io_uring_sqe_count=2 io_uring_partial_completion_count=0 io_uring_retry_count=0 io_uring_avg_bytes_per_sqe=512 result=pass")
+    print("storage_bench operation=write bytes=1024 iterations=1 buffer_size=1024 preallocate=off file_io_backend=posix file_io_buffer_size=0 file_io_queue_depth=1 file_io_batch_size=1 file_io_advice=off posix_write_strategy=auto posix_write_strategy_effective=direct iteration=aggregate aggregate=true elapsed_seconds=0.010000 throughput_gbps=1.000000 read_call_count=1 write_call_count=1 write_syscall_count=1 write_retry_count=0 write_short_count=0 write_zero_count=0 write_total_bytes=1024 avg_read_bytes_per_call=1024 avg_write_bytes_per_call=1024 write_avg_bytes_per_syscall=1024 file_io_wait_seconds=0.001000 io_uring_submit_count=2 io_uring_wait_count=2 io_uring_completion_count=2 io_uring_sqe_count=2 io_uring_partial_completion_count=0 io_uring_retry_count=0 io_uring_avg_bytes_per_sqe=512 result=pass")
 sys.exit(0)
 """
 

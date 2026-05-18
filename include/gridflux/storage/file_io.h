@@ -27,12 +27,19 @@ enum class FileIoAdvice {
     SequentialDontNeed,
 };
 
+enum class PosixWriteStrategy {
+    Auto,
+    Direct,
+    Coalesced,
+};
+
 struct FileIoConfig {
     FileIoBackendKind backend = FileIoBackendKind::Posix;
     std::uint64_t bufferSize = 0;
     std::uint64_t queueDepth = 1;
     std::uint64_t batchSize = 1;
     FileIoAdvice advice = FileIoAdvice::Off;
+    PosixWriteStrategy posixWriteStrategy = PosixWriteStrategy::Auto;
 };
 
 class FileIoContext {
@@ -57,6 +64,10 @@ class FileIoStats {
     void recordIoUringCompletion(std::uint64_t bytes) noexcept;
     void recordIoUringPartialCompletion() noexcept;
     void recordIoUringRetry() noexcept;
+    void recordPosixWriteSyscall(std::uint64_t bytes) noexcept;
+    void recordPosixWriteRetry() noexcept;
+    void recordPosixWriteShort() noexcept;
+    void recordPosixWriteZero() noexcept;
     void mergeFrom(const FileIoStats& other) noexcept;
 
     [[nodiscard]] std::uint64_t readCalls() const noexcept;
@@ -74,6 +85,12 @@ class FileIoStats {
     [[nodiscard]] std::uint64_t ioUringPartialCompletionCount() const noexcept;
     [[nodiscard]] std::uint64_t ioUringRetryCount() const noexcept;
     [[nodiscard]] double ioUringAverageBytesPerSqe() const noexcept;
+    [[nodiscard]] std::uint64_t posixWriteSyscallCount() const noexcept;
+    [[nodiscard]] std::uint64_t posixWriteSyscallBytes() const noexcept;
+    [[nodiscard]] std::uint64_t posixWriteRetryCount() const noexcept;
+    [[nodiscard]] std::uint64_t posixWriteShortCount() const noexcept;
+    [[nodiscard]] std::uint64_t posixWriteZeroCount() const noexcept;
+    [[nodiscard]] double posixAverageBytesPerWriteSyscall() const noexcept;
 
    private:
     std::atomic<std::uint64_t> readCalls_{0};
@@ -88,12 +105,21 @@ class FileIoStats {
     std::atomic<std::uint64_t> ioUringCompletionBytes_{0};
     std::atomic<std::uint64_t> ioUringPartialCompletionCount_{0};
     std::atomic<std::uint64_t> ioUringRetryCount_{0};
+    std::atomic<std::uint64_t> posixWriteSyscallCount_{0};
+    std::atomic<std::uint64_t> posixWriteSyscallBytes_{0};
+    std::atomic<std::uint64_t> posixWriteRetryCount_{0};
+    std::atomic<std::uint64_t> posixWriteShortCount_{0};
+    std::atomic<std::uint64_t> posixWriteZeroCount_{0};
 };
 
 [[nodiscard]] common::Result<FileIoBackendKind> parseFileIoBackendKind(std::string_view value);
 [[nodiscard]] const char* fileIoBackendName(FileIoBackendKind backend);
 [[nodiscard]] common::Result<FileIoAdvice> parseFileIoAdvice(std::string_view value);
 [[nodiscard]] const char* fileIoAdviceName(FileIoAdvice advice);
+[[nodiscard]] common::Result<PosixWriteStrategy> parsePosixWriteStrategy(std::string_view value);
+[[nodiscard]] const char* posixWriteStrategyName(PosixWriteStrategy strategy);
+[[nodiscard]] PosixWriteStrategy effectivePosixWriteStrategy(const FileIoConfig& config) noexcept;
+[[nodiscard]] common::Status validateFileIoConfig(const FileIoConfig& config);
 [[nodiscard]] bool fileIoBackendAvailable(FileIoBackendKind backend) noexcept;
 [[nodiscard]] common::Status applyFileIoAdvice(const PosixFile& file, FileIoAdvice advice,
                                                std::uint64_t offset, std::uint64_t length);

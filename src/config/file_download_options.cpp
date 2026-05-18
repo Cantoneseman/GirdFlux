@@ -188,6 +188,12 @@ common::Result<FileDownloadOptions> parseFileDownloadOptions(int argc, const cha
                 return parsed.status();
             }
             options.fileIo.advice = parsed.value();
+        } else if (option == "--posix-write-strategy") {
+            auto parsed = storage::parsePosixWriteStrategy(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.fileIo.posixWriteStrategy = parsed.value();
         } else if (option == "--transfer-id") {
             if (value.empty()) {
                 return common::Status::invalidArgument("--transfer-id must not be empty");
@@ -230,6 +236,10 @@ common::Result<FileDownloadOptions> parseFileDownloadOptions(int argc, const cha
     if (hasFileIoQueueDepth && !hasFileIoBatchSize) {
         options.fileIo.batchSize = options.fileIo.queueDepth;
     }
+    const common::Status fileIoStatus = storage::validateFileIoConfig(options.fileIo);
+    if (!fileIoStatus.isOk()) {
+        return fileIoStatus;
+    }
     return options;
 }
 
@@ -246,6 +256,7 @@ std::string fileDownloadUsage(const char* programName) {
            "[--file-io-backend <posix|io_uring>] [--file-io-buffer-size <bytes>] "
            "[--file-io-queue-depth <N>] [--file-io-batch-size <N>] "
            "[--file-io-advice <off|sequential|noreuse|dontneed|sequential_dontneed>] "
+           "[--posix-write-strategy <auto|direct|coalesced>] "
            "[--overwrite] [--resume] "
            "[--max-chunks <N>]";
 }
