@@ -45,11 +45,36 @@ row is reported separately.
 
 - Markdown report: `docs/release/ALPHA_RELEASE_GATE.md`
 - JSON report: `tools/perf/results/<timestamp>_alpha-release-gate.json`
+- Artifact manifest: `tools/perf/results/<timestamp>_alpha-artifacts.json`
 - Logs: `tools/perf/results/<timestamp>_alpha-release-gate/`
 
-The gate can sync selected release artifacts to the remote tree without
-deleting remote files, then runs `check_remote_artifact_sync.py` to verify
-hashes and sidecar log references.
+Full gate writes an artifact manifest and syncs only those required artifacts
+to the remote tree without deleting remote files. The manifest includes release
+docs, release helper scripts, gate JSON, private matrix raw/summary CSV, and
+CSV-referenced sidecar logs. `AGENTS.md`, build outputs, secrets, keys, tokens,
+and password-like paths are rejected.
+
+Manual verification:
+
+```bash
+python3 tools/release/sync_remote_artifacts.py \
+  --manifest tools/perf/results/<timestamp>_alpha-artifacts.json \
+  --remote <remote> \
+  --local-root /root/projects/GridFlux \
+  --remote-root <remote-root> \
+  --verify-only \
+  --json-output tools/perf/results/<timestamp>_artifact-verify.json
+```
+
+Dry-run and sync modes:
+
+```bash
+python3 tools/release/sync_remote_artifacts.py --manifest <manifest> --remote <remote> --dry-run
+python3 tools/release/sync_remote_artifacts.py --manifest <manifest> --remote <remote> --sync
+```
+
+`check_remote_artifact_sync.py --manifest <manifest>` remains available as a
+verify-only checker for release reports and CI-style gates.
 
 ## Public Hygiene
 

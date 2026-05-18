@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import fcntl
 import hashlib
 import json
 import os
@@ -15,6 +16,8 @@ import sys
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
+
+import sync_remote_artifacts
 
 
 EXCLUDED_HASH_PARTS = {
@@ -52,6 +55,20 @@ def compact_timestamp() -> str:
 
 def timestamp_utc() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def acquire_gate_lock(results_dir: Path):
+    lock_path = results_dir / ".alpha-release-gate.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("w", encoding="utf-8")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        handle.close()
+        raise SystemExit(f"another alpha release gate is already running: {lock_path}") from exc
+    handle.write(f"pid={os.getpid()} timestamp={timestamp_utc()}\n")
+    handle.flush()
+    return handle
 
 
 def is_build_like(part: str) -> bool:
@@ -287,6 +304,79 @@ def csv_referenced_artifacts(csv_text: str, root: Path) -> list[str]:
     return sorted(result)
 
 
+def release_doc_paths(root: Path) -> list[str]:
+    return sorted(path.relative_to(root).as_posix() for path in (root / "docs" / "release").glob("*.md"))
+
+
+def release_tool_paths(root: Path) -> list[str]:
+    return sorted(path.relative_to(root).as_posix() for path in (root / "tools" / "release").glob("*.py"))
+
+
+def collect_alpha_artifact_paths(
+    *,
+    root: Path,
+    gate_json: Path,
+    matrix_raw: str,
+    matrix_summary: str,
+) -> list[str]:
+    paths = {
+        "INDEX.md",
+        "docs/ROADMAP.md",
+        "docs/PROJECT_STATE.md",
+        "docs/perf/README.md",
+        relative_to_root(str(gate_json), root),
+        *release_doc_paths(root),
+        *release_tool_paths(root),
+    }
+    if matrix_raw:
+        paths.update(csv_referenced_artifacts(relative_to_root(matrix_raw, root), root))
+    if matrix_summary:
+        paths.update(csv_referenced_artifacts(relative_to_root(matrix_summary, root), root))
+
+    result: list[str] = []
+    for path in sorted(path for path in paths if path):
+        try:
+            normalized = sync_remote_artifacts.validate_artifact_path(path)
+            if (root / normalized).is_file():
+                result.append(normalized)
+        except ValueError:
+            continue
+    return result
+
+
+def write_alpha_artifact_manifest(
+    *,
+    path: Path,
+    root: Path,
+    source_hash: str,
+    remote_required: bool,
+    artifact_paths: list[str],
+) -> dict[str, object]:
+    artifacts = [
+        asdict(sync_remote_artifacts.manifest_entry_for(root, artifact_path, required=True))
+        for artifact_path in artifact_paths
+    ]
+    manifest = {
+        "timestamp": timestamp_utc(),
+        "source_tree_hash": source_hash,
+        "remote_required": remote_required,
+        "artifacts": artifacts,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return manifest
+
+
+def read_json_if_exists(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
 def write_markdown_report(path: Path, report: dict[str, object]) -> None:
     steps = report["steps"]  # type: ignore[index]
     assert isinstance(steps, list)
@@ -332,6 +422,36 @@ def write_markdown_report(path: Path, report: dict[str, object]) -> None:
                     )
     else:
         lines.append("- Not run in quick mode.")
+    artifact_manifest = report.get("artifact_manifest", {})
+    artifact_sync = report.get("artifact_sync_summary", {})
+    artifact_verify = report.get("artifact_verify_summary", {})
+    lines.extend(["", "## Artifact Sync", ""])
+    if isinstance(artifact_manifest, dict) and artifact_manifest:
+        lines.extend(
+            [
+                f"- Manifest: `{artifact_manifest.get('path', '')}`",
+                f"- Artifacts: `{artifact_manifest.get('artifact_count', '')}`",
+            ]
+        )
+    else:
+        lines.append("- Manifest: not generated.")
+    if isinstance(artifact_sync, dict) and artifact_sync:
+        lines.append(
+            "- Sync: "
+            f"checked=`{artifact_sync.get('checked', '')}` "
+            f"synced=`{artifact_sync.get('synced', '')}` "
+            f"missing=`{artifact_sync.get('missing', '')}` "
+            f"mismatch=`{artifact_sync.get('mismatch', '')}` "
+            f"status=`{artifact_sync.get('status', '')}`"
+        )
+    if isinstance(artifact_verify, dict) and artifact_verify:
+        lines.append(
+            "- Verify: "
+            f"checked=`{artifact_verify.get('checked', artifact_verify.get('total', ''))}` "
+            f"missing=`{artifact_verify.get('missing', '')}` "
+            f"mismatch=`{artifact_verify.get('mismatch', '')}` "
+            f"status=`{artifact_verify.get('status', '')}`"
+        )
     lines.extend(
         [
             "",
@@ -390,11 +510,13 @@ def main() -> int:
     root = repo_root()
     results_dir = root / args.results_dir
     results_dir.mkdir(parents=True, exist_ok=True)
+    gate_lock = acquire_gate_lock(results_dir)
     timestamp = compact_timestamp()
     log_dir = results_dir / f"{timestamp}_alpha-release-gate"
     log_dir.mkdir(parents=True, exist_ok=True)
     report_path = root / "docs" / "release" / "ALPHA_RELEASE_GATE.md"
     json_path = results_dir / f"{timestamp}_alpha-release-gate.json"
+    artifact_manifest_path = results_dir / f"{timestamp}_alpha-artifacts.json"
 
     steps: list[StepResult] = []
     matrix_raw = ""
@@ -499,24 +621,18 @@ def main() -> int:
 
     residual = run_remote_process_check(args.remote)
 
-    artifact_paths = [
-        "INDEX.md",
-        "docs/ROADMAP.md",
-        "docs/PROJECT_STATE.md",
-        "docs/release/ALPHA_RELEASE_GATE.md",
-        "docs/release/ALPHA_READINESS.md",
-        relative_to_root(str(json_path), root),
-    ]
-    if matrix_raw:
-        artifact_paths.extend(csv_referenced_artifacts(relative_to_root(matrix_raw, root), root))
-    if matrix_summary:
-        artifact_paths.extend(csv_referenced_artifacts(relative_to_root(matrix_summary, root), root))
-    artifact_paths = sorted({path for path in artifact_paths if path})
+    source_hash = source_tree_hash(root)
+    artifact_paths = collect_alpha_artifact_paths(
+        root=root,
+        gate_json=json_path,
+        matrix_raw=matrix_raw,
+        matrix_summary=matrix_summary,
+    )
 
     report: dict[str, object] = {
         "timestamp": timestamp_utc(),
         "mode": "full" if args.full else "quick",
-        "source_tree_hash": source_tree_hash(root),
+        "source_tree_hash": source_hash,
         "git": git_status(root),
         "steps": [asdict(step) for step in steps],
         "ctest": {
@@ -527,6 +643,9 @@ def main() -> int:
         "private_matrix": private_matrix,
         "hygiene": next((asdict(step) for step in steps if step.name == "public_export_hygiene"), {}),
         "artifact_sync": {},
+        "artifact_manifest": {},
+        "artifact_sync_summary": {},
+        "artifact_verify_summary": {},
         "residual_process_check": residual,
         "failures": [],
         "passed": False,
@@ -534,10 +653,42 @@ def main() -> int:
     write_markdown_report(report_path, report)
     json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    if args.remote:
-        sync_step = sync_artifacts(args.remote, args.remote_root, root, artifact_paths)
-        steps.append(sync_step)
+    if args.full:
+        manifest_data = write_alpha_artifact_manifest(
+            path=artifact_manifest_path,
+            root=root,
+            source_hash=source_hash,
+            remote_required=bool(args.remote),
+            artifact_paths=artifact_paths,
+        )
+        report["artifact_manifest"] = {
+            "path": relative_to_root(str(artifact_manifest_path), root),
+            "artifact_count": len(manifest_data.get("artifacts", [])),
+            "remote_required": bool(args.remote),
+        }
+
+    if args.remote and args.full:
         sync_json = log_dir / "remote-artifact-sync.json"
+        sync_command = [
+            sys.executable,
+            "tools/release/sync_remote_artifacts.py",
+            "--manifest",
+            relative_to_root(str(artifact_manifest_path), root),
+            "--remote",
+            args.remote,
+            "--local-root",
+            str(root),
+            "--remote-root",
+            args.remote_root,
+            "--sync",
+            "--json-output",
+            str(sync_json),
+        ]
+        sync_step = run_step("remote_artifact_sync", sync_command, log_dir, cwd=root)
+        steps.append(sync_step)
+        report["artifact_sync_summary"] = read_json_if_exists(sync_json)
+
+        sync_verify_json = log_dir / "remote-artifact-verify.json"
         sync_command = [
             sys.executable,
             "tools/release/check_remote_artifact_sync.py",
@@ -547,36 +698,199 @@ def main() -> int:
             str(root),
             "--remote-root",
             args.remote_root,
+            "--manifest",
+            relative_to_root(str(artifact_manifest_path), root),
             "--json-output",
-            str(sync_json),
+            str(sync_verify_json),
         ]
-        for path in artifact_paths:
-            sync_command.extend(["--path", path])
-        if matrix_raw:
-            sync_command.extend(["--csv", relative_to_root(matrix_raw, root)])
-        if matrix_summary:
-            sync_command.extend(["--csv", relative_to_root(matrix_summary, root)])
         sync_check = run_step("remote_artifact_sync_check", sync_command, log_dir, cwd=root)
         steps.append(sync_check)
         report["artifact_sync"] = {
-            "rsync": asdict(sync_step),
+            "sync": asdict(sync_step),
             "check": asdict(sync_check),
             "json": str(sync_json),
+            "verify_json": str(sync_verify_json),
         }
+        report["artifact_verify_summary"] = read_json_if_exists(sync_verify_json)
 
     failures = [step.name for step in steps if step.status != "pass"]
     if residual.get("local") or residual.get("remote"):
         failures.append("residual_process_check")
     if private_matrix and private_matrix.get("status") == "fail":
         failures.append("private_matrix")
+    artifact_sync_summary = report.get("artifact_sync_summary", {})
+    artifact_verify_summary = report.get("artifact_verify_summary", {})
+    if isinstance(artifact_sync_summary, dict) and artifact_sync_summary.get("status") not in {None, "pass"}:
+        failures.append("artifact_sync_summary")
+    if isinstance(artifact_verify_summary, dict) and artifact_verify_summary.get("status") not in {None, "pass"}:
+        failures.append("artifact_verify_summary")
     report["steps"] = [asdict(step) for step in steps]
     report["failures"] = failures
     report["passed"] = not failures
     write_markdown_report(report_path, report)
     json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    if args.full:
+        artifact_paths = collect_alpha_artifact_paths(
+            root=root,
+            gate_json=json_path,
+            matrix_raw=matrix_raw,
+            matrix_summary=matrix_summary,
+        )
+        manifest_data = write_alpha_artifact_manifest(
+            path=artifact_manifest_path,
+            root=root,
+            source_hash=source_hash,
+            remote_required=bool(args.remote),
+            artifact_paths=artifact_paths,
+        )
+        report["artifact_manifest"] = {
+            "path": relative_to_root(str(artifact_manifest_path), root),
+            "artifact_count": len(manifest_data.get("artifacts", [])),
+            "remote_required": bool(args.remote),
+        }
+        json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        write_alpha_artifact_manifest(
+            path=artifact_manifest_path,
+            root=root,
+            source_hash=source_hash,
+            remote_required=bool(args.remote),
+            artifact_paths=artifact_paths,
+        )
+        if args.remote:
+            final_sync_json = log_dir / "remote-artifact-final-sync.json"
+            final_sync = run_step(
+                "remote_artifact_final_sync",
+                [
+                    sys.executable,
+                    "tools/release/sync_remote_artifacts.py",
+                    "--manifest",
+                    relative_to_root(str(artifact_manifest_path), root),
+                    "--remote",
+                    args.remote,
+                    "--local-root",
+                    str(root),
+                    "--remote-root",
+                    args.remote_root,
+                    "--sync",
+                    "--json-output",
+                    str(final_sync_json),
+                ],
+                log_dir,
+                cwd=root,
+            )
+            steps.append(final_sync)
+            final_verify_json = log_dir / "remote-artifact-final-verify.json"
+            final_verify = run_step(
+                "remote_artifact_final_verify",
+                [
+                    sys.executable,
+                    "tools/release/check_remote_artifact_sync.py",
+                    "--remote",
+                    args.remote,
+                    "--local-root",
+                    str(root),
+                    "--remote-root",
+                    args.remote_root,
+                    "--manifest",
+                    relative_to_root(str(artifact_manifest_path), root),
+                    "--json-output",
+                    str(final_verify_json),
+                ],
+                log_dir,
+                cwd=root,
+            )
+            steps.append(final_verify)
+            report["artifact_sync_summary"] = read_json_if_exists(final_sync_json)
+            report["artifact_verify_summary"] = read_json_if_exists(final_verify_json)
+            report["artifact_sync"] = {
+                "sync": asdict(final_sync),
+                "check": asdict(final_verify),
+                "json": str(final_sync_json),
+                "verify_json": str(final_verify_json),
+            }
+            failures = [step.name for step in steps if step.status != "pass"]
+            if residual.get("local") or residual.get("remote"):
+                failures.append("residual_process_check")
+            if private_matrix and private_matrix.get("status") == "fail":
+                failures.append("private_matrix")
+            artifact_sync_summary = report.get("artifact_sync_summary", {})
+            artifact_verify_summary = report.get("artifact_verify_summary", {})
+            if isinstance(artifact_sync_summary, dict) and artifact_sync_summary.get("status") != "pass":
+                failures.append("artifact_sync_summary")
+            if isinstance(artifact_verify_summary, dict) and artifact_verify_summary.get("status") != "pass":
+                failures.append("artifact_verify_summary")
+            report["steps"] = [asdict(step) for step in steps]
+            report["failures"] = failures
+            report["passed"] = not failures
+            write_markdown_report(report_path, report)
+            json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            write_alpha_artifact_manifest(
+                path=artifact_manifest_path,
+                root=root,
+                source_hash=source_hash,
+                remote_required=True,
+                artifact_paths=collect_alpha_artifact_paths(
+                    root=root,
+                    gate_json=json_path,
+                    matrix_raw=matrix_raw,
+                    matrix_summary=matrix_summary,
+                ),
+            )
+            post_sync_json = log_dir / "remote-artifact-post-report-sync.json"
+            post_sync = run_step(
+                "remote_artifact_post_report_sync",
+                [
+                    sys.executable,
+                    "tools/release/sync_remote_artifacts.py",
+                    "--manifest",
+                    relative_to_root(str(artifact_manifest_path), root),
+                    "--remote",
+                    args.remote,
+                    "--local-root",
+                    str(root),
+                    "--remote-root",
+                    args.remote_root,
+                    "--sync",
+                    "--json-output",
+                    str(post_sync_json),
+                ],
+                log_dir,
+                cwd=root,
+            )
+            post_verify_json = log_dir / "remote-artifact-post-report-verify.json"
+            post_verify = run_step(
+                "remote_artifact_post_report_verify",
+                [
+                    sys.executable,
+                    "tools/release/check_remote_artifact_sync.py",
+                    "--remote",
+                    args.remote,
+                    "--local-root",
+                    str(root),
+                    "--remote-root",
+                    args.remote_root,
+                    "--manifest",
+                    relative_to_root(str(artifact_manifest_path), root),
+                    "--json-output",
+                    str(post_verify_json),
+                ],
+                log_dir,
+                cwd=root,
+            )
+            if post_sync.status != "pass" or post_verify.status != "pass":
+                steps.extend([post_sync, post_verify])
+                report["steps"] = [asdict(step) for step in steps]
+                report["failures"] = [step.name for step in steps if step.status != "pass"]
+                report["passed"] = False
+                write_markdown_report(report_path, report)
+                json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"alpha_release_gate_report={report_path}")
     print(f"alpha_release_gate_json={json_path}")
+    if args.full:
+        print(f"alpha_artifact_manifest={artifact_manifest_path}")
     print(f"result={'pass' if report['passed'] else 'fail'}")
+    gate_lock.close()
     return 0 if report["passed"] else 1
 
 

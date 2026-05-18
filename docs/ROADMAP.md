@@ -272,6 +272,16 @@
 
 状态：已完成。本机与<redacted>二默认 Debug full CTest 均为 `145/145` passed；`build-io-uring-real` Release full CTest 均为 `145/145` passed，真实 io_uring smoke 为 `Passed`。`run_alpha_release_gate.py --quick` 和 `--full` 均通过；full gate private baseline `24/24` pass，sha256 全一致，summary `fail_count=0`。Release artifact sync 校验 `152` 个 artifact（含 raw/summary CSV 和 sidecar logs）通过。alpha-ready 表示 framed STOR/RETR/resume/checksum/metadata 可演示，不代表 beta/production。
 
+**4N 远端同步闭环硬化与 alpha release 运维收口**
+
+- full alpha gate 生成 `tools/perf/results/<timestamp>_alpha-artifacts.json`，记录 required release artifact 的相对路径、size、sha256、类型和同步要求。
+- 新增 `tools/release/sync_remote_artifacts.py`，支持 `--verify-only`、`--dry-run`、`--sync` 三种模式；只同步 manifest 中安全、required、缺失或 hash 不一致的 artifact，不删除远端文件。
+- `check_remote_artifact_sync.py` 增加 `--manifest` 输入，复用 artifact manifest 做最终 hash verify。
+- `run_alpha_release_gate.py --full` 接入 manifest 生成、sync+verify 和最终 gate JSON/Markdown 中的 artifact sync summary。
+- Release helper 测试覆盖 manifest 安全路径、missing/mismatch 检测、sync 修复、路径逃逸拒绝和 CSV sidecar log 纳入校验。
+
+状态：已完成。Phase 4N 是 release/ops hardening，不改变默认传输策略或可靠性语义；alpha release gate 现在要求<redacted>一和<redacted>二对 manifest 中所有 required artifact hash 一致，避免文档、gate JSON、CSV 或 sidecar logs 漏同步。alpha-ready 仍不代表 beta/production。
+
 **产出：** 多后端可切换引擎，各场景性能数据。
 
 ---
@@ -357,6 +367,7 @@
 | 2026-05-17 | Phase 4K 不默认启用 POSIX coalesced write strategy | 1GiB repeat=3 显示 coalescing 的收益不贯穿 STOR/RETR 与 crc32c/none；默认继续 `auto` + `file_io_buffer_size=0`，`direct`/`coalesced` 仅保留 opt-in 诊断 |
 | 2026-05-18 | Phase 4L 不基于高波动样本改变默认或推荐强 opt-in | repeat=5 1GiB 私网矩阵 21/48 summary rows spread 超过 20%；STOR 仍是 temp write/writeback 主导，RETR 在 sender send 与 receiver write 间切换，默认继续保持 POSIX/full/every_n_chunks/auto |
 | 2026-05-18 | Phase 4M 以 alpha release gate 收敛发布质量 | 不再堆性能开关；用 quick/full gate、public hygiene、artifact sync 和 alpha readiness 报告固定可复现验收流程，默认配置与传输语义保持不变 |
+| 2026-05-18 | Phase 4N 以 alpha artifact manifest 作为远端同步事实源 | full gate 结束时必须 sync+verify manifest 中的 release docs、gate JSON、raw/summary CSV 和 sidecar logs，防止<redacted>二停留在非最终发布状态 |
 
 ---
 

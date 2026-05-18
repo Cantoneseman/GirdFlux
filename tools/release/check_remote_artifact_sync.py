@@ -14,6 +14,8 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
+import sync_remote_artifacts
+
 
 LOG_FIELD_SUFFIX = "_log"
 KNOWN_LOG_FIELDS = {
@@ -69,12 +71,15 @@ def normalize_artifact_path(value: str, local_root: Path) -> str | None:
     path = Path(value)
     if path.is_absolute():
         try:
-            return str(path.resolve().relative_to(local_root))
+            return sync_remote_artifacts.validate_artifact_path(path.resolve().relative_to(local_root).as_posix())
         except ValueError:
             return None
     if ".." in path.parts:
         return None
-    return str(path)
+    try:
+        return sync_remote_artifacts.validate_artifact_path(path.as_posix())
+    except ValueError:
+        return None
 
 
 def paths_from_csv(csv_path: Path, local_root: Path) -> set[str]:
@@ -153,32 +158,96 @@ def check_artifacts(
     return checks
 
 
+def checks_from_manifest(
+    *,
+    manifest_path: Path,
+    remote: str,
+    local_root: Path,
+    remote_root: str,
+) -> list[ArtifactCheck]:
+    _, artifacts = sync_remote_artifacts.load_manifest(manifest_path, local_root)
+    statuses = sync_remote_artifacts.check_artifacts(
+        artifacts=artifacts,
+        local_root=local_root,
+        remote=remote,
+        remote_root=remote_root,
+    )
+    return [
+        ArtifactCheck(
+            path=status.path,
+            local_exists=status.local_exists,
+            remote_exists=status.remote_exists,
+            local_sha256=status.local_sha256,
+            remote_sha256=status.remote_sha256,
+            status="match" if status.status == "match" else status.status,
+        )
+        for status in statuses
+    ]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check release artifact sync between local and remote trees.")
     parser.add_argument("--remote", required=True)
     parser.add_argument("--local-root", default=".")
     parser.add_argument("--remote-root", default="/root/projects/GridFlux")
+    parser.add_argument("--manifest", help="alpha artifact manifest path")
     parser.add_argument("--path", action="append", default=[], help="relative artifact path to verify")
     parser.add_argument("--csv", action="append", default=[], help="CSV path; referenced *_log files are verified too")
     parser.add_argument("--json-output", help="optional machine-readable report path")
     args = parser.parse_args()
 
     local_root = Path(args.local_root).resolve()
-    relative_paths = collect_artifact_paths(args.path, args.csv, local_root)
-    checks = check_artifacts(
-        remote=args.remote,
-        local_root=local_root,
-        remote_root=args.remote_root,
-        relative_paths=relative_paths,
-    )
+    if args.manifest:
+        manifest_path = Path(args.manifest)
+        if not manifest_path.is_absolute():
+            manifest_path = local_root / manifest_path
+        try:
+            checks = checks_from_manifest(
+                manifest_path=manifest_path.resolve(),
+                remote=args.remote,
+                local_root=local_root,
+                remote_root=args.remote_root,
+            )
+        except Exception as exc:  # noqa: BLE001 - command-line report.
+            report = {
+                "remote": args.remote,
+                "local_root": str(local_root),
+                "remote_root": args.remote_root,
+                "checked": 0,
+                "missing": 0,
+                "mismatch": 0,
+                "status": "fail",
+                "error": str(exc),
+                "artifacts": [],
+            }
+            if args.json_output:
+                output = Path(args.json_output)
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            print(f"remote artifact sync check failed: {exc}", file=sys.stderr)
+            return 1
+    else:
+        relative_paths = collect_artifact_paths(args.path, args.csv, local_root)
+        checks = check_artifacts(
+            remote=args.remote,
+            local_root=local_root,
+            remote_root=args.remote_root,
+            relative_paths=relative_paths,
+        )
     failures = [check for check in checks if check.status != "match"]
+    missing = sum(1 for check in checks if check.status in {"missing_remote", "missing"})
+    mismatch = sum(1 for check in checks if check.status == "mismatch")
 
     report = {
         "remote": args.remote,
         "local_root": str(local_root),
         "remote_root": args.remote_root,
         "total": len(checks),
+        "checked": len(checks),
+        "missing": missing,
+        "mismatch": mismatch,
         "failures": len(failures),
+        "status": "pass" if not failures else "fail",
         "artifacts": [asdict(check) for check in checks],
     }
     if args.json_output:

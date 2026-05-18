@@ -296,6 +296,10 @@ if(GRIDFLUX_BUILD_TESTS)
         COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/release/test_alpha_release_helpers.py
     )
     add_test(
+        NAME gridflux_alpha_artifact_sync_behavior
+        COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/release/test_alpha_release_helpers.py
+    )
+    add_test(
         NAME gridflux_storage_bench_wrapper_behavior
         COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/benchmark/test_run_storage_bench.py --script ${PROJECT_SOURCE_DIR}/tools/benchmark/run_storage_bench.py
     )

@@ -3557,3 +3557,126 @@ GRIDFLUX_SSH_PASSWORD='***' SSHPASS='***' python3 tools/release/run_alpha_releas
   - TLS/GSI/DCAU and production authentication are not implemented;
   - raw FTP STOR/RETR stream compatibility is intentionally unsupported;
   - directory sync/multi-file production workflow is not implemented.
+
+## 2026-05-18 Phase 4N remote sync closure and alpha release ops hardening
+
+### Implementation
+
+- Added `tools/release/sync_remote_artifacts.py`.
+  - Reads `tools/perf/results/<timestamp>_alpha-artifacts.json`.
+  - Supports `--verify-only`, `--dry-run`, and `--sync`.
+  - Emits JSON summary with `checked`, `synced`, `missing`, `mismatch`, `skipped`, `status`, and per-artifact details.
+  - Rejects absolute paths, `..`, `AGENTS.md`, build-like paths, `_deps`, credentials, key/cert/cookie/token/password-like paths, and unknown binary artifacts.
+  - Uses `rsync -az --relative` for real remote sync and never uses `--delete`.
+- Extended `tools/release/check_remote_artifact_sync.py`.
+  - Added `--manifest <path>` verify-only mode.
+  - Summary now includes `checked`, `missing`, `mismatch`, and `status`.
+  - Existing `--path` / `--csv` behavior remains compatible.
+- Extended `tools/release/run_alpha_release_gate.py`.
+  - full gate writes `tools/perf/results/<timestamp>_alpha-artifacts.json`.
+  - Manifest entries record `path`, `size`, `sha256`, `type`, and `required`.
+  - Manifest covers release docs, release scripts, gate JSON, private matrix raw/summary CSV, and CSV sidecar logs.
+  - full gate runs artifact sync + verify and records `artifact_manifest`, `artifact_sync_summary`, and `artifact_verify_summary` in gate JSON and Markdown.
+  - Added an exclusive alpha gate lock under `tools/perf/results/.alpha-release-gate.lock` so two release gates cannot concurrently rewrite the generated report and invalidate remote artifact hashes.
+- Extended `tools/release/test_alpha_release_helpers.py`.
+  - Covers manifest path filtering, CSV sidecar inclusion, verify-only missing/mismatch detection, sync repair, and traversal/sensitive path rejection.
+  - Registered `gridflux_alpha_artifact_sync_behavior` in CMake.
+- Updated `docs/release/README.md`, `docs/release/ALPHA_READINESS.md`, `INDEX.md`, `docs/ROADMAP.md`, and `docs/perf/README.md`.
+
+### Defaults and boundaries
+
+- Phase 4N is release/ops hardening only.
+- Transfer defaults remain unchanged:
+  - `file_io_backend=posix`
+  - `posix_write_strategy=auto`
+  - `file_io_buffer_size=0`
+  - `preallocate=off`
+  - `final_verify_policy=full`
+  - `manifest_flush_policy=every_n_chunks`
+  - `commit_sync_policy=none`
+- Network epoll, GridFlux framed STOR/RETR, checksum, manifest, resume, and final verify semantics are unchanged.
+- `AGENTS.md`, passwords, tokens, keys, cookies, build outputs, `_deps`, and private auth materials are not included in artifact manifests or public export.
+
+### Local script validation
+
+```bash
+python3 -m py_compile \
+  tools/release/run_alpha_release_gate.py \
+  tools/release/check_remote_artifact_sync.py \
+  tools/release/sync_remote_artifacts.py \
+  tools/release/test_alpha_release_helpers.py
+
+python3 tools/release/test_alpha_release_helpers.py
+
+cmake --build build
+ctest --test-dir build -R "alpha|release" --output-on-failure
+```
+
+- `py_compile`: passed.
+- `tools/release/test_alpha_release_helpers.py`: passed.
+- Default Debug full CTest: `146/146` passed.
+- Release helper CTest subset: `3/3` passed, including `gridflux_alpha_artifact_sync_behavior`.
+- `build-io-uring-real` Release full CTest: `146/146` passed.
+- Real io_uring smoke: `FileIoTest.IoUringContextReadWriteSmokeWhenAvailable` passed.
+- Public export strict hygiene: passed for `/tmp/gridflux-public-phase4n`.
+- Local quick alpha gate: passed.
+  - JSON: `tools/perf/results/20260518T031105Z_alpha-release-gate.json`.
+  - Markdown: `docs/release/ALPHA_RELEASE_GATE.md`.
+  - quick mode does not generate an artifact manifest because no private matrix artifacts are produced.
+- Residual process check after local validation: no local `gridflux-gridftp-server` / `gridflux-file-*` processes.
+
+### Remote and full gate validation
+
+```bash
+cmake --build build
+ctest --test-dir build --output-on-failure
+
+cmake --build build-io-uring-real
+ctest --test-dir build-io-uring-real --output-on-failure
+ctest --test-dir build-io-uring-real -R FileIoTest.IoUringContextReadWriteSmokeWhenAvailable --output-on-failure
+
+tools/perf/sync_remote.sh --host <remote> --source /root/projects/GridFlux --target /root/projects/GridFlux
+sshpass -e ssh <remote> \
+  'cd /root/projects/GridFlux && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++-13 && cmake --build build && ctest --test-dir build --output-on-failure'
+sshpass -e ssh <remote> \
+  'cd /root/projects/GridFlux && cmake -S . -B build-io-uring-real -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13 -DGRIDFLUX_ENABLE_IO_URING=ON && cmake --build build-io-uring-real && ctest --test-dir build-io-uring-real --output-on-failure && ctest --test-dir build-io-uring-real -R FileIoTest.IoUringContextReadWriteSmokeWhenAvailable --output-on-failure'
+
+GRIDFLUX_SSH_PASSWORD='***' python3 tools/release/run_alpha_release_gate.py \
+  --full \
+  --build-dir build \
+  --io-uring-build-dir build-io-uring-real \
+  --remote <remote> \
+  --remote-root /root/projects/GridFlux \
+  --server-host <server-host> \
+  --results-dir tools/perf/results
+
+python3 tools/release/sync_remote_artifacts.py \
+  --manifest tools/perf/results/20260518T034842Z_alpha-artifacts.json \
+  --remote <remote> \
+  --local-root /root/projects/GridFlux \
+  --remote-root /root/projects/GridFlux \
+  --verify-only \
+  --json-output tools/perf/results/20260518T034842Z_artifact-verify-manual.json
+```
+
+- Machine two default Debug configure/build/full CTest: `146/146` passed.
+- Machine two `build-io-uring-real` Release configure/build/full CTest: `146/146` passed.
+- Machine two real io_uring smoke: passed.
+- Clean full alpha gate: passed.
+  - Markdown report: `docs/release/ALPHA_RELEASE_GATE.md`.
+  - JSON report: `tools/perf/results/20260518T034842Z_alpha-release-gate.json`.
+  - Artifact manifest: `tools/perf/results/20260518T034842Z_alpha-artifacts.json`.
+  - Private raw CSV: `tools/perf/results/20260518T034900Z_gridftp-private-matrix-smoke.csv`.
+  - Private summary CSV: `tools/perf/results/20260518T034900Z_gridftp-private-matrix-smoke-summary.csv`.
+  - Private matrix: `24/24` pass, `fail_count=0`, sha256 matched for all rows.
+  - Artifact manifest: `161` listed artifacts; sync/verify checked `162` items including the manifest itself.
+  - Artifact sync summary: `checked=162`, `synced=3`, `missing=0`, `mismatch=0`, `status=pass`.
+  - Artifact verify summary: `checked=162`, `missing=0`, `mismatch=0`, `status=pass`.
+  - Manual `--verify-only` artifact check: `checked=162`, `missing=0`, `mismatch=0`, `status=pass`.
+- Public export strict hygiene: passed for `/tmp/gridflux-public-phase4n-final`.
+- Final residual process check: no local or remote `gridflux-gridftp-server` / `gridflux-file-*` processes.
+
+### Notes
+
+- An earlier concurrent full gate attempt failed because two release gate processes rewrote `docs/release/ALPHA_RELEASE_GATE.md` while artifact hashes were being verified. The final implementation adds an exclusive release-gate lock and the clean rerun above is the accepted Phase 4N result.
+- Phase 4N leaves transfer defaults and reliability semantics unchanged; it only hardens release artifact synchronization and alpha acceptance evidence.

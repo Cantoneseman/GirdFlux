@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import csv
+import json
 import tempfile
 from pathlib import Path
 
 import check_remote_artifact_sync
 import run_alpha_release_gate
+import sync_remote_artifacts
 
 
 def write(path: Path, text: str) -> None:
@@ -106,10 +108,143 @@ def test_matrix_summary_default_baseline() -> None:
             raise AssertionError(f"default baseline not detected: {result}")
 
 
+def test_artifact_manifest_excludes_private_paths_and_includes_sidecars() -> None:
+    with tempfile.TemporaryDirectory(prefix="gridflux-alpha-manifest.") as temp:
+        root = Path(temp)
+        write(root / "INDEX.md", "index\n")
+        write(root / "docs" / "ROADMAP.md", "roadmap\n")
+        write(root / "docs" / "PROJECT_STATE.md", "state\n")
+        write(root / "docs" / "perf" / "README.md", "perf\n")
+        write(root / "docs" / "release" / "ALPHA_RELEASE_GATE.md", "gate\n")
+        write(root / "tools" / "release" / "helper.py", "print('ok')\n")
+        write(root / "AGENTS.md", "password\n")
+        write(root / "build-private" / "artifact.log", "private\n")
+        csv_path = root / "tools" / "perf" / "results" / "matrix.csv"
+        write(root / "tools" / "perf" / "results" / "server.log", "server\n")
+        write(root / "tools" / "perf" / "results" / "client_env_before.log", "env\n")
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        with csv_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["server_log", "client_env_before_log"])
+            writer.writeheader()
+            writer.writerow(
+                {
+                    "server_log": "tools/perf/results/server.log",
+                    "client_env_before_log": "tools/perf/results/client_env_before.log",
+                }
+            )
+        gate_json = root / "tools" / "perf" / "results" / "gate.json"
+        write(gate_json, "{}\n")
+        paths = run_alpha_release_gate.collect_alpha_artifact_paths(
+            root=root,
+            gate_json=gate_json,
+            matrix_raw=str(csv_path),
+            matrix_summary="",
+        )
+        if "AGENTS.md" in paths or any(path.startswith("build") for path in paths):
+            raise AssertionError(f"private/build path leaked into artifact paths: {paths}")
+        for expected in {
+            "INDEX.md",
+            "docs/ROADMAP.md",
+            "docs/PROJECT_STATE.md",
+            "docs/perf/README.md",
+            "docs/release/ALPHA_RELEASE_GATE.md",
+            "tools/release/helper.py",
+            "tools/perf/results/matrix.csv",
+            "tools/perf/results/server.log",
+            "tools/perf/results/client_env_before.log",
+        }:
+            if expected not in paths:
+                raise AssertionError(f"missing expected artifact path {expected}: {paths}")
+
+
+def test_remote_artifact_sync_local_verify_and_sync() -> None:
+    with tempfile.TemporaryDirectory(prefix="gridflux-alpha-sync.") as temp:
+        base = Path(temp)
+        local = base / "machine1"
+        remote = base / "machine2"
+        write(local / "docs" / "release" / "ALPHA_RELEASE_GATE.md", "gate-v1\n")
+        write(local / "tools" / "perf" / "results" / "matrix.csv", "result,server_log\npass,tools/perf/results/server.log\n")
+        write(local / "tools" / "perf" / "results" / "server.log", "server-v1\n")
+        manifest_path = local / "tools" / "perf" / "results" / "alpha-artifacts.json"
+        manifest = {
+            "timestamp": "2026-05-18T00:00:00Z",
+            "source_tree_hash": "test",
+            "remote_required": True,
+            "artifacts": [
+                sync_remote_artifacts.manifest_entry_for(
+                    local, "docs/release/ALPHA_RELEASE_GATE.md", required=True
+                ).__dict__,
+                sync_remote_artifacts.manifest_entry_for(
+                    local, "tools/perf/results/matrix.csv", required=True
+                ).__dict__,
+                sync_remote_artifacts.manifest_entry_for(
+                    local, "tools/perf/results/server.log", required=True
+                ).__dict__,
+            ],
+        }
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        verify = sync_remote_artifacts.sync_from_manifest(
+            manifest_path=manifest_path,
+            remote=None,
+            local_root=local,
+            remote_root=str(remote),
+            remote_local_root=remote,
+            mode="verify-only",
+        )
+        if verify["missing"] == 0 or verify["status"] != "fail":
+            raise AssertionError(f"verify-only did not detect missing artifacts: {verify}")
+
+        synced = sync_remote_artifacts.sync_from_manifest(
+            manifest_path=manifest_path,
+            remote=None,
+            local_root=local,
+            remote_root=str(remote),
+            remote_local_root=remote,
+            mode="sync",
+        )
+        if synced["status"] != "pass" or synced["synced"] == 0:
+            raise AssertionError(f"sync did not repair remote artifacts: {synced}")
+
+        (remote / "tools" / "perf" / "results" / "server.log").write_text("changed\n", encoding="utf-8")
+        mismatch = sync_remote_artifacts.sync_from_manifest(
+            manifest_path=manifest_path,
+            remote=None,
+            local_root=local,
+            remote_root=str(remote),
+            remote_local_root=remote,
+            mode="verify-only",
+        )
+        if mismatch["mismatch"] == 0:
+            raise AssertionError(f"verify-only did not detect mismatch: {mismatch}")
+
+
+def test_artifact_path_rejects_traversal_and_sensitive_paths() -> None:
+    bad_paths = [
+        "../escape.md",
+        "/tmp/absolute.md",
+        "AGENTS.md",
+        "build/private.log",
+        "build-private/file.log",
+        "docs/password.txt",
+        "secret/token.txt",
+    ]
+    for path in bad_paths:
+        try:
+            sync_remote_artifacts.validate_artifact_path(path)
+        except ValueError:
+            continue
+        raise AssertionError(f"unsafe path was accepted: {path}")
+
+
 def main() -> int:
     test_source_tree_hash_excludes_private_and_build()
     test_csv_sidecar_extraction()
     test_matrix_summary_default_baseline()
+    test_artifact_manifest_excludes_private_paths_and_includes_sidecars()
+    test_remote_artifact_sync_local_verify_and_sync()
+    test_artifact_path_rejects_traversal_and_sensitive_paths()
     print("alpha release helper tests passed")
     return 0
 

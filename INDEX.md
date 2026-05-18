@@ -15,13 +15,13 @@
 
 ## 项目状态
 
-**当前阶段：** Phase 4M — alpha release gate 与稳定性收敛（已完成）
+**当前阶段：** Phase 4N — 远端同步闭环硬化与 alpha release 运维收口（已完成）
 
 **技术栈：** C++20 · epoll 网络基线 · POSIX file IO 默认后端 · 可选 file-IO-only io_uring · CMake · Linux only
 
 **目标场景：** 专线 TB 级（主线）· 虚拟网络 · 广域网
 
-**下一步：** 进入 beta/production 缺口评估与 Phase 5 产品化加固；默认仍保持 POSIX backend，不切换网络 epoll 或 STOR/RETR framed data path。
+**下一步：** 进入 beta/production 缺口评估与 Phase 5 产品化加固；默认仍保持 POSIX backend，不切换网络 epoll 或 STOR/RETR framed data path。Alpha release gate 现在以 artifact manifest + remote hash verify 证明<redacted>一/<redacted>二发布产物一致。
 
 ## AI 协作
 

@@ -2,6 +2,22 @@
 
 本目录记录 GridFlux 的可复现性能工具。`run_loopback_matrix.py` 和 `run_private_once.sh` 仍用于 memory-to-memory TCP sink；`run_file_loopback_matrix.py` 和 `run_file_private_once.sh` 用于文件传输基线；`run_gridftp_private_matrix.py` 用于 GridFTP-like framed STOR/RETR 私网矩阵。Phase 2B 起文件传输默认启用 CRC32C chunk checksum，并支持 `--checksum none` 做性能对照。Phase 2C 起 CRC32C 支持 `auto` / `software` / `hardware` backend，`auto` 在 x86 SSE4.2 可用时选择 hardware。Phase 4F 新增可选 file-IO-only `io_uring` prototype；Phase 4G 已在真实 liburing 环境下验证；Phase 4H 增加 queue depth / batching opt-in 维度；Phase 4J 增加 POSIX storage/writeback、manifest flush、checksum 和 final verify 阶段诊断。默认仍是 POSIX backend，网络仍是 epoll，STOR/RETR 文件数据仍只走 GridFlux framed data channel。
 
+Phase 4N 起，alpha release gate 会生成 `tools/perf/results/<timestamp>_alpha-artifacts.json`，并用该 manifest 同步和校验远端 release artifacts。性能 CSV、summary CSV 和 CSV 引用的 sidecar logs 若被纳入 manifest，<redacted>一/<redacted>二必须 hash 一致。
+
+## Alpha Artifact Sync
+
+```bash
+python3 tools/release/sync_remote_artifacts.py \
+  --manifest tools/perf/results/<timestamp>_alpha-artifacts.json \
+  --remote <remote> \
+  --local-root /root/projects/GridFlux \
+  --remote-root <remote-root> \
+  --verify-only \
+  --json-output tools/perf/results/<timestamp>_artifact-verify.json
+```
+
+`--dry-run` 只打印缺失/不一致计划，`--sync` 只同步 manifest 中 required 且安全的缺失或不一致文件，然后再 verify。不使用 `--delete`，不会清理远端历史 build/private 目录。
+
 ## 基础构建验证
 
 ```bash

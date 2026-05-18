@@ -1,40 +1,49 @@
 # GridFlux Alpha Release Gate
 
-- Timestamp: `2026-05-18T02:38:20Z`
+- Timestamp: `2026-05-18T04:14:28Z`
 - Mode: `full`
-- Source tree hash: `0f3f9a32fcad76432b45b2b23c8648fb40296de72b69878406cb0d9edc70a72d`
+- Source tree hash: `1bd02f2ba74cd1a25a7a8c9866413ac037d83a0f2a6af984073a34a5c4491699`
 - Result: `pass`
 
 ## Step Results
 
 | Step | Status | Seconds | Log |
 |------|--------|---------|-----|
-| `build_debug` | `pass` | `0.01` | `/root/projects/GridFlux/tools/perf/results/20260518T023057Z_alpha-release-gate/build_debug.log` |
-| `ctest_debug` | `pass` | `8.38` | `/root/projects/GridFlux/tools/perf/results/20260518T023057Z_alpha-release-gate/ctest_debug.log` |
-| `ctest_iouring` | `pass` | `8.22` | `/root/projects/GridFlux/tools/perf/results/20260518T023057Z_alpha-release-gate/ctest_iouring.log` |
-| `ctest_iouring_smoke` | `pass` | `0.01` | `/root/projects/GridFlux/tools/perf/results/20260518T023057Z_alpha-release-gate/ctest_iouring_smoke.log` |
-| `public_export_hygiene` | `pass` | `0.30` | `/root/projects/GridFlux/tools/perf/results/20260518T023057Z_alpha-release-gate/public_export_hygiene.log` |
-| `stor_smoke` | `pass` | `0.13` | `/root/projects/GridFlux/tools/perf/results/20260518T023057Z_alpha-release-gate/stor_smoke.log` |
-| `retr_smoke` | `pass` | `0.29` | `/root/projects/GridFlux/tools/perf/results/20260518T023057Z_alpha-release-gate/retr_smoke.log` |
-| `stor_resume_smoke` | `pass` | `0.18` | `/root/projects/GridFlux/tools/perf/results/20260518T023057Z_alpha-release-gate/stor_resume_smoke.log` |
-| `retr_resume_smoke` | `pass` | `0.19` | `/root/projects/GridFlux/tools/perf/results/20260518T023057Z_alpha-release-gate/retr_resume_smoke.log` |
-| `metadata_smoke` | `pass` | `0.07` | `/root/projects/GridFlux/tools/perf/results/20260518T023057Z_alpha-release-gate/metadata_smoke.log` |
-| `list_smoke` | `pass` | `0.16` | `/root/projects/GridFlux/tools/perf/results/20260518T023057Z_alpha-release-gate/list_smoke.log` |
-| `private_baseline_matrix` | `pass` | `423.93` | `/root/projects/GridFlux/tools/perf/results/20260518T023057Z_alpha-release-gate/private_baseline_matrix.log` |
-| `artifact_rsync` | `pass` | `0.32` | `/root/projects/GridFlux/tools/perf/results/20260518T023820Z_alpha-artifact-rsync.log` |
-| `remote_artifact_sync_check` | `pass` | `22.96` | `/root/projects/GridFlux/tools/perf/results/20260518T023057Z_alpha-release-gate/remote_artifact_sync_check.log` |
+| `build_debug` | `pass` | `0.01` | `/root/projects/GridFlux/tools/perf/results/20260518T040604Z_alpha-release-gate/build_debug.log` |
+| `ctest_debug` | `pass` | `8.45` | `/root/projects/GridFlux/tools/perf/results/20260518T040604Z_alpha-release-gate/ctest_debug.log` |
+| `ctest_iouring` | `pass` | `8.17` | `/root/projects/GridFlux/tools/perf/results/20260518T040604Z_alpha-release-gate/ctest_iouring.log` |
+| `ctest_iouring_smoke` | `pass` | `0.01` | `/root/projects/GridFlux/tools/perf/results/20260518T040604Z_alpha-release-gate/ctest_iouring_smoke.log` |
+| `public_export_hygiene` | `pass` | `0.28` | `/root/projects/GridFlux/tools/perf/results/20260518T040604Z_alpha-release-gate/public_export_hygiene.log` |
+| `stor_smoke` | `pass` | `0.18` | `/root/projects/GridFlux/tools/perf/results/20260518T040604Z_alpha-release-gate/stor_smoke.log` |
+| `retr_smoke` | `pass` | `0.35` | `/root/projects/GridFlux/tools/perf/results/20260518T040604Z_alpha-release-gate/retr_smoke.log` |
+| `stor_resume_smoke` | `pass` | `0.17` | `/root/projects/GridFlux/tools/perf/results/20260518T040604Z_alpha-release-gate/stor_resume_smoke.log` |
+| `retr_resume_smoke` | `pass` | `0.19` | `/root/projects/GridFlux/tools/perf/results/20260518T040604Z_alpha-release-gate/retr_resume_smoke.log` |
+| `metadata_smoke` | `pass` | `0.07` | `/root/projects/GridFlux/tools/perf/results/20260518T040604Z_alpha-release-gate/metadata_smoke.log` |
+| `list_smoke` | `pass` | `0.16` | `/root/projects/GridFlux/tools/perf/results/20260518T040604Z_alpha-release-gate/list_smoke.log` |
+| `private_baseline_matrix` | `pass` | `484.29` | `/root/projects/GridFlux/tools/perf/results/20260518T040604Z_alpha-release-gate/private_baseline_matrix.log` |
+| `remote_artifact_sync` | `pass` | `48.88` | `/root/projects/GridFlux/tools/perf/results/20260518T040604Z_alpha-release-gate/remote_artifact_sync.log` |
+| `remote_artifact_sync_check` | `pass` | `24.41` | `/root/projects/GridFlux/tools/perf/results/20260518T040604Z_alpha-release-gate/remote_artifact_sync_check.log` |
+| `remote_artifact_final_sync` | `pass` | `49.46` | `/root/projects/GridFlux/tools/perf/results/20260518T040604Z_alpha-release-gate/remote_artifact_final_sync.log` |
+| `remote_artifact_final_verify` | `pass` | `24.50` | `/root/projects/GridFlux/tools/perf/results/20260518T040604Z_alpha-release-gate/remote_artifact_final_verify.log` |
 
 ## Private Baseline
 
-- Raw CSV: `tools/perf/results/20260518T023115Z_gridftp-private-matrix-smoke.csv`
-- Summary CSV: `tools/perf/results/20260518T023115Z_gridftp-private-matrix-smoke-summary.csv`
+- Raw CSV: `tools/perf/results/20260518T040622Z_gridftp-private-matrix-smoke.csv`
+- Summary CSV: `tools/perf/results/20260518T040622Z_gridftp-private-matrix-smoke-summary.csv`
 - Fail count: `0`
 - Summary rows: `8`
 
 Default baseline rows:
 
-- direction=retr throughput_median=3.395120 spread_pct=40.870720
-- direction=stor throughput_median=0.919468 spread_pct=19.548261
+- direction=retr throughput_median=3.486370 spread_pct=68.874216
+- direction=stor throughput_median=0.912762 spread_pct=9.167779
+
+## Artifact Sync
+
+- Manifest: `tools/perf/results/20260518T040604Z_alpha-artifacts.json`
+- Artifacts: `161`
+- Sync: checked=`162` synced=`3` missing=`0` mismatch=`0` status=`pass`
+- Verify: checked=`162` missing=`0` mismatch=`0` status=`pass`
 
 ## Alpha Readiness
 
