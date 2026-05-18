@@ -312,6 +312,13 @@ def release_tool_paths(root: Path) -> list[str]:
     return sorted(path.relative_to(root).as_posix() for path in (root / "tools" / "release").glob("*.py"))
 
 
+def tree_test_tool_paths(root: Path) -> list[str]:
+    return sorted(
+        path.relative_to(root).as_posix()
+        for path in (root / "tools" / "test").glob("*tree*.py")
+    )
+
+
 def collect_alpha_artifact_paths(
     *,
     root: Path,
@@ -323,10 +330,14 @@ def collect_alpha_artifact_paths(
         "INDEX.md",
         "docs/ROADMAP.md",
         "docs/PROJECT_STATE.md",
+        "docs/DESIGN.md",
+        "docs/ENGINEERING.md",
+        "docs/DIRECTORY_TRANSFER.md",
         "docs/perf/README.md",
         relative_to_root(str(gate_json), root),
         *release_doc_paths(root),
         *release_tool_paths(root),
+        *tree_test_tool_paths(root),
     }
     if matrix_raw:
         paths.update(csv_referenced_artifacts(relative_to_root(matrix_raw, root), root))
@@ -554,6 +565,10 @@ def main() -> int:
         ("retr_resume_smoke", [sys.executable, "tools/test/run_gridftp_control_retr_resume_smoke.py", "--build-dir", args.build_dir]),
         ("metadata_smoke", [sys.executable, "tools/test/run_gridftp_control_metadata_smoke.py", "--build-dir", args.build_dir]),
         ("list_smoke", [sys.executable, "tools/test/run_gridftp_control_list_smoke.py", "--build-dir", args.build_dir]),
+        ("tree_upload_smoke", [sys.executable, "tools/test/run_gridftp_tree_upload_smoke.py", "--build-dir", args.build_dir]),
+        ("tree_download_smoke", [sys.executable, "tools/test/run_gridftp_tree_download_smoke.py", "--build-dir", args.build_dir]),
+        ("tree_resume_smoke", [sys.executable, "tools/test/run_gridftp_tree_resume_smoke.py", "--build-dir", args.build_dir]),
+        ("tree_manifest_corrupt_smoke", [sys.executable, "tools/test/run_gridftp_tree_manifest_corrupt_smoke.py", "--build-dir", args.build_dir]),
     ]
     for name, command in command_specs:
         step = run_step(name, command, log_dir, cwd=root)

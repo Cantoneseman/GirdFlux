@@ -1,0 +1,37 @@
+#pragma once
+
+#include <cstdint>
+#include <string>
+
+#include "gridflux/checksum/checksum.h"
+#include "gridflux/common/status.h"
+
+namespace gridflux::config {
+
+enum class TreeTransferRole {
+    Upload,
+    Download,
+};
+
+struct TreeTransferOptions {
+    std::string host = "127.0.0.1";
+    std::uint16_t port = 2121;
+    std::string sourceDir;
+    std::string destDir;
+    std::uint32_t connections = 1;
+    std::uint32_t fileParallelism = 1;
+    std::uint64_t chunkSize = 1048576;
+    std::uint32_t bufferSize = 65536;
+    checksum::ChecksumAlgorithm checksumAlgorithm = checksum::ChecksumAlgorithm::Crc32c;
+    checksum::ChecksumBackend checksumBackend = checksum::ChecksumBackend::Auto;
+    bool resume = false;
+    std::uint64_t maxFiles = 0;
+    std::string user = "gridflux";
+    std::string password = "gridflux";
+};
+
+[[nodiscard]] common::Result<TreeTransferOptions> parseTreeTransferOptions(
+    int argc, const char* const* argv, TreeTransferRole role);
+[[nodiscard]] std::string treeTransferUsage(const char* programName, TreeTransferRole role);
+
+}  // namespace gridflux::config

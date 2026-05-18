@@ -4,6 +4,10 @@
 
 Phase 4N 起，alpha release gate 会生成 `tools/perf/results/<timestamp>_alpha-artifacts.json`，并用该 manifest 同步和校验远端 release artifacts。性能 CSV、summary CSV 和 CSV 引用的 sidecar logs 若被纳入 manifest，<redacted>一/<redacted>二必须 hash 一致。
 
+Phase 5A 起，目录级 alpha smoke 通过 `gridflux-tree-upload-client` /
+`gridflux-tree-download-client` 验证多文件 upload/download/resume。目录传输仍逐文件复用
+GridFlux framed STOR/RETR；性能矩阵默认仍以单文件 STOR/RETR 为主要口径。
+
 ## Alpha Artifact Sync
 
 ```bash

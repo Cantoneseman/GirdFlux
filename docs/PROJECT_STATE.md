@@ -3680,3 +3680,74 @@ python3 tools/release/sync_remote_artifacts.py \
 
 - An earlier concurrent full gate attempt failed because two release gate processes rewrote `docs/release/ALPHA_RELEASE_GATE.md` while artifact hashes were being verified. The final implementation adds an exclusive release-gate lock and the clean rerun above is the accepted Phase 4N result.
 - Phase 4N leaves transfer defaults and reliability semantics unchanged; it only hardens release artifact synchronization and alpha acceptance evidence.
+
+## 2026-05-18 Phase 5A directory transfer alpha implementation
+
+### Implementation
+
+- Added alpha directory transfer support on top of existing framed STOR/RETR.
+- New tree manifest and scanner modules:
+  - `TreeManifest` records mode, logical root, checksum policy, and per-file relative path, size, mtime, transfer_id, status, and error.
+  - Upload manifest path: `<source_dir>.gridflux.tree.upload.manifest`.
+  - Download manifest path: `<dest_dir>.gridflux.tree.download.manifest`.
+  - `scanLocalTree()` scans regular files, rejects symlinks and unsafe relative paths, and returns stable sorted paths.
+- New CLIs:
+  - `gridflux-tree-upload-client --source-dir <local_dir> --dest-dir <remote_dir>`.
+  - `gridflux-tree-download-client --source-dir <remote_dir> --dest-dir <local_dir>`.
+- Directory transfer is file-level orchestration only. Each file still uses existing control `STOR` / `RETR`, `REST GFID`, per-file manifest, CRC32C, and final verify logic.
+- Control STOR path resolver now creates missing parent directories inside server `--root`; root escape and symlink escape remain rejected.
+- Added loopback tree upload/download/resume/corrupt-manifest smokes and a private tree helper.
+
+### Validation
+
+```bash
+cmake --build build --target gridflux_unit_tests gridflux-tree-upload-client gridflux-tree-download-client
+ctest --test-dir build -R "Tree|ControlOptions" --output-on-failure
+python3 tools/test/run_gridftp_tree_upload_smoke.py --build-dir build
+python3 tools/test/run_gridftp_tree_download_smoke.py --build-dir build
+python3 tools/test/run_gridftp_tree_resume_smoke.py --build-dir build
+python3 tools/test/run_gridftp_tree_manifest_corrupt_smoke.py --build-dir build
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++-13
+cmake --build build
+ctest --test-dir build --output-on-failure
+cmake -S . -B build-io-uring-real -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13 -DGRIDFLUX_ENABLE_IO_URING=ON
+cmake --build build-io-uring-real
+ctest --test-dir build-io-uring-real --output-on-failure
+python3 tools/release/run_alpha_release_gate.py --quick --build-dir build --io-uring-build-dir build-io-uring-real --results-dir tools/perf/results
+python3 tools/test/run_gridftp_tree_private_once.py --remote <remote> --server-host <server-host> --local-build-dir /root/projects/GridFlux/build --remote-build-dir /root/projects/GridFlux/build --connections 2 --output-dir tools/perf/results
+```
+
+- Targeted tree/control unit tests: passed.
+- Loopback tree upload smoke: passed, 4 files, 1,179,671 bytes, tree hash matched.
+- Loopback tree download smoke: passed, 4 files, 1,179,671 bytes, tree hash matched.
+- Loopback tree resume smoke: passed for upload and download.
+- Corrupt tree manifest smoke: passed; resume failed safely.
+- Local default Debug full CTest: `160/160` passed.
+- Local `build-io-uring-real` Release full CTest: `160/160` passed; `FileIoTest.IoUringContextReadWriteSmokeWhenAvailable` passed, not skipped.
+- Machine two default Debug full CTest after sync: `160/160` passed.
+- Machine two `build-io-uring-real` Release full CTest after sync: `160/160` passed; real io_uring smoke passed.
+- Public export strict hygiene: passed for `/tmp/gridflux-public-phase5a`.
+- Quick alpha release gate: passed.
+  - JSON: `tools/perf/results/20260518T050140Z_alpha-release-gate.json`.
+- Full alpha release gate: passed.
+  - JSON: `tools/perf/results/20260518T052241Z_alpha-release-gate.json`.
+  - Artifact manifest: `tools/perf/results/20260518T052241Z_alpha-artifacts.json`.
+  - Private baseline summary: 8 rows, `fail_count=0`, status `pass`; raw CSV `tools/perf/results/20260518T052304Z_gridftp-private-matrix-smoke.csv`, summary CSV `tools/perf/results/20260518T052304Z_gridftp-private-matrix-smoke-summary.csv`.
+  - Artifact sync summary: `checked=171`, `synced=3`, `missing=0`, `mismatch=0`, `status=pass`.
+  - Artifact verify summary: `checked=171`, `missing=0`, `mismatch=0`, `status=pass`.
+  - Final post-doc artifact sync after this status update: `checked=171`, `synced=2`, `missing=0`, `mismatch=0`, `status=pass`.
+- Private tree smoke: passed.
+  - JSON: `tools/perf/results/20260518T050446Z_gridftp-tree-private.json`.
+  - File count: `4`.
+  - Total bytes: `1,179,670`.
+  - Tree hash: `fcc6ed5a7de263a23097b5ee20519f093781f5601cf462827fae5d3606e3afdb`.
+  - Upload, download, upload resume, and download resume tree hashes matched.
+- Final residual process check: no local or remote `gridflux-gridftp-server` / `gridflux-file-*` processes.
+
+### Defaults and boundaries
+
+- Defaults unchanged: POSIX file IO backend, `final_verify_policy=full`, `manifest_flush_policy=every_n_chunks`, `preallocate=off`, `posix_write_strategy=auto`.
+- Directory transfer remains alpha:
+  - does not preserve permissions, owner/group, xattrs, ACLs, or empty directories;
+  - does not implement raw FTP recursive transfer, MLST/MLSD, TLS/GSI, production auth, or third-party server-to-server transfer;
+  - does not publish or sync private `AGENTS.md`, passwords, tokens, or private topology.

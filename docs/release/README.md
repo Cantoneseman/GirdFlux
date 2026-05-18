@@ -19,8 +19,9 @@ python3 tools/release/run_alpha_release_gate.py \
 ```
 
 Quick mode runs local build, default CTest, io_uring CTest, public export
-hygiene, loopback STOR/RETR full and resume smoke, metadata/list smoke, and
-residual process checks.
+hygiene, loopback STOR/RETR full and resume smoke, metadata/list smoke,
+directory upload/download/resume/corrupt-manifest smoke, and residual process
+checks.
 
 ## Full Gate
 

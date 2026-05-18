@@ -416,8 +416,11 @@ common::Result<ResolvedControlPath> resolveControlPath(const std::string& root,
 
         const std::filesystem::path parent = candidate.parent_path();
         if (!std::filesystem::exists(parent, error) || error) {
-            return common::Status::invalidArgument(commandName +
-                                                   " parent directory does not exist");
+            std::filesystem::create_directories(parent, error);
+            if (error) {
+                return common::Status::invalidArgument(commandName +
+                                                       " parent directory cannot be created");
+            }
         }
         std::filesystem::path canonicalParent = std::filesystem::weakly_canonical(parent, error);
         if (error || !isInsideRoot(rootPath.value(), canonicalParent)) {

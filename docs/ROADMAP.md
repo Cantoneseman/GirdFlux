@@ -2,15 +2,15 @@
 
 ## 当前状态
 
-**阶段：** Phase 4L — 性能稳定性、RETR 双端拆解与 opt-in 推荐矩阵（已完成）
+**阶段：** Phase 5A — 多文件/目录传输 alpha 能力（已完成）
 
 **已完成：** 项目设计、技术选型、工程规范制定、CMake 工程骨架初始化、GoogleTest 工具链测试、本机与<redacted>二构建验证、GridFTP 源码学习经验整理入设计文档、Phase 1.0 多连接 TCP sink 与本机 loopback 验证、Phase 1.1 性能基线脚本与 loopback smoke matrix、Phase 1.2A offset-aware 单文件传输闭环、Phase 1.2B 文件传输健壮性、Phase 1.3A 文件性能基线自动化、Phase 2A manifest/range-based 断点续传核心、Phase 2B CRC32C chunk checksum 与损坏注入验证、Phase 2C CRC32C backend 自动选择、manifest 批量 flush、恢复统计与 checksum benchmark、Phase 3A GridFTP 风格控制面 STOR 上传与 REST/GFID resume 映射、Phase 3B GridFTP 风格控制面 framed RETR 完整下载、Phase 3C 下载端 manifest/verified_chunks 与 RETR REST/GFID resume、Phase 3D 控制面 SIZE/MDTM/CWD/CDUP/LIST/NLST 与测试工具收敛。
 
 **已完成补充：** Phase 4A 私网 GridFTP-like framed STOR/RETR 性能矩阵脚本、环境指标采集、smoke 矩阵、代表性 1GiB 样本和初步瓶颈判断；Phase 4B 阶段级诊断指标、host/link baseline、download manifest 批量 flush、final verify opt-in policy 和瓶颈报告；Phase 4C 原生 storage benchmark、temp preallocation opt-in、私网矩阵 repeat/summary CSV 和 verified_chunks 可靠性护栏；Phase 4D 文件 IO backend 抽象前置、POSIX file IO advice/buffering 选项、IO call 指标和 storage bench summary；Phase 4E 重型 1GiB repeat=3 storage/private matrix、POSIX knob 默认策略判断和 io_uring Phase 4F 设计闸门；Phase 4F 可选 file-IO-only io_uring backend 原型、CMake/liburing 探测、无 liburing stub fallback、脚本 backend 扫描维度和默认 POSIX 回归验证；Phase 4G 在真实 liburing 环境下完成 POSIX/io_uring storage bench 与私网 STOR/RETR 对照，并新增公开发布脱敏/export 工具链；Phase 4H 完成 file-IO-only io_uring queue depth / batching opt-in prototype、CSV 指标扩展和 smoke/1GiB sample；Phase 4I 完成 storage bench wrapper 修复、1GiB repeat=3 storage/private heavy matrix 和 queue-depth gate 报告；Phase 4J 完成 POSIX storage/writeback、checksum、manifest flush 和 final verify 路径诊断，新增双侧 sender/receiver 阶段字段、manifest flush policy 与 commit sync policy opt-in 诊断参数，以及 Phase 4J median 分析报告；Phase 4K 完成 POSIX temp write/writeback 专项优化实验，新增 POSIX write syscall 级指标、`posix_write_strategy=auto|direct|coalesced` opt-in 策略、storage/private matrix 维度和 Phase 4K median gate 报告；Phase 4L 完成 repeat=5 稳定性矩阵、环境/页缓存 sidecar、summary spread/p95 稳定性标记、RETR sender/receiver 双端瓶颈报告和 opt-in 推荐矩阵。
 
-**未开始：** 系统级文件传输调优、raw FTP stream STOR/RETR、GridFTP TLS/GSI、MLST/MLSD、网络 io_uring、多文件目录同步。
+**未开始：** 系统级文件传输调优、raw FTP stream STOR/RETR、GridFTP TLS/GSI、MLST/MLSD、网络 io_uring、生产级目录同步。
 
-**下一步：** Phase 4M 基于 Phase 4L 稳定性结论继续做专项评估；不改网络 epoll，不默认启用 io_uring，不改变 checksum/manifest/resume 语义。
+**下一步：** 基于 Phase 5A 的目录 manifest + per-file STOR/RETR 编排，继续评估数据集级私网性能、目录错误恢复 UX、changed-file 策略细化，或进入生产认证/TLS/GSI 设计；不改网络 epoll，不默认启用 io_uring，不改变 checksum/manifest/resume 语义。
 
 ---
 
@@ -286,7 +286,18 @@
 
 ---
 
-## Phase 5：产品化加固
+## Phase 5：多文件目录传输与产品化加固
+
+**5A 多文件/目录传输 alpha**
+
+- 新增目录级 manifest，记录每个文件的 root-relative path、size、mtime、transfer_id、status 和 checksum policy。
+- 新增稳定目录扫描与 root-confined path validation；默认拒绝 symlink，不保留空目录。
+- 新增 `gridflux-tree-upload-client` 与 `gridflux-tree-download-client`，通过 GridFTP-like 控制面逐文件执行 `STOR` / `RETR`，每个文件内部继续使用现有 framed data channel、per-file manifest、verified_chunks 和 `REST GFID` resume。
+- 目录 resume 以 tree manifest 为 file-level 事实源；文件内部恢复仍由现有 upload/download manifest 负责。
+- changed file 策略为 fail-safe：source/target size 或 manifest metadata 不一致时标记 `changed` 并失败，不自动覆盖或删除已提交目标。
+- Phase 5A 不实现 raw FTP recursive transfer、MLST/MLSD、权限/owner/xattr/ACL 保留、TLS/GSI 或生产认证。
+
+状态：已完成。本机与<redacted>二 Debug full CTest 均为 `160/160` passed；本机与<redacted>二 `build-io-uring-real` Release full CTest 均为 `160/160` passed，真实 io_uring smoke 为 `Passed`。新增 loopback tree upload/download/resume/corrupt-manifest smoke 均通过；私网目录 upload/download/upload resume/download resume helper 通过，4 个文件、1,179,670 bytes、tree hash 一致。默认传输策略保持不变：POSIX file IO、`final_verify_policy=full`、`manifest_flush_policy=every_n_chunks`、`preallocate=off`、`posix_write_strategy=auto`。
 
 - TLS 1.3 / token 认证。
 - 容错容灾（自动重连、超时重试、死任务清理）。
@@ -368,6 +379,8 @@
 | 2026-05-18 | Phase 4L 不基于高波动样本改变默认或推荐强 opt-in | repeat=5 1GiB 私网矩阵 21/48 summary rows spread 超过 20%；STOR 仍是 temp write/writeback 主导，RETR 在 sender send 与 receiver write 间切换，默认继续保持 POSIX/full/every_n_chunks/auto |
 | 2026-05-18 | Phase 4M 以 alpha release gate 收敛发布质量 | 不再堆性能开关；用 quick/full gate、public hygiene、artifact sync 和 alpha readiness 报告固定可复现验收流程，默认配置与传输语义保持不变 |
 | 2026-05-18 | Phase 4N 以 alpha artifact manifest 作为远端同步事实源 | full gate 结束时必须 sync+verify manifest 中的 release docs、gate JSON、raw/summary CSV 和 sidecar logs，防止<redacted>二停留在非最终发布状态 |
+| 2026-05-18 | Phase 5A 目录传输使用 tree manifest 编排 per-file STOR/RETR | 借鉴 GridFTP restart marker/range 思想，但恢复事实源分层：目录级 manifest 只记录 file-level 状态，每个文件内部继续使用现有 manifest/verified_chunks |
+| 2026-05-18 | Phase 5A 目录传输保持 alpha 边界 | 支持多文件 upload/download/resume，但不保存权限、owner、xattr、ACL 或空目录，不实现 raw FTP recursive transfer、MLST/MLSD、TLS/GSI 或生产认证 |
 
 ---
 

@@ -201,7 +201,10 @@ TEST(ControlOptionsTest, ResolvesStorPathInsideRoot) {
     EXPECT_FALSE(resolveStorPath(root.string(), "../escape.bin").isOk());
     EXPECT_FALSE(resolveStorPath(root.string(), "/tmp/escape.bin").isOk());
     EXPECT_FALSE(resolveStorPath(root.string(), "").isOk());
-    EXPECT_FALSE(resolveStorPath(root.string(), "missing/file.bin").isOk());
+    auto nested = resolveStorPath(root.string(), "missing/file.bin");
+    ASSERT_TRUE(nested.isOk()) << nested.status().message();
+    EXPECT_EQ(nested.value(), (root / "missing/file.bin").string());
+    EXPECT_TRUE(std::filesystem::is_directory(root / "missing"));
 
     std::filesystem::remove_all(root);
 }

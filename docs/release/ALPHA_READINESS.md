@@ -10,6 +10,8 @@ transfer:
   chunks.
 - CRC32C chunk checksum by default, with `--checksum none` only for comparison.
 - Control metadata commands: `SIZE`, `MDTM`, `CWD`, `CDUP`, `LIST`, and `NLST`.
+- Alpha directory upload/download clients that orchestrate per-file framed
+  STOR/RETR using a tree manifest.
 - POSIX file IO default path, with optional experimental file-IO-only
   `io_uring`.
 - Public export hygiene gate with private `AGENTS.md` excluded.
@@ -51,7 +53,8 @@ GridFlux is not beta or production ready because:
 - 100G dedicated-line validation is not complete.
 - TLS/GSI/DCAU and production authentication are not implemented.
 - Raw FTP STOR/RETR streams are not supported.
-- Multi-file directory sync is not implemented.
+- Directory transfer is alpha only: it does not preserve permissions,
+  owner/group, xattrs, ACLs, empty directories, or raw FTP recursive semantics.
 - Long soak, packaging, and operational runbooks are not complete.
 
 ## Safety Notes
