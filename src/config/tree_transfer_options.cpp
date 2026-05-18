@@ -5,6 +5,7 @@
 #include <limits>
 #include <string_view>
 
+#include "gridflux/core/metrics/event_log.h"
 #include "gridflux/core/tree/tree_scan.h"
 #include "gridflux/protocol/control/control_auth.h"
 
@@ -192,6 +193,22 @@ common::Result<TreeTransferOptions> parseTreeTransferOptions(int argc, const cha
                 return common::Status::invalidArgument(std::string(option) + " must not be empty");
             }
             options.jsonSummaryPath = std::string(value);
+        } else if (option == "--event-log") {
+            if (value.empty()) {
+                return common::Status::invalidArgument("--event-log must not be empty");
+            }
+            options.eventLogPath = std::string(value);
+        } else if (option == "--tls-mode") {
+            auto parsed = core::io::parseTlsMode(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.tls.mode = parsed.value();
+        } else if (option == "--tls-ca-file") {
+            if (value.empty()) {
+                return common::Status::invalidArgument("--tls-ca-file must not be empty");
+            }
+            options.tls.caFile = std::string(value);
         } else {
             return common::Status::invalidArgument("unknown option: " + std::string(option));
         }
@@ -237,6 +254,15 @@ common::Result<TreeTransferOptions> parseTreeTransferOptions(int argc, const cha
             }
         }
     }
+    const common::Status eventLogStatus =
+        core::metrics::validateEventLogPath(options.eventLogPath);
+    if (!eventLogStatus.isOk()) {
+        return eventLogStatus;
+    }
+    const common::Status tlsStatus = core::io::validateTlsClientConfig(options.tls);
+    if (!tlsStatus.isOk()) {
+        return tlsStatus;
+    }
     return options;
 }
 
@@ -250,7 +276,8 @@ std::string treeTransferUsage(const char* programName, TreeTransferRole role) {
            "[--buffer-size <bytes>] [--checksum <crc32c|none>] "
            "[--checksum-backend <auto|software|hardware>] [--resume] [--max-files <N>] "
            "[--auth-mode anonymous|token] [--auth-token-file <path>] "
-           "[--user <name>] [--password <password>] [--json-summary <path>]";
+           "[--user <name>] [--password <password>] [--json-summary <path>] "
+           "[--event-log <path>] [--tls-mode off|required] [--tls-ca-file <path>]";
 }
 
 }  // namespace gridflux::config

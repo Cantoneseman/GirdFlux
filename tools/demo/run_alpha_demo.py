@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -86,28 +87,44 @@ def parse_transfer_id(lines: list[str]) -> str:
     return match.group(1)
 
 
-def connect_control(host: str, port: int) -> tuple[socket.socket, bytearray]:
+def connect_control(host: str, port: int, *, tls_mode: str = "off", tls_ca_file: str = "") -> tuple[socket.socket | ssl.SSLSocket, bytearray]:
     deadline = time.monotonic() + 10
     last_error: Exception | None = None
     while time.monotonic() < deadline:
         try:
-            sock = socket.create_connection((host, port), timeout=2)
+            raw_sock = socket.create_connection((host, port), timeout=2)
+            if tls_mode == "required":
+                context = ssl.create_default_context(cafile=tls_ca_file or None)
+                context.check_hostname = False
+                sock = context.wrap_socket(raw_sock, server_hostname=host)
+            else:
+                sock = raw_sock
             buffer = bytearray()
             greeting = read_reply(sock, buffer)
             if reply_code(greeting) != 220:
                 raise RuntimeError(f"unexpected greeting: {greeting}")
             return sock, buffer
-        except OSError as error:
+        except (OSError, ssl.SSLError, RuntimeError) as error:
             last_error = error
             time.sleep(0.05)
     raise RuntimeError(f"failed to connect control server: {last_error}")
 
 
-def login_type_i(host: str, port: int) -> tuple[socket.socket, bytearray]:
-    sock, buffer = connect_control(host, port)
-    if reply_code(send_command(sock, buffer, "USER gridflux")) != 331:
+def login_type_i(
+    host: str,
+    port: int,
+    *,
+    auth_mode: str = "anonymous",
+    token_file: str = "",
+    tls_mode: str = "off",
+    tls_ca_file: str = "",
+) -> tuple[socket.socket | ssl.SSLSocket, bytearray]:
+    sock, buffer = connect_control(host, port, tls_mode=tls_mode, tls_ca_file=tls_ca_file)
+    user = "token" if auth_mode == "token" else "gridflux"
+    password = Path(token_file).read_text(encoding="utf-8").strip() if auth_mode == "token" else "gridflux"
+    if reply_code(send_command(sock, buffer, f"USER {user}")) != 331:
         raise RuntimeError("USER failed")
-    if reply_code(send_command(sock, buffer, "PASS gridflux")) != 230:
+    if reply_code(send_command(sock, buffer, "PASS " + password)) != 230:
         raise RuntimeError("PASS failed")
     if reply_code(send_command(sock, buffer, "TYPE I")) != 200:
         raise RuntimeError("TYPE I failed")
@@ -124,7 +141,21 @@ def run_command(command: list[str], log_path: Path, *, env: dict[str, str] | Non
     return completed
 
 
-def start_server(build_dir: Path, root: Path, control_port: int, data_port_base: int, log_path: Path) -> subprocess.Popen:
+def start_server(
+    build_dir: Path,
+    root: Path,
+    control_port: int,
+    data_port_base: int,
+    log_path: Path,
+    *,
+    event_log: str = "",
+    auth_mode: str = "anonymous",
+    auth_token_file: str = "",
+    tls_mode: str = "off",
+    tls_cert_file: str = "",
+    tls_key_file: str = "",
+    tls_ca_file: str = "",
+) -> subprocess.Popen:
     command = [
         str(build_dir / "gridflux-gridftp-server"),
         "--host",
@@ -146,16 +177,24 @@ def start_server(build_dir: Path, root: Path, control_port: int, data_port_base:
         "--checksum-backend",
         "auto",
     ]
+    if event_log:
+        command.extend(["--event-log", event_log])
+    if auth_mode == "token":
+        command.extend(["--auth-mode", "token", "--auth-token-file", auth_token_file])
+    if tls_mode == "required":
+        command.extend(["--tls-mode", "required", "--tls-cert-file", tls_cert_file, "--tls-key-file", tls_key_file])
+        if tls_ca_file:
+            command.extend(["--tls-ca-file", tls_ca_file])
     handle = log_path.open("w", encoding="utf-8")
     process = subprocess.Popen(command, stdout=handle, stderr=subprocess.STDOUT)
     handle.close()
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         try:
-            with socket.create_connection(("127.0.0.1", control_port), timeout=1) as sock:
-                sock.recv(512)
+            sock, _ = connect_control("127.0.0.1", control_port, tls_mode=tls_mode, tls_ca_file=tls_ca_file)
+            with sock:
                 return process
-        except OSError:
+        except (OSError, ssl.SSLError, RuntimeError):
             time.sleep(0.05)
     raise RuntimeError(f"gridftp server did not start; see {log_path}")
 
@@ -174,39 +213,172 @@ def stop_server(process: subprocess.Popen, log_path: Path) -> None:
 def finish_case(name: str, start: float, **kwargs: object) -> dict[str, object]:
     elapsed = max(time.monotonic() - start, 0.000001)
     bytes_value = int(kwargs.pop("bytes", 0) or 0)
+    result_value = str(kwargs.pop("result", "pass"))
     result = {
         "name": name,
-        "result": kwargs.pop("result", "pass"),
+        "result": result_value,
         "elapsed_seconds": elapsed,
         "bytes": bytes_value,
         "throughput_gbps": (bytes_value * 8.0 / elapsed / 1_000_000_000.0) if bytes_value else 0.0,
         "source_hash": kwargs.pop("source_hash", ""),
         "dest_hash": kwargs.pop("dest_hash", ""),
         "error": kwargs.pop("error", ""),
+        "error_code": kwargs.pop("error_code", "ok" if result_value == "pass" else "unknown_error"),
         "logs": kwargs.pop("logs", []),
     }
     result.update(kwargs)
     return result
 
 
+def classify_error_text(text: object) -> str:
+    lowered = str(text or "").lower()
+    if not lowered:
+        return "ok"
+    if "please login" in lowered or "auth required" in lowered:
+        return "auth_required"
+    if "login incorrect" in lowered or "pass rejected" in lowered or "auth failed" in lowered:
+        return "auth_failed"
+    if "changed" in lowered:
+        return "changed_file"
+    if "manifest" in lowered and any(word in lowered for word in ["corrupt", "checksum", "invalid"]):
+        return "manifest_corrupt"
+    if "checksum" in lowered and "mismatch" in lowered:
+        return "checksum_mismatch"
+    if "tls required" in lowered:
+        return "tls_required"
+    if any(word in lowered for word in ["tls", "ssl", "certificate", "private key"]):
+        return "tls_failed"
+    if "path" in lowered or "escape" in lowered or "outside" in lowered:
+        return "path_rejected"
+    if "protocol" in lowered or "frame" in lowered or "unexpected" in lowered:
+        return "protocol_error"
+    if any(word in lowered for word in ["open", "read", "write", "stat", "connect", "socket", "recv", "send"]):
+        return "io_error"
+    return "unknown_error"
+
+
+def summarize_event_log(path: str) -> dict[str, object]:
+    if not path:
+        return {"event_count": 0, "error_code_counts": {}, "first_error": None}
+    event_path = Path(path)
+    if not event_path.exists():
+        return {"event_count": 0, "error_code_counts": {}, "first_error": None}
+    counts: dict[str, int] = {}
+    first_error: dict[str, object] | None = None
+    event_count = 0
+    with event_path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            payload = json.loads(line)
+            event_count += 1
+            code = str(payload.get("error_code") or "unknown_error")
+            counts[code] = counts.get(code, 0) + 1
+            if code != "ok" and first_error is None:
+                first_error = payload
+    return {"event_count": event_count, "error_code_counts": counts, "first_error": first_error}
+
+
+def generate_tls_cert(cert: Path, key: Path) -> bool:
+    openssl = shutil.which("openssl")
+    if not openssl:
+        return False
+    subprocess.run(
+        [
+            openssl,
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            str(key),
+            "-out",
+            str(cert),
+            "-sha256",
+            "-days",
+            "1",
+            "-nodes",
+            "-subj",
+            "/CN=localhost",
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    key.chmod(0o600)
+    return True
+
+
 class LocalDemo:
-    def __init__(self, *, build_dir: Path, dataset_dir: Path, work_dir: Path, results_dir: Path):
+    def __init__(
+        self,
+        *,
+        build_dir: Path,
+        dataset_dir: Path,
+        work_dir: Path,
+        results_dir: Path,
+        event_log: str = "",
+        auth_mode: str = "anonymous",
+        auth_token_file: str = "",
+        tls_mode: str = "off",
+        tls_cert_file: str = "",
+        tls_key_file: str = "",
+        tls_ca_file: str = "",
+    ):
         self.build_dir = build_dir
         self.dataset_dir = dataset_dir
         self.work_dir = work_dir
         self.results_dir = results_dir
+        self.event_log = event_log
+        self.auth_mode = auth_mode
+        self.auth_token_file = auth_token_file
+        self.tls_mode = tls_mode
+        self.tls_ca_file = tls_ca_file
         self.server_root = work_dir / "server-root"
         self.server_root.mkdir(parents=True, exist_ok=True)
         self.control_port = free_port()
         self.data_port_base = free_port()
         self.server_log = results_dir / "alpha_demo_local_server.log"
-        self.server = start_server(build_dir, self.server_root, self.control_port, self.data_port_base, self.server_log)
+        self.server = start_server(
+            build_dir,
+            self.server_root,
+            self.control_port,
+            self.data_port_base,
+            self.server_log,
+            event_log=event_log,
+            auth_mode=auth_mode,
+            auth_token_file=auth_token_file,
+            tls_mode=tls_mode,
+            tls_cert_file=tls_cert_file,
+            tls_key_file=tls_key_file,
+            tls_ca_file=tls_ca_file,
+        )
 
     def close(self) -> None:
         stop_server(self.server, self.server_log)
 
+    def auth_args(self) -> list[str]:
+        if self.auth_mode != "token":
+            return []
+        return ["--auth-mode", "token", "--auth-token-file", self.auth_token_file]
+
+    def tls_args(self) -> list[str]:
+        if self.tls_mode != "required":
+            return []
+        args = ["--tls-mode", "required"]
+        if self.tls_ca_file:
+            args.extend(["--tls-ca-file", self.tls_ca_file])
+        return args
+
     def stor(self, source: Path, target: str, *, resume: bool = False, max_chunks: int | None = None, transfer_id: str | None = None) -> tuple[str, int]:
-        sock, buffer = login_type_i("127.0.0.1", self.control_port)
+        sock, buffer = login_type_i(
+            "127.0.0.1",
+            self.control_port,
+            auth_mode=self.auth_mode,
+            token_file=self.auth_token_file,
+            tls_mode=self.tls_mode,
+            tls_ca_file=self.tls_ca_file,
+        )
         with sock:
             if resume:
                 rest = send_command(sock, buffer, f"REST GFID:{transfer_id}")
@@ -243,6 +415,8 @@ class LocalDemo:
             ]
             if resume:
                 command.append("--resume")
+            if self.event_log:
+                command.extend(["--event-log", self.event_log])
             if max_chunks is not None:
                 command.extend(["--max-chunks", str(max_chunks)])
             log_path = self.results_dir / f"alpha_demo_stor_{target.replace('/', '_')}.log"
@@ -263,7 +437,14 @@ class LocalDemo:
             return parsed_transfer_id, data_port
 
     def retr(self, source: str, output: Path, *, resume: bool = False, max_chunks: int | None = None, transfer_id: str | None = None) -> str:
-        sock, buffer = login_type_i("127.0.0.1", self.control_port)
+        sock, buffer = login_type_i(
+            "127.0.0.1",
+            self.control_port,
+            auth_mode=self.auth_mode,
+            token_file=self.auth_token_file,
+            tls_mode=self.tls_mode,
+            tls_ca_file=self.tls_ca_file,
+        )
         with sock:
             if resume:
                 rest = send_command(sock, buffer, f"REST GFID:{transfer_id}")
@@ -298,6 +479,8 @@ class LocalDemo:
             ]
             if resume:
                 command.append("--resume")
+            if self.event_log:
+                command.extend(["--event-log", self.event_log])
             if max_chunks is not None:
                 command.extend(["--max-chunks", str(max_chunks)])
             log_path = self.results_dir / f"alpha_demo_retr_{source.replace('/', '_')}.log"
@@ -320,7 +503,15 @@ class LocalDemo:
     def run_tree_command(self, name: str, command: list[str]) -> dict[str, object]:
         log_path = self.results_dir / f"alpha_demo_{name}.log"
         summary_path = self.results_dir / f"alpha_demo_{name}.json"
-        completed = run_command(command + ["--json-summary", str(summary_path)], log_path)
+        full_command = list(command)
+        if "--auth-mode" not in full_command:
+            full_command += self.auth_args()
+        if "--tls-mode" not in full_command:
+            full_command += self.tls_args()
+        full_command += ["--json-summary", str(summary_path)]
+        if self.event_log and "--event-log" not in full_command:
+            full_command.extend(["--event-log", self.event_log])
+        completed = run_command(full_command, log_path)
         summary: dict[str, object] = {}
         if summary_path.exists():
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -347,7 +538,43 @@ def run_local_demo(args: argparse.Namespace, output_json: Path, timestamp: str) 
         temp_context = tempfile.TemporaryDirectory(prefix="gridflux-alpha-demo.")
         work_dir = Path(temp_context.name)
     build_dir = Path(args.build_dir).resolve()
-    demo = LocalDemo(build_dir=build_dir, dataset_dir=dataset_dir, work_dir=work_dir, results_dir=results_dir)
+    event_log = str(Path(args.event_log)) if args.event_log else str(results_dir / "alpha_demo_events.jsonl")
+    generated_token_context = None
+    auth_token_file = args.auth_token_file
+    if args.auth_mode == "token" and not auth_token_file:
+        generated_token_context = tempfile.TemporaryDirectory(prefix="gridflux-alpha-demo-token.")
+        token_path = Path(generated_token_context.name) / "auth-token.txt"
+        token_path.write_text("phase6b-alpha-demo-token\n", encoding="utf-8")
+        token_path.chmod(0o600)
+        auth_token_file = str(token_path)
+    generated_tls_context = None
+    tls_cert_file = args.tls_cert_file
+    tls_key_file = args.tls_key_file
+    tls_ca_file = args.tls_ca_file
+    if args.tls_mode == "required" and (not tls_cert_file or not tls_key_file):
+        generated_tls_context = tempfile.TemporaryDirectory(prefix="gridflux-alpha-demo-tls.")
+        tls_root = Path(generated_tls_context.name)
+        tls_cert = tls_root / "cert.pem"
+        tls_key = tls_root / "key.pem"
+        if not generate_tls_cert(tls_cert, tls_key):
+            raise RuntimeError("openssl CLI is required to generate demo TLS certificates")
+        tls_cert_file = str(tls_cert)
+        tls_key_file = str(tls_key)
+        if not tls_ca_file:
+            tls_ca_file = str(tls_cert)
+    demo = LocalDemo(
+        build_dir=build_dir,
+        dataset_dir=dataset_dir,
+        work_dir=work_dir,
+        results_dir=results_dir,
+        event_log=event_log,
+        auth_mode=args.auth_mode,
+        auth_token_file=auth_token_file,
+        tls_mode=args.tls_mode,
+        tls_cert_file=tls_cert_file,
+        tls_key_file=tls_key_file,
+        tls_ca_file=tls_ca_file,
+    )
     cases: list[dict[str, object]] = []
 
     def case(name: str, body):
@@ -355,7 +582,15 @@ def run_local_demo(args: argparse.Namespace, output_json: Path, timestamp: str) 
         try:
             cases.append(body(start))
         except Exception as exc:  # noqa: BLE001 - demo runner reports the failing case.
-            cases.append(finish_case(name, start, result="fail", error=str(exc)))
+            cases.append(
+                finish_case(
+                    name,
+                    start,
+                    result="fail",
+                    error=str(exc),
+                    error_code=classify_error_text(str(exc)),
+                )
+            )
 
     try:
         single = dataset_dir / "single.bin"
@@ -478,9 +713,9 @@ def run_local_demo(args: argparse.Namespace, output_json: Path, timestamp: str) 
                 "2",
                 "--file-parallelism",
                 "2",
-            ]
+            ] + demo.auth_args() + demo.tls_args()
             partial_upload = run_command(
-                upload_base + ["--max-files", "1"],
+                upload_base + (["--event-log", event_log] if event_log else []) + ["--max-files", "1"],
                 results_dir / "alpha_demo_tree_resume_partial_upload.log",
             )
             if partial_upload.returncode == 0:
@@ -501,9 +736,9 @@ def run_local_demo(args: argparse.Namespace, output_json: Path, timestamp: str) 
                 "2",
                 "--file-parallelism",
                 "2",
-            ]
+            ] + demo.auth_args() + demo.tls_args()
             partial_download = run_command(
-                download_base + ["--max-files", "1"],
+                download_base + (["--event-log", event_log] if event_log else []) + ["--max-files", "1"],
                 results_dir / "alpha_demo_tree_resume_partial_download.log",
             )
             if partial_download.returncode == 0:
@@ -533,15 +768,21 @@ def run_local_demo(args: argparse.Namespace, output_json: Path, timestamp: str) 
                 "2",
                 "--file-parallelism",
                 "2",
-            ]
-            partial = run_command(base + ["--max-files", "1"], results_dir / "alpha_demo_changed_partial.log")
+            ] + demo.auth_args() + demo.tls_args()
+            partial = run_command(
+                base + (["--event-log", event_log] if event_log else []) + ["--max-files", "1"],
+                results_dir / "alpha_demo_changed_partial.log",
+            )
             if partial.returncode == 0:
                 raise RuntimeError("changed-file partial unexpectedly succeeded")
             changed_path = changed_source / "medium" / "payload.bin"
             time.sleep(1.1)
             changed_path.write_bytes(b"changed alpha demo payload")
             summary_path = results_dir / "alpha_demo_changed_file.json"
-            completed = run_command(base + ["--resume", "--json-summary", str(summary_path)], results_dir / "alpha_demo_changed_resume.log")
+            completed = run_command(
+                base + (["--event-log", event_log] if event_log else []) + ["--resume", "--json-summary", str(summary_path)],
+                results_dir / "alpha_demo_changed_resume.log",
+            )
             if completed.returncode == 0:
                 raise RuntimeError("changed-file resume unexpectedly succeeded")
             error: object = ""
@@ -554,14 +795,25 @@ def run_local_demo(args: argparse.Namespace, output_json: Path, timestamp: str) 
         demo.close()
         if temp_context is not None:
             temp_context.cleanup()
+        if generated_token_context is not None:
+            generated_token_context.cleanup()
+        if generated_tls_context is not None:
+            generated_tls_context.cleanup()
+
+    event_summary = summarize_event_log(event_log)
 
     report = {
         "timestamp": timestamp_utc(),
         "mode": "local",
         "profile": args.profile,
+        "tls_mode": args.tls_mode,
         "dataset_dir": str(dataset_dir),
         "work_dir": str(work_dir) if args.keep_workdir else "",
         "cases": cases,
+        "event_log": event_log,
+        "event_summary": event_summary,
+        "error_code_counts": event_summary.get("error_code_counts", {}),
+        "first_error": event_summary.get("first_error"),
         "result": "pass" if all(case_item.get("result") == "pass" for case_item in cases) else "fail",
     }
     output_json.parent.mkdir(parents=True, exist_ok=True)
@@ -657,6 +909,7 @@ def run_private_demo(args: argparse.Namespace, output_json: Path, timestamp: str
             return []
         return ["--auth-mode", "token", "--auth-token-file", token_file]
 
+
     cases = [
         run_private_case(
             "private_stor_and_resume",
@@ -742,11 +995,17 @@ def run_private_demo(args: argparse.Namespace, output_json: Path, timestamp: str
             env=env,
         ),
     ]
+    event_summary = summarize_event_log(args.event_log)
     report = {
         "timestamp": timestamp_utc(),
         "mode": "private",
         "profile": args.profile,
+        "tls_mode": args.tls_mode,
         "cases": cases,
+        "event_log": args.event_log,
+        "event_summary": event_summary,
+        "error_code_counts": event_summary.get("error_code_counts", {}),
+        "first_error": event_summary.get("first_error"),
         "result": "pass" if all(case_item.get("result") == "pass" for case_item in cases) else "fail",
     }
     output_json.parent.mkdir(parents=True, exist_ok=True)
@@ -767,6 +1026,11 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=20260518)
     parser.add_argument("--auth-mode", choices=["anonymous", "token"], default="anonymous")
     parser.add_argument("--auth-token-file", default="")
+    parser.add_argument("--tls-mode", choices=["off", "required"], default="off")
+    parser.add_argument("--tls-cert-file", default="")
+    parser.add_argument("--tls-key-file", default="")
+    parser.add_argument("--tls-ca-file", default="")
+    parser.add_argument("--event-log", default="")
     parser.add_argument("--json-output", default="")
     parser.add_argument("--keep-workdir", action="store_true")
     args = parser.parse_args()

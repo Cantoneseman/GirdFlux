@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "gridflux/storage/file_io.h"
+#include "gridflux/core/io/tls_socket.h"
 
 namespace {
 
@@ -27,6 +28,7 @@ using gridflux::protocol::control::resolveControlPath;
 using gridflux::protocol::control::resolveRetrPath;
 using gridflux::protocol::control::resolveStorPath;
 using gridflux::protocol::control::resolveVirtualPath;
+using gridflux::core::io::TlsMode;
 
 TEST(ControlOptionsTest, ParsesDefaultsAndRequiredRoot) {
     const std::filesystem::path root =
@@ -54,9 +56,72 @@ TEST(ControlOptionsTest, ParsesDefaultsAndRequiredRoot) {
     EXPECT_EQ(parsed.value().fileIo.posixWriteStrategy,
               gridflux::storage::PosixWriteStrategy::Auto);
     EXPECT_EQ(parsed.value().auth.mode, AuthMode::Anonymous);
+    EXPECT_EQ(parsed.value().tls.mode, TlsMode::Off);
     EXPECT_EQ(parsed.value().user, "gridflux");
+    EXPECT_TRUE(parsed.value().eventLogPath.empty());
 
     std::filesystem::remove_all(root);
+}
+
+TEST(ControlOptionsTest, ParsesTlsOptionsAndRejectsUnsafeKeys) {
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() / "gridflux-control-tls-root";
+    const std::filesystem::path cert =
+        std::filesystem::temp_directory_path() / "gridflux-control-tls-cert.pem";
+    const std::filesystem::path key =
+        std::filesystem::temp_directory_path() / "gridflux-control-tls-key.pem";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root);
+    {
+        std::ofstream output(cert);
+        output << "not-a-real-cert\n";
+    }
+    {
+        std::ofstream output(key);
+        output << "not-a-real-key\n";
+    }
+    std::filesystem::permissions(key, std::filesystem::perms::owner_read |
+                                          std::filesystem::perms::owner_write);
+
+    const std::string rootText = root.string();
+    const std::string certText = cert.string();
+    const std::string keyText = key.string();
+    const char* argv[] = {"gridflux-gridftp-server",
+                          "--root",
+                          rootText.c_str(),
+                          "--tls-mode",
+                          "required",
+                          "--tls-cert-file",
+                          certText.c_str(),
+                          "--tls-key-file",
+                          keyText.c_str()};
+    auto parsed = parseControlServerOptions(static_cast<int>(std::size(argv)), argv);
+    if (gridflux::core::io::tlsSupportAvailable()) {
+        ASSERT_TRUE(parsed.isOk()) << parsed.status().message();
+        EXPECT_EQ(parsed.value().tls.mode, TlsMode::Required);
+        EXPECT_EQ(parsed.value().tls.certFile, certText);
+        EXPECT_EQ(parsed.value().tls.keyFile, keyText);
+    } else {
+        EXPECT_FALSE(parsed.isOk());
+    }
+
+    std::filesystem::permissions(key, std::filesystem::perms::owner_read |
+                                          std::filesystem::perms::owner_write |
+                                          std::filesystem::perms::group_read);
+    EXPECT_FALSE(parseControlServerOptions(static_cast<int>(std::size(argv)), argv).isOk());
+
+    const char* explicitTls[] = {"gridflux-gridftp-server", "--root", rootText.c_str(),
+                                 "--tls-mode", "explicit"};
+    EXPECT_FALSE(parseControlServerOptions(static_cast<int>(std::size(explicitTls)), explicitTls)
+                     .isOk());
+
+    const char* badTls[] = {"gridflux-gridftp-server", "--root", rootText.c_str(), "--tls-mode",
+                            "yes"};
+    EXPECT_FALSE(parseControlServerOptions(static_cast<int>(std::size(badTls)), badTls).isOk());
+
+    std::filesystem::remove_all(root);
+    std::filesystem::remove(cert);
+    std::filesystem::remove(key);
 }
 
 TEST(ControlOptionsTest, ParsesTokenAuthAndRejectsBadTokenFiles) {
@@ -152,6 +217,8 @@ TEST(ControlOptionsTest, ParsesExplicitOptions) {
                           "noreuse",
                           "--posix-write-strategy",
                           "coalesced",
+                          "--event-log",
+                          "/tmp/gridflux-control-events.jsonl",
                           "--user",
                           "alice",
                           "--password",
@@ -179,6 +246,7 @@ TEST(ControlOptionsTest, ParsesExplicitOptions) {
     EXPECT_EQ(parsed.value().fileIo.posixWriteStrategy,
               gridflux::storage::PosixWriteStrategy::Coalesced);
     EXPECT_EQ(parsed.value().user, "alice");
+    EXPECT_EQ(parsed.value().eventLogPath, "/tmp/gridflux-control-events.jsonl");
 
     std::filesystem::remove_all(root);
 }

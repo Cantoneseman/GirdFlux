@@ -8,6 +8,8 @@
 #include <sstream>
 #include <string_view>
 
+#include "gridflux/core/metrics/event_log.h"
+
 namespace gridflux::protocol::control {
 namespace {
 
@@ -277,6 +279,32 @@ common::Result<ControlServerOptions> parseControlServerOptions(int argc, const c
                 return common::Status::invalidArgument("--auth-token-file must not be empty");
             }
             options.auth.tokenFile = std::string(value);
+        } else if (option == "--event-log") {
+            if (value.empty()) {
+                return common::Status::invalidArgument("--event-log must not be empty");
+            }
+            options.eventLogPath = std::string(value);
+        } else if (option == "--tls-mode") {
+            auto parsed = core::io::parseTlsMode(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.tls.mode = parsed.value();
+        } else if (option == "--tls-cert-file") {
+            if (value.empty()) {
+                return common::Status::invalidArgument("--tls-cert-file must not be empty");
+            }
+            options.tls.certFile = std::string(value);
+        } else if (option == "--tls-key-file") {
+            if (value.empty()) {
+                return common::Status::invalidArgument("--tls-key-file must not be empty");
+            }
+            options.tls.keyFile = std::string(value);
+        } else if (option == "--tls-ca-file") {
+            if (value.empty()) {
+                return common::Status::invalidArgument("--tls-ca-file must not be empty");
+            }
+            options.tls.caFile = std::string(value);
         } else if (option == "--user") {
             if (value.empty()) {
                 return common::Status::invalidArgument("--user must not be empty");
@@ -318,6 +346,15 @@ common::Result<ControlServerOptions> parseControlServerOptions(int argc, const c
         options.user = "token";
         options.password.clear();
     }
+    const common::Status eventLogStatus =
+        core::metrics::validateEventLogPath(options.eventLogPath);
+    if (!eventLogStatus.isOk()) {
+        return eventLogStatus;
+    }
+    const common::Status tlsStatus = core::io::validateTlsServerConfig(options.tls);
+    if (!tlsStatus.isOk()) {
+        return tlsStatus;
+    }
     return options;
 }
 
@@ -338,7 +375,9 @@ std::string controlServerUsage(const char* programName) {
               "[--file-io-advice off|sequential|noreuse|dontneed|sequential_dontneed] "
               "[--posix-write-strategy auto|direct|coalesced] "
               "[--auth-mode anonymous|token] [--auth-token-file <path>] "
-              "[--user <name>] [--password <password>]";
+              "[--user <name>] [--password <password>] [--event-log <path>] "
+              "[--tls-mode off|explicit|required] [--tls-cert-file <path>] "
+              "[--tls-key-file <path>] [--tls-ca-file <path>]";
     return output.str();
 }
 

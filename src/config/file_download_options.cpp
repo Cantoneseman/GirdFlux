@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include "gridflux/checkpoint/transfer_manifest.h"
+#include "gridflux/core/metrics/event_log.h"
 
 namespace gridflux::config {
 namespace {
@@ -194,6 +195,11 @@ common::Result<FileDownloadOptions> parseFileDownloadOptions(int argc, const cha
                 return parsed.status();
             }
             options.fileIo.posixWriteStrategy = parsed.value();
+        } else if (option == "--event-log") {
+            if (value.empty()) {
+                return common::Status::invalidArgument("--event-log must not be empty");
+            }
+            options.eventLogPath = std::string(value);
         } else if (option == "--transfer-id") {
             if (value.empty()) {
                 return common::Status::invalidArgument("--transfer-id must not be empty");
@@ -240,6 +246,11 @@ common::Result<FileDownloadOptions> parseFileDownloadOptions(int argc, const cha
     if (!fileIoStatus.isOk()) {
         return fileIoStatus;
     }
+    const common::Status eventLogStatus =
+        core::metrics::validateEventLogPath(options.eventLogPath);
+    if (!eventLogStatus.isOk()) {
+        return eventLogStatus;
+    }
     return options;
 }
 
@@ -257,6 +268,7 @@ std::string fileDownloadUsage(const char* programName) {
            "[--file-io-queue-depth <N>] [--file-io-batch-size <N>] "
            "[--file-io-advice <off|sequential|noreuse|dontneed|sequential_dontneed>] "
            "[--posix-write-strategy <auto|direct|coalesced>] "
+           "[--event-log <path>] "
            "[--overwrite] [--resume] "
            "[--max-chunks <N>]";
 }

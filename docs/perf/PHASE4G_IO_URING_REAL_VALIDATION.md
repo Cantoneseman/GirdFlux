@@ -103,7 +103,7 @@ python3 tools/release/check_public_hygiene.py --path /tmp/gridflux-public --stri
 test ! -f /tmp/gridflux-public/AGENTS.md
 test -f /tmp/gridflux-public/AGENTS.example.md
 find /tmp/gridflux-public -type d -name 'build*' -print -quit | grep -q . && exit 1 || true
-grep -RIn '<redacted>\|<redacted>\|<redacted>\|<redacted>\|<redacted>' /tmp/gridflux-public && exit 1 || true
+grep -RIn '<redacted-password>\|<public-ip>\|<private-ip>' /tmp/gridflux-public && exit 1 || true
 ```
 
 Result: passed after the stricter export/hygiene rules.

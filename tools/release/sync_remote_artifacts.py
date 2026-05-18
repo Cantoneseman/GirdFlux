@@ -199,6 +199,62 @@ def run_remote(remote: str, command: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def run_remote_with_input(remote: str, command: str, payload: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ssh_prefix(remote) + [command],
+        input=payload,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=remote_auth.command_env(remote),
+    )
+
+
+def remote_stats_batch(remote: str, remote_root: str, relative_paths: list[str]) -> dict[str, tuple[bool, int, str]]:
+    if not relative_paths:
+        return {}
+    script = r"""
+import hashlib
+import json
+import os
+import sys
+
+payload = json.load(sys.stdin)
+root = payload["root"]
+out = {}
+for relative in payload["paths"]:
+    path = os.path.join(root, relative)
+    if not os.path.isfile(path):
+        out[relative] = {"exists": False, "size": 0, "sha256": ""}
+        continue
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    out[relative] = {
+        "exists": True,
+        "size": os.path.getsize(path),
+        "sha256": digest.hexdigest(),
+    }
+print(json.dumps(out, sort_keys=True))
+"""
+    command = "python3 -c " + shlex.quote(script)
+    payload = json.dumps({"root": remote_root.rstrip("/"), "paths": relative_paths})
+    completed = run_remote_with_input(remote, command, payload)
+    if completed.returncode != 0:
+        raise RuntimeError(completed.stderr.strip() or "remote artifact batch stat failed")
+    data = json.loads(completed.stdout or "{}")
+    result: dict[str, tuple[bool, int, str]] = {}
+    for relative in relative_paths:
+        item = data.get(relative, {})
+        result[relative] = (
+            bool(item.get("exists", False)),
+            int(item.get("size", 0)),
+            str(item.get("sha256", "")),
+        )
+    return result
+
+
 def remote_stat(remote: str | None, remote_root: str, relative_path: str, remote_local_root: Path | None = None) -> tuple[bool, int, str]:
     if remote_local_root is not None:
         path = remote_local_root / relative_path
@@ -267,12 +323,18 @@ def check_artifacts(
     remote_local_root: Path | None = None,
 ) -> list[ArtifactStatus]:
     checks: list[ArtifactStatus] = []
+    remote_batch: dict[str, tuple[bool, int, str]] = {}
+    if remote_local_root is None and remote is not None:
+        remote_batch = remote_stats_batch(remote, remote_root, [artifact.path for artifact in artifacts])
     for artifact in artifacts:
         local_path = local_root / artifact.path
         local_exists = local_path.is_file()
         local_size = local_path.stat().st_size if local_exists else 0
         local_hash = sha256_file(local_path) if local_exists else ""
-        remote_exists, remote_size, remote_hash = remote_stat(remote, remote_root, artifact.path, remote_local_root)
+        if remote_local_root is not None:
+            remote_exists, remote_size, remote_hash = remote_stat(remote, remote_root, artifact.path, remote_local_root)
+        else:
+            remote_exists, remote_size, remote_hash = remote_batch.get(artifact.path, (False, 0, ""))
         if not local_exists:
             status = "missing_local"
         elif not remote_exists:

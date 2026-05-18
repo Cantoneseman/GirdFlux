@@ -2,7 +2,9 @@
 
 This guide is for the alpha operator demo. It uses the GridFTP-like control
 server and the GridFlux framed data channel. It does not enable raw FTP
-STOR/RETR, TLS/GSI, production auth, or any non-default transfer backend.
+STOR/RETR, GSI, production auth, or any non-default transfer backend. Phase 6C
+can optionally wrap the control connection with TLS for alpha demos; the file
+data channel remains the existing framed TCP path.
 
 ## Build
 
@@ -62,6 +64,36 @@ The local demo starts a loopback `gridflux-gridftp-server` and runs:
 The JSON output contains per-case result, elapsed time, bytes, throughput,
 source/dest hashes, error, and log paths.
 
+To also capture Phase 6B JSONL events:
+
+```bash
+python3 tools/demo/run_alpha_demo.py \
+  --mode local \
+  --build-dir build \
+  --profile tiny \
+  --event-log tools/perf/results/alpha-demo-events.jsonl \
+  --json-output tools/perf/results/alpha-demo-local.json
+```
+
+The demo JSON includes `event_summary`, `error_code_counts`, and `first_error`.
+Event logs do not include token or password values.
+
+To run the same local demo with control-plane TLS enabled, let the demo runner
+generate a temporary self-signed certificate:
+
+```bash
+python3 tools/demo/run_alpha_demo.py \
+  --mode local \
+  --build-dir build \
+  --profile tiny \
+  --tls-mode required \
+  --event-log tools/perf/results/alpha-demo-tls-events.jsonl \
+  --json-output tools/perf/results/alpha-demo-local-tls.json
+```
+
+The generated certificate and key live in a temporary work directory and are
+not written to release artifacts. TLS is control-plane only in Phase 6C.
+
 ## Run The Private Demo
 
 ```bash
@@ -101,6 +133,18 @@ python3 tools/demo/run_alpha_demo.py \
 The token value is not written to demo JSON. See [SECURITY.md](SECURITY.md) for
 the exact alpha auth boundary.
 
+Private TLS smoke is available through the release gate and the dedicated
+helper. It verifies that a remote client can connect to a TLS-required control
+server; it does not encrypt passive data sockets:
+
+```bash
+python3 tools/test/run_gridftp_control_tls_private_once.py \
+  --remote <remote> \
+  --server-host <server-host> \
+  --local-build-dir /root/projects/GridFlux/build \
+  --output-dir tools/perf/results
+```
+
 ## Manual Server And CLI Walkthrough
 
 Start a server:
@@ -131,6 +175,25 @@ printf '%s\n' '<token-value>' > /tmp/gridflux-token.txt
   --auth-token-file /tmp/gridflux-token.txt
 ```
 
+TLS-required control server:
+
+```bash
+umask 077
+openssl req -x509 -newkey rsa:2048 \
+  -keyout /tmp/gridflux-control-key.pem \
+  -out /tmp/gridflux-control-cert.pem \
+  -sha256 -days 1 -nodes -subj '/CN=localhost'
+
+./build/gridflux-gridftp-server \
+  --host 127.0.0.1 \
+  --port 2121 \
+  --root /tmp/gridflux-demo-root \
+  --data-port-base 20300 \
+  --tls-mode required \
+  --tls-cert-file /tmp/gridflux-control-cert.pem \
+  --tls-key-file /tmp/gridflux-control-key.pem
+```
+
 Directory upload:
 
 ```bash
@@ -141,6 +204,8 @@ Directory upload:
   --dest-dir demo/tree-mixed \
   --connections 2 \
   --file-parallelism 2 \
+  --tls-mode required \
+  --tls-ca-file /tmp/gridflux-control-cert.pem \
   --json-summary /tmp/tree-upload-summary.json
 ```
 
@@ -154,6 +219,8 @@ Directory download:
   --dest-dir /tmp/gridflux-demo-download \
   --connections 2 \
   --file-parallelism 2 \
+  --tls-mode required \
+  --tls-ca-file /tmp/gridflux-control-cert.pem \
   --json-summary /tmp/tree-download-summary.json
 ```
 
@@ -170,11 +237,16 @@ files, leaving the tree manifest for resume.
 ## Troubleshooting
 
 - `530` replies mean the control session was not logged in.
+- TLS-required servers close plaintext control clients during handshake. Use
+  `--tls-mode required` and `--tls-ca-file <cert>` on GridFlux-aware clients.
 - `550` during transfer usually means path validation, changed-file fail-safe,
   checksum failure, or data-channel failure. Check the JSON summary and the
   server/client logs.
 - Changed-file failures include the relative path plus manifest/current
   size/mtime. Phase 5D does not auto-overwrite or auto-retransfer changed files.
+- For structured troubleshooting, enable `--event-log` and inspect
+  [OBSERVABILITY.md](OBSERVABILITY.md) for the JSONL schema and stable error
+  codes.
 - Empty directories, permissions, owner, xattrs, and ACLs are not preserved.
 - STOR/RETR file contents still use the GridFlux framed data channel; stock FTP
   recursive/raw transfer is not supported.

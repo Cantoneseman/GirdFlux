@@ -30,7 +30,7 @@ def write_fixture(root: Path) -> None:
     (root / "cmake-build-debug" / "CMakeFiles").mkdir(parents=True)
 
     (root / "AGENTS.md").write_text(
-        "| <redacted>一 | <redacted> | <redacted> | root | <redacted> |\n",
+        "| private-machine | 203.0.113.10 | 10.0.0.10 | root | synthetic-private-password |\n",
         encoding="utf-8",
     )
     (root / "AGENTS.example.md").write_text(
@@ -42,11 +42,15 @@ def write_fixture(root: Path) -> None:
         "auth_" + "tok" + "en=super-secret-token-value-123456\n",
         encoding="utf-8",
     )
+    (root / "src" / "leaked-key.pem").write_text(
+        "-----BEGIN PRIVATE KEY-----\nredacted fixture\n-----END PRIVATE KEY-----\n",
+        encoding="utf-8",
+    )
     (root / "build-verify-20260515T163633Z" / "gridflux_unit_tests").write_bytes(
-        b"\x7fELF fake binary with <redacted>"
+        b"\x7fELF fake binary with 10.0.0.10"
     )
     (root / "cmake-build-debug" / "CMakeCache.txt").write_text(
-        "PRIVATE_IP=<redacted>\n",
+        "PRIVATE_IP=10.0.0.11\n",
         encoding="utf-8",
     )
     (root / "build.ninja").write_text("rule cc\n", encoding="utf-8")
@@ -97,6 +101,7 @@ def main() -> int:
         assert_not_exists(public_repo / "build-verify-20260515T163633Z")
         assert_not_exists(public_repo / "cmake-build-debug")
         assert_not_exists(public_repo / "build.ninja")
+        assert_not_exists(public_repo / "src" / "leaked-key.pem")
         if any(path.name.startswith("build") for path in public_repo.rglob("*") if path.is_dir()):
             raise AssertionError("public export contains a build-like directory")
     print("public hygiene regression test passed")

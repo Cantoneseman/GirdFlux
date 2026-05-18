@@ -2439,7 +2439,7 @@ python3 tools/release/check_public_hygiene.py --path /tmp/gridflux-public --stri
 test ! -f /tmp/gridflux-public/AGENTS.md
 test -f /tmp/gridflux-public/AGENTS.example.md
 find /tmp/gridflux-public -type d -name 'build*' -print -quit | grep -q . && exit 1 || true
-grep -RIn '<redacted>\|<redacted>\|<redacted>\|<redacted>\|<redacted>' /tmp/gridflux-public && exit 1 || true
+grep -RIn '<redacted-password>\|<public-ip>\|<private-ip>' /tmp/gridflux-public && exit 1 || true
 ```
 
 - export summary 摘要：`copied_files=167 skipped_files=1 skipped_dirs=11 skipped_build_dirs=7`。
@@ -3976,3 +3976,70 @@ Phase 5D 不改变默认传输策略：`file_io_backend=posix`、`final_verify_p
 ### 默认策略
 
 Phase 6A 不改变默认传输策略：`file_io_backend=posix`、`final_verify_policy=full`、`manifest_flush_policy=every_n_chunks`、`preallocate=off`、`posix_write_strategy=auto`。Token auth 是 opt-in control-plane alpha，不加密文件数据，不实现 TLS/GSI/DCAU/PROT。
+
+## 2026-05-18 Phase 6B observability and stability alpha 完成
+
+### 实现范围
+
+- 新增轻量 JSONL event log 模块：`gridflux::core::metrics::EventLogger` / `EventRecord`。
+- 新增稳定 alpha error code helper，覆盖 `ok`、`auth_required`、`auth_failed`、`path_rejected`、`manifest_corrupt`、`checksum_mismatch`、`changed_file`、`remote_sync_failed`、`io_error`、`protocol_error`、`config_error`、`unknown_error`。
+- `gridflux-gridftp-server`、`gridflux-file-client`、`gridflux-file-server`、`gridflux-file-download-client`、`gridflux-tree-upload-client`、`gridflux-tree-download-client` 新增 opt-in `--event-log <path>`。
+- Control server 记录 server start、auth success/failure、protected command rejected、STOR/RETR start/complete/fail 和 metadata/list failure。
+- Tree JSON summary 增加 top-level `error_code`；changed-file failure 的 error object 也包含 stable error code。
+- `tools/demo/run_alpha_demo.py` 支持 `--event-log`，local mode 支持 anonymous/token；demo JSON 增加 `event_summary`、`error_code_counts` 和 `first_error`。
+- `tools/release/run_alpha_release_gate.py` 的 step JSON/Markdown 增加 `error_code`、total/passed/failed step count 和 first failed step；full gate 增加短时 local soak smoke。
+- 新增 `tools/test/run_gridftp_event_log_smoke.py` 与 `tools/test/run_alpha_soak_smoke.py`，并注册 CTest。
+- 新增 `docs/OBSERVABILITY.md`，更新 demo/security/release/perf 文档入口。
+
+### 已执行验证
+
+- 通过：`python3 -m py_compile tools/demo/run_alpha_demo.py tools/test/run_alpha_soak_smoke.py tools/test/run_gridftp_event_log_smoke.py tools/release/run_alpha_release_gate.py tools/release/check_public_hygiene.py tools/release/export_public_repo.py`。
+- 通过：`cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++-13`。
+- 通过：`cmake --build build`。
+- 通过 targeted CTest：`ctest --test-dir build -R "EventLog|event_log|alpha_soak|alpha_demo|token|TreeTransferOptions|FileTransferOptions|FileDownloadOptions|ControlOptions" --output-on-failure`，34/34 passed。
+- 通过手动 event-log smoke：`python3 tools/test/run_gridftp_event_log_smoke.py --build-dir build`；JSONL 可解析，包含 `auth_required`、`auth_failed`、`ok`，且未包含 token/PASS 明文。
+- 通过手动 token soak：`python3 tools/test/run_alpha_soak_smoke.py --build-dir build --iterations 1 --results-dir build/alpha-soak-manual-2 --auth-mode token`。
+- 通过本机 Debug full CTest：`175/175` passed。
+- 通过本机 `build-io-uring-real` Release full CTest：`175/175` passed；`FileIoTest.IoUringContextReadWriteSmokeWhenAvailable` passed, not skipped。
+- 通过<redacted>二 Debug full CTest after sync：`175/175` passed。
+- 通过<redacted>二 `build-io-uring-real` Release full CTest after sync：`175/175` passed；real io_uring smoke passed。
+- 通过 quick alpha gate：`tools/perf/results/20260518T133832Z_alpha-release-gate.json`，29/29 steps passed。
+- 通过 full alpha gate：`tools/perf/results/20260518T140606Z_alpha-release-gate.json`，29/29 steps passed；artifact manifest 为 `tools/perf/results/20260518T140606Z_alpha-artifacts.json`。
+- 通过手动 artifact verify：`python3 tools/release/check_remote_artifact_sync.py --manifest tools/perf/results/20260518T140606Z_alpha-artifacts.json`，608 artifacts checked，missing=0，mismatch=0，status=pass。
+- 通过 public export strict hygiene：`python3 tools/release/export_public_repo.py --output /tmp/gridflux-public --force` 后 `check_public_hygiene.py --strict` passed。
+- 完成残留进程检查：本机与<redacted>二均无 `gridflux-gridftp-server` / `gridflux-file-*` 业务进程。
+- 发现并修复 release artifact verify 运维瓶颈：`sync_remote_artifacts.py` / `check_remote_artifact_sync.py` 从逐文件 SSH hash 改为单次 SSH 批量 size/sha256 查询；不改变 artifact 安全校验语义。
+
+### 默认策略
+
+Phase 6B 不改变默认传输策略：`auth-mode=anonymous`、`file_io_backend=posix`、`final_verify_policy=full`、`manifest_flush_policy=every_n_chunks`、`preallocate=off`、`posix_write_strategy=auto`。Event log 是 opt-in，不实现 TLS/GSI、生产认证、raw FTP stream、100G 优化或 metrics server。
+
+## 2026-05-18 Phase 6C TLS control-plane alpha 完成
+
+### 实现范围
+
+- 新增 opt-in control-plane TLS 配置：`--tls-mode off|explicit|required`、`--tls-cert-file`、`--tls-key-file`、`--tls-ca-file`。
+- 默认 `--tls-mode off`；`explicit` 作为未来 AUTH TLS 设计保留并在 Phase 6C 拒绝启动。
+- CMake 默认探测 OpenSSL；有 OpenSSL 时编译真实 TLS backend，无 OpenSSL 时默认非 TLS 构建仍可用，显式 TLS 返回清晰配置错误。
+- `gridflux-gridftp-server` 在 `required` 模式下对控制连接立即执行 TLS handshake；TLS 成功后继续使用现有 FTP-like `USER/PASS/TYPE/EPSV/STOR/RETR/...` 流程。
+- Tree upload/download clients 和 Python control helpers 支持 TLS-required 控制连接。
+- Token auth 可以叠加 TLS：TLS 握手后仍执行 `USER token` / `PASS <token>`。
+- 新增 `tls_required` / `tls_failed` 稳定错误码；event log 可记录 TLS 结果但不记录证书私钥、token 或密码。
+- 新增 loopback TLS smoke 与 private TLS metadata smoke，其中 private smoke 由<redacted>二通过 TLS 连接<redacted>一控制面。
+- 更新 `docs/SECURITY.md`、`docs/DEMO.md`、`docs/OBSERVABILITY.md`、`docs/release/README.md`，新增 `docs/release/PHASE6C_TLS_ALPHA.md`。
+
+### 已执行验证
+
+- 通过：`python3 -m py_compile tools/test/run_gridftp_control_tls_smoke.py tools/test/run_gridftp_control_tls_private_once.py tools/demo/run_alpha_demo.py tools/release/run_alpha_release_gate.py tools/release/check_public_hygiene.py tools/release/test_public_hygiene.py`。
+- 通过：`python3 tools/test/run_gridftp_control_tls_smoke.py --build-dir build`；覆盖 TLS-required 控制面、plaintext failure、metadata、小 STOR/RETR 和日志无私钥泄漏。
+- 通过：`python3 tools/demo/run_alpha_demo.py --mode local --build-dir build --profile tiny --tls-mode required ...`；local alpha demo 8 个 case 全部 pass。
+- 通过：`python3 tools/test/run_gridftp_control_tls_private_once.py --remote <remote> --server-host <server-host> ...`；远端<redacted>发起 TLS 控制连接并完成 `SIZE` metadata smoke。
+- 通过本机 Debug full CTest：`178/178` passed。
+- 通过本机 `build-io-uring-real` Release full CTest：`178/178` passed；`FileIoTest.IoUringContextReadWriteSmokeWhenAvailable` passed, not skipped。
+- <redacted>二已安装 OpenSSL development package，并完成源码同步。
+- 通过<redacted>二 Debug full CTest：`178/178` passed。
+- 通过<redacted>二 `build-io-uring-real` Release full CTest：`178/178` passed；real io_uring smoke passed。
+
+### 默认策略
+
+Phase 6C 不改变默认传输策略：`auth-mode=anonymous`、`tls-mode=off`、`file_io_backend=posix`、`final_verify_policy=full`、`manifest_flush_policy=every_n_chunks`、`preallocate=off`、`posix_write_strategy=auto`。TLS 是 control-plane-only alpha：passive STOR/RETR framed data channel 和 LIST/NLST metadata data channel 仍保持现有 TCP 行为。Phase 6C 不实现 GSI/DCAU/PROT、AUTH TLS explicit upgrade、raw FTP stream、生产认证或 data-channel encryption。

@@ -128,11 +128,12 @@ def check_artifacts(
     relative_paths: list[str],
 ) -> list[ArtifactCheck]:
     checks: list[ArtifactCheck] = []
+    remote_batch = sync_remote_artifacts.remote_stats_batch(remote, remote_root, relative_paths)
     for relative_path in relative_paths:
         local_path = local_root / relative_path
         local_exists = local_path.is_file()
         local_hash = sha256_file(local_path) if local_exists else ""
-        remote_exists, remote_hash = remote_sha256(remote, remote_root, relative_path)
+        remote_exists, _remote_size, remote_hash = remote_batch.get(relative_path, (False, 0, ""))
         if not local_exists:
             status = "missing_local"
         elif not remote_exists:

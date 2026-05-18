@@ -38,6 +38,7 @@ struct FileTransferOptions {
     core::session::CommitSyncPolicy commitSyncPolicy = core::session::CommitSyncPolicy::None;
     storage::PreallocateMode preallocateMode = storage::PreallocateMode::Off;
     storage::FileIoConfig fileIo;
+    std::string eventLogPath;
     bool overwrite = false;
     bool keepPartial = false;
     bool resume = false;

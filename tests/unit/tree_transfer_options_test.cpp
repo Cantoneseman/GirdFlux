@@ -5,6 +5,8 @@
 #include <filesystem>
 #include <fstream>
 
+#include "gridflux/core/io/tls_socket.h"
+
 TEST(TreeTransferOptionsTest, ParsesUploadOptions) {
     const std::filesystem::path root =
         std::filesystem::temp_directory_path() / "gridflux-tree-options-upload";
@@ -41,7 +43,9 @@ TEST(TreeTransferOptionsTest, ParsesUploadOptions) {
                           "--auth-mode",
                           "anonymous",
                           "--json-summary",
-                          "/tmp/tree-summary.json"};
+                          "/tmp/tree-summary.json",
+                          "--event-log",
+                          "/tmp/tree-events.jsonl"};
     auto parsed = gridflux::config::parseTreeTransferOptions(
         static_cast<int>(std::size(argv)), argv, gridflux::config::TreeTransferRole::Upload);
     ASSERT_TRUE(parsed.isOk()) << parsed.status().message();
@@ -52,9 +56,48 @@ TEST(TreeTransferOptionsTest, ParsesUploadOptions) {
     EXPECT_EQ(parsed.value().bufferSize, 262144U);
     EXPECT_EQ(parsed.value().checksumAlgorithm, gridflux::checksum::ChecksumAlgorithm::None);
     EXPECT_EQ(parsed.value().authMode, "anonymous");
+    EXPECT_EQ(parsed.value().tls.mode, gridflux::core::io::TlsMode::Off);
     EXPECT_EQ(parsed.value().user, "alice");
     EXPECT_EQ(parsed.value().jsonSummaryPath, "/tmp/tree-summary.json");
+    EXPECT_EQ(parsed.value().eventLogPath, "/tmp/tree-events.jsonl");
     std::filesystem::remove_all(root);
+}
+
+TEST(TreeTransferOptionsTest, ParsesTlsClientOptions) {
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() / "gridflux-tree-options-tls-root";
+    const std::filesystem::path ca =
+        std::filesystem::temp_directory_path() / "gridflux-tree-options-ca.pem";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root);
+    {
+        std::ofstream output(ca);
+        output << "not-a-real-ca\n";
+    }
+    const std::string rootText = root.string();
+    const std::string caText = ca.string();
+    const char* argv[] = {"gridflux-tree-upload-client", "--source-dir", rootText.c_str(),
+                          "--dest-dir", "remote", "--tls-mode", "required",
+                          "--tls-ca-file", caText.c_str()};
+    auto parsed = gridflux::config::parseTreeTransferOptions(
+        static_cast<int>(std::size(argv)), argv, gridflux::config::TreeTransferRole::Upload);
+    if (gridflux::core::io::tlsSupportAvailable()) {
+        ASSERT_TRUE(parsed.isOk()) << parsed.status().message();
+        EXPECT_EQ(parsed.value().tls.mode, gridflux::core::io::TlsMode::Required);
+        EXPECT_EQ(parsed.value().tls.caFile, caText);
+    } else {
+        EXPECT_FALSE(parsed.isOk());
+    }
+
+    const char* explicitTls[] = {"gridflux-tree-upload-client", "--source-dir", rootText.c_str(),
+                                 "--dest-dir", "remote", "--tls-mode", "explicit"};
+    EXPECT_FALSE(gridflux::config::parseTreeTransferOptions(
+                     static_cast<int>(std::size(explicitTls)), explicitTls,
+                     gridflux::config::TreeTransferRole::Upload)
+                     .isOk());
+
+    std::filesystem::remove_all(root);
+    std::filesystem::remove(ca);
 }
 
 TEST(TreeTransferOptionsTest, ParsesTokenAuthOptions) {
@@ -139,6 +182,16 @@ TEST(TreeTransferOptionsTest, RejectsInvalidOptions) {
                                     "--json-summary"};
     EXPECT_FALSE(gridflux::config::parseTreeTransferOptions(
                      6, missingSummary, gridflux::config::TreeTransferRole::Upload)
+                     .isOk());
+
+    const char* missingEventLog[] = {"gridflux-tree-upload-client",
+                                     "--source-dir",
+                                     "/tmp",
+                                     "--dest-dir",
+                                     "remote",
+                                     "--event-log"};
+    EXPECT_FALSE(gridflux::config::parseTreeTransferOptions(
+                     6, missingEventLog, gridflux::config::TreeTransferRole::Upload)
                      .isOk());
 
     const char* badAuth[] = {"gridflux-tree-upload-client", "--source-dir", "/tmp",

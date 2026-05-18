@@ -31,6 +31,7 @@ struct FileDownloadOptions {
     core::session::CommitSyncPolicy commitSyncPolicy = core::session::CommitSyncPolicy::None;
     storage::PreallocateMode preallocateMode = storage::PreallocateMode::Off;
     storage::FileIoConfig fileIo;
+    std::string eventLogPath;
     bool overwrite = false;
     bool resume = false;
     std::uint64_t maxChunks = 0;

@@ -33,7 +33,10 @@
 #include "gridflux/config/file_transfer_options.h"
 #include "gridflux/core/io/file_download_client.h"
 #include "gridflux/core/io/file_transfer_client.h"
+#include "gridflux/core/metrics/error_code.h"
+#include "gridflux/core/metrics/event_log.h"
 #include "gridflux/core/io/socket_utils.h"
+#include "gridflux/core/io/tls_socket.h"
 #include "gridflux/core/tree/tree_manifest.h"
 #include "gridflux/core/tree/tree_scan.h"
 #include "gridflux/protocol/control/control_auth.h"
@@ -48,7 +51,8 @@ struct ControlReply {
 
 class ControlClient {
    public:
-    [[nodiscard]] common::Status connectTo(const std::string& host, std::uint16_t port) {
+    [[nodiscard]] common::Status connectTo(const std::string& host, std::uint16_t port,
+                                           const TlsConfig& tls) {
         host_ = host;
         addrinfo hints{};
         hints.ai_family = AF_UNSPEC;
@@ -78,6 +82,19 @@ class ControlClient {
         if (!fd_.isValid()) {
             return common::Status::systemError("connect: " + std::string(std::strerror(lastError)),
                                                lastError);
+        }
+        if (tls.mode == TlsMode::Required) {
+            auto context = TlsClientContext::create(tls);
+            if (!context.isOk()) {
+                return context.status();
+            }
+            auto connection = context.value().connect(std::move(fd_), host_);
+            if (!connection.isOk()) {
+                return connection.status();
+            }
+            control_ = std::move(connection.value());
+        } else {
+            control_ = TlsConnection::plain(std::move(fd_));
         }
         auto greeting = readReply();
         if (!greeting.isOk()) {
@@ -269,25 +286,7 @@ class ControlClient {
    private:
     [[nodiscard]] common::Status sendOnly(const std::string& commandText) {
         const std::string text = commandText + "\r\n";
-        std::size_t completed = 0;
-        while (completed < text.size()) {
-            const ssize_t sent =
-                ::send(fd_.get(), text.data() + completed, text.size() - completed, MSG_NOSIGNAL);
-            if (sent > 0) {
-                completed += static_cast<std::size_t>(sent);
-                continue;
-            }
-            if (sent < 0 && errno == EINTR) {
-                continue;
-            }
-            if (sent < 0) {
-                return common::Status::systemError("send control: " +
-                                                       std::string(std::strerror(errno)),
-                                                   errno);
-            }
-            return common::Status::runtimeError("send control returned zero bytes");
-        }
-        return common::Status::ok();
+        return control_.writeAll(text.data(), text.size());
     }
 
     [[nodiscard]] common::Result<ControlReply> command(const std::string& commandText) {
@@ -338,19 +337,14 @@ class ControlClient {
                 return line;
             }
             char chunk[512];
-            const ssize_t received = ::recv(fd_.get(), chunk, sizeof(chunk), 0);
-            if (received > 0) {
-                buffer_.append(chunk, static_cast<std::size_t>(received));
+            auto received = control_.readSome(chunk, sizeof(chunk));
+            if (!received.isOk()) {
+                return received.status();
+            }
+            if (received.value() > 0) {
+                buffer_.append(chunk, received.value());
                 continue;
             }
-            if (received == 0) {
-                return common::Status::runtimeError("control connection closed");
-            }
-            if (errno == EINTR) {
-                continue;
-            }
-            return common::Status::systemError("recv control: " + std::string(std::strerror(errno)),
-                                               errno);
         }
     }
 
@@ -413,6 +407,7 @@ class ControlClient {
     }
 
     UniqueFd fd_;
+    TlsConnection control_;
     std::string host_;
     std::string buffer_;
 };
@@ -466,7 +461,7 @@ common::Status saveManifest(core::tree::TreeManifest* manifest, const std::strin
 }
 
 common::Status ensureControlReady(ControlClient* client, const config::TreeTransferOptions& options) {
-    const common::Status connectStatus = client->connectTo(options.host, options.port);
+    const common::Status connectStatus = client->connectTo(options.host, options.port, options.tls);
     if (!connectStatus.isOk()) {
         return connectStatus;
     }
@@ -804,6 +799,23 @@ void printTreeSummary(const char* label, const char* result,
               << '\n';
 }
 
+void emitTreeEvent(const config::TreeTransferOptions& options, const char* event,
+                   const char* direction, const std::string& path,
+                   const common::Status& status, std::uint64_t bytes = 0) {
+    (void)core::metrics::writeEventLog(
+        options.eventLogPath,
+        core::metrics::EventRecord{std::string("gridflux-tree-") + direction + "-client",
+                                   event,
+                                   "",
+                                   direction,
+                                   path,
+                                   status.isOk() ? "pass" : "fail",
+                                   core::metrics::classifyStatus(status),
+                                   status.isOk() ? "" : status.message(),
+                                   0.0,
+                                   bytes});
+}
+
 common::Status writeTreeJsonSummary(const char* direction, const char* result,
                                     const config::TreeTransferOptions& options,
                                     const core::tree::TreeManifest& manifest,
@@ -861,12 +873,17 @@ common::Status writeTreeJsonSummary(const char* direction, const char* result,
     output << "  \"elapsed_seconds\": " << elapsed << ",\n";
     output << "  \"throughput_gbps\": " << throughputGbps << ",\n";
     output << "  \"result\": \"" << jsonEscape(result) << "\",\n";
+    output << "  \"error_code\": \""
+           << core::metrics::errorCodeName(core::metrics::classifyStatus(status)) << "\",\n";
     output << "  \"tree_hash\": \"" << jsonEscape(treeHash) << "\",\n";
     if (status.isOk()) {
         output << "  \"error\": null\n";
     } else {
         const ChangedErrorDetails details = parseChangedError(status.message());
         output << "  \"error\": {\n";
+        output << "    \"error_code\": \""
+               << core::metrics::errorCodeName(core::metrics::classifyStatus(status))
+               << "\",\n";
         output << "    \"message\": \"" << jsonEscape(status.message()) << "\"";
         if (!details.changedPath.empty()) {
             output << ",\n    \"changed_path\": \"" << jsonEscape(details.changedPath) << "\"";
@@ -1100,18 +1117,26 @@ common::Status processUploadFile(SchedulerState* state, std::size_t index,
     const core::tree::TreeFileRecord record = state->manifest->files[index];
     const std::filesystem::path localPath = std::filesystem::path(options.sourceDir) / record.relativePath;
     const std::string remotePath = joinRemotePath(options.destDir, record.relativePath);
+    emitTreeEvent(options, "file_start", "upload", record.relativePath, common::Status::ok(),
+                  record.size);
 
     auto metadata = statRegularFile(localPath);
     if (!metadata.isOk()) {
         const std::string message =
             changedMissingMessage("source file changed", record, metadata.status().message());
         markChanged(state, index, message);
-        return common::Status::invalidArgument(message);
+        auto status = common::Status::invalidArgument(message);
+        emitTreeEvent(options, "file_changed", "upload", record.relativePath, status,
+                      record.size);
+        return status;
     }
     if (options.resume && !metadataMatches(record, metadata.value())) {
         const std::string message = changedMessage("source file changed", record, metadata.value());
         markChanged(state, index, message);
-        return common::Status::invalidArgument(message);
+        auto status = common::Status::invalidArgument(message);
+        emitTreeEvent(options, "file_changed", "upload", record.relativePath, status,
+                      record.size);
+        return status;
     }
 
     ControlClient control;
@@ -1129,6 +1154,8 @@ common::Status processUploadFile(SchedulerState* state, std::size_t index,
             return common::Status::invalidArgument(message);
         }
         state->stats.skippedFiles.fetch_add(1);
+        emitTreeEvent(options, "file_skipped", "upload", record.relativePath,
+                      common::Status::ok(), record.size);
         return common::Status::ok();
     }
 
@@ -1175,12 +1202,16 @@ common::Status processUploadFile(SchedulerState* state, std::size_t index,
     if (!transferStatus.isOk()) {
         (void)updateRecord(state, index, core::tree::TreeFileStatus::Failed,
                            transferStatus.message());
+        emitTreeEvent(options, "file_failed", "upload", record.relativePath, transferStatus,
+                      record.size);
         return transferStatus;
     }
     const common::Status completeStatus = control.waitTransferComplete();
     if (!completeStatus.isOk()) {
         (void)updateRecord(state, index, core::tree::TreeFileStatus::Failed,
                            completeStatus.message());
+        emitTreeEvent(options, "file_failed", "upload", record.relativePath, completeStatus,
+                      record.size);
         return completeStatus;
     }
     const common::Status doneStatus = updateRecord(state, index, core::tree::TreeFileStatus::Completed);
@@ -1189,6 +1220,8 @@ common::Status processUploadFile(SchedulerState* state, std::size_t index,
     }
     state->stats.completedThisRun.fetch_add(1);
     state->stats.transferredBytes.fetch_add(record.size);
+    emitTreeEvent(options, "file_complete", "upload", record.relativePath, common::Status::ok(),
+                  record.size);
     return common::Status::ok();
 }
 
@@ -1197,6 +1230,8 @@ common::Status processDownloadFile(SchedulerState* state, std::size_t index,
     const core::tree::TreeFileRecord record = state->manifest->files[index];
     const std::filesystem::path localPath = std::filesystem::path(options.destDir) / record.relativePath;
     const std::string remotePath = joinRemotePath(options.sourceDir, record.relativePath);
+    emitTreeEvent(options, "file_start", "download", record.relativePath, common::Status::ok(),
+                  record.size);
 
     ControlClient control;
     const common::Status readyStatus = ensureControlReady(&control, options);
@@ -1210,15 +1245,23 @@ common::Status processDownloadFile(SchedulerState* state, std::size_t index,
             const std::string message = changedMissingMessage("completed download file changed",
                                                               record, metadata.status().message());
             markChanged(state, index, message);
-            return common::Status::invalidArgument(message);
+            auto status = common::Status::invalidArgument(message);
+            emitTreeEvent(options, "file_changed", "download", record.relativePath, status,
+                          record.size);
+            return status;
         }
         if (!metadataMatches(record, metadata.value())) {
             const std::string message =
                 changedMessage("completed download file changed", record, metadata.value());
             markChanged(state, index, message);
-            return common::Status::invalidArgument(message);
+            auto status = common::Status::invalidArgument(message);
+            emitTreeEvent(options, "file_changed", "download", record.relativePath, status,
+                          record.size);
+            return status;
         }
         state->stats.skippedFiles.fetch_add(1);
+        emitTreeEvent(options, "file_skipped", "download", record.relativePath,
+                      common::Status::ok(), record.size);
         return common::Status::ok();
     }
 
@@ -1234,7 +1277,10 @@ common::Status processDownloadFile(SchedulerState* state, std::size_t index,
     if (options.resume && !metadataMatches(record, remoteMetadata)) {
         const std::string message = changedMessage("remote file changed", record, remoteMetadata);
         markChanged(state, index, message);
-        return common::Status::invalidArgument(message);
+        auto status = common::Status::invalidArgument(message);
+        emitTreeEvent(options, "file_changed", "download", record.relativePath, status,
+                      record.size);
+        return status;
     }
 
     if (!acquireTransferSlot(state, options)) {
@@ -1283,18 +1329,24 @@ common::Status processDownloadFile(SchedulerState* state, std::size_t index,
     if (!transferStatus.isOk()) {
         (void)updateRecord(state, index, core::tree::TreeFileStatus::Failed,
                            transferStatus.message());
+        emitTreeEvent(options, "file_failed", "download", record.relativePath, transferStatus,
+                      record.size);
         return transferStatus;
     }
     const common::Status completeStatus = control.waitTransferComplete();
     if (!completeStatus.isOk()) {
         (void)updateRecord(state, index, core::tree::TreeFileStatus::Failed,
                            completeStatus.message());
+        emitTreeEvent(options, "file_failed", "download", record.relativePath, completeStatus,
+                      record.size);
         return completeStatus;
     }
     const common::Status mtimeStatus = setRegularFileMtime(localPath, record.mtimeUnixSeconds);
     if (!mtimeStatus.isOk()) {
         (void)updateRecord(state, index, core::tree::TreeFileStatus::Failed,
                            mtimeStatus.message());
+        emitTreeEvent(options, "file_failed", "download", record.relativePath, mtimeStatus,
+                      record.size);
         return mtimeStatus;
     }
     const common::Status doneStatus = updateRecord(state, index, core::tree::TreeFileStatus::Completed);
@@ -1303,6 +1355,8 @@ common::Status processDownloadFile(SchedulerState* state, std::size_t index,
     }
     state->stats.completedThisRun.fetch_add(1);
     state->stats.transferredBytes.fetch_add(record.size);
+    emitTreeEvent(options, "file_complete", "download", record.relativePath,
+                  common::Status::ok(), record.size);
     return common::Status::ok();
 }
 

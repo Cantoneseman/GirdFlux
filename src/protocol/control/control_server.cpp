@@ -9,10 +9,12 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <random>
 #include <sstream>
 #include <string>
@@ -24,7 +26,9 @@
 #include "gridflux/config/file_transfer_options.h"
 #include "gridflux/core/io/file_download_sender.h"
 #include "gridflux/core/io/file_transfer_server.h"
+#include "gridflux/core/metrics/event_log.h"
 #include "gridflux/core/io/socket_utils.h"
+#include "gridflux/core/io/tls_socket.h"
 #include "gridflux/protocol/control/control_command.h"
 #include "gridflux/storage/posix_file.h"
 
@@ -32,6 +36,8 @@ namespace gridflux::protocol::control {
 namespace {
 
 constexpr std::uint16_t kPassiveScanLimit = 512;
+
+using EventLoggerPtr = std::shared_ptr<core::metrics::EventLogger>;
 
 struct PassiveListener {
     core::io::UniqueFd fd;
@@ -43,7 +49,7 @@ common::Status systemStatus(const char* operation, int errorNumber) {
                                        errorNumber);
 }
 
-common::Status sendAll(int fd, const std::string& text) {
+common::Status sendAllRaw(int fd, const std::string& text) {
     std::size_t completed = 0;
     while (completed < text.size()) {
         const ssize_t sent =
@@ -63,11 +69,17 @@ common::Status sendAll(int fd, const std::string& text) {
     return common::Status::ok();
 }
 
-common::Status sendLine(int fd, const std::string& line) { return sendAll(fd, line + "\r\n"); }
+common::Status sendAll(core::io::TlsConnection* connection, const std::string& text) {
+    return connection->writeAll(text.data(), text.size());
+}
 
-common::Status sendResponse(int fd, const ControlResponse& response) {
+common::Status sendLine(core::io::TlsConnection* connection, const std::string& line) {
+    return sendAll(connection, line + "\r\n");
+}
+
+common::Status sendResponse(core::io::TlsConnection* connection, const ControlResponse& response) {
     for (const std::string& line : response.lines) {
-        const common::Status status = sendLine(fd, line);
+        const common::Status status = sendLine(connection, line);
         if (!status.isOk()) {
             return status;
         }
@@ -75,7 +87,54 @@ common::Status sendResponse(int fd, const ControlResponse& response) {
     return common::Status::ok();
 }
 
-common::Result<std::string> readLine(int fd, std::string* buffer) {
+bool isProtectedCommand(ControlCommandType type) noexcept {
+    switch (type) {
+        case ControlCommandType::Type:
+        case ControlCommandType::Epsv:
+        case ControlCommandType::Pasv:
+        case ControlCommandType::Opts:
+        case ControlCommandType::Rest:
+        case ControlCommandType::Stor:
+        case ControlCommandType::Retr:
+        case ControlCommandType::Size:
+        case ControlCommandType::Mdtm:
+        case ControlCommandType::Cwd:
+        case ControlCommandType::Cdup:
+        case ControlCommandType::List:
+        case ControlCommandType::Nlst:
+            return true;
+        default:
+            return false;
+    }
+}
+
+double elapsedSeconds(std::chrono::steady_clock::time_point start) {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+}
+
+void emitControlEvent(const EventLoggerPtr& logger, std::string event, std::string direction,
+                      std::string path, std::string transferId, const common::Status& status,
+                      std::uint64_t bytes = 0,
+                      std::chrono::steady_clock::time_point startedAt =
+                          std::chrono::steady_clock::now()) {
+    if (!logger || !logger->enabled()) {
+        return;
+    }
+    (void)logger->write(core::metrics::EventRecord{
+        "gridflux-gridftp-server",
+        std::move(event),
+        std::move(transferId),
+        std::move(direction),
+        std::move(path),
+        status.isOk() ? "pass" : "fail",
+        core::metrics::classifyStatus(status),
+        status.isOk() ? "" : status.message(),
+        elapsedSeconds(startedAt),
+        bytes,
+    });
+}
+
+common::Result<std::string> readLine(core::io::TlsConnection* connection, std::string* buffer) {
     while (true) {
         const std::size_t newline = buffer->find('\n');
         if (newline != std::string::npos) {
@@ -88,21 +147,17 @@ common::Result<std::string> readLine(int fd, std::string* buffer) {
         }
 
         char chunk[512];
-        const ssize_t received = ::recv(fd, chunk, sizeof(chunk), 0);
-        if (received > 0) {
-            buffer->append(chunk, static_cast<std::size_t>(received));
+        auto received = connection->readSome(chunk, sizeof(chunk));
+        if (!received.isOk()) {
+            return received.status();
+        }
+        if (received.value() > 0) {
+            buffer->append(chunk, received.value());
             if (buffer->size() > 8192) {
                 return common::Status::invalidArgument("control line exceeds 8192 bytes");
             }
             continue;
         }
-        if (received == 0) {
-            return common::Status::runtimeError("control connection closed");
-        }
-        if (errno == EINTR) {
-            continue;
-        }
-        return systemStatus("recv control", errno);
     }
 }
 
@@ -216,7 +271,7 @@ common::Status sendAsciiData(PassiveListener* passive, const std::string& payloa
     }
     passive->fd.reset();
     passive->port = 0;
-    return sendAll(dataFd.value().get(), payload);
+    return sendAllRaw(dataFd.value().get(), payload);
 }
 
 common::Result<std::uint64_t> fileSizeOfPath(const std::string& path) {
@@ -306,104 +361,126 @@ common::Status validateOutputBeforeStor(const std::string& outputPath, bool resu
     return common::Status::ok();
 }
 
-common::Status runSize(int controlFd, const ControlServerOptions& controlOptions,
-                       const ControlSession& session, const ControlResponse& response) {
+common::Status runSize(core::io::TlsConnection* control, const ControlServerOptions& controlOptions,
+                       const ControlSession& session, const ControlResponse& response,
+                       const EventLoggerPtr& logger) {
     auto path = resolveControlPath(controlOptions.root, session.workingDirectory(), response.path,
                                    ControlPathKind::ExistingFile, "SIZE");
     if (!path.isOk()) {
-        return sendLine(controlFd, formatReply(550, path.status().message()));
+        emitControlEvent(logger, "metadata_failed", "", response.path, "", path.status());
+        return sendLine(control, formatReply(550, path.status().message()));
     }
     auto size = fileSizeOfPath(path.value().fullPath);
     if (!size.isOk()) {
-        return sendLine(controlFd, formatReply(550, size.status().message()));
+        emitControlEvent(logger, "metadata_failed", "", response.path, "", size.status());
+        return sendLine(control, formatReply(550, size.status().message()));
     }
-    return sendLine(controlFd, formatReply(213, std::to_string(size.value())));
+    return sendLine(control, formatReply(213, std::to_string(size.value())));
 }
 
-common::Status runMdtm(int controlFd, const ControlServerOptions& controlOptions,
-                       const ControlSession& session, const ControlResponse& response) {
+common::Status runMdtm(core::io::TlsConnection* control, const ControlServerOptions& controlOptions,
+                       const ControlSession& session, const ControlResponse& response,
+                       const EventLoggerPtr& logger) {
     auto path = resolveControlPath(controlOptions.root, session.workingDirectory(), response.path,
                                    ControlPathKind::ExistingFile, "MDTM");
     if (!path.isOk()) {
-        return sendLine(controlFd, formatReply(550, path.status().message()));
+        emitControlEvent(logger, "metadata_failed", "", response.path, "", path.status());
+        return sendLine(control, formatReply(550, path.status().message()));
     }
     auto mtime = mtimeOfPath(path.value().fullPath);
     if (!mtime.isOk()) {
-        return sendLine(controlFd, formatReply(550, mtime.status().message()));
+        emitControlEvent(logger, "metadata_failed", "", response.path, "", mtime.status());
+        return sendLine(control, formatReply(550, mtime.status().message()));
     }
-    return sendLine(controlFd, formatReply(213, formatMdtmTime(mtime.value())));
+    return sendLine(control, formatReply(213, formatMdtmTime(mtime.value())));
 }
 
-common::Status runCwd(int controlFd, const ControlServerOptions& controlOptions,
-                      ControlSession* session, const ControlResponse& response) {
+common::Status runCwd(core::io::TlsConnection* control, const ControlServerOptions& controlOptions,
+                      ControlSession* session, const ControlResponse& response,
+                      const EventLoggerPtr& logger) {
     if (response.path == ".." && session->workingDirectory() == "/") {
         session->setWorkingDirectory("/");
-        return sendLine(controlFd, formatReply(250, "Directory changed to /"));
+        return sendLine(control, formatReply(250, "Directory changed to /"));
     }
     auto path = resolveControlPath(controlOptions.root, session->workingDirectory(), response.path,
                                    ControlPathKind::ExistingDirectory, "CWD");
     if (!path.isOk()) {
-        return sendLine(controlFd, formatReply(550, path.status().message()));
+        emitControlEvent(logger, "metadata_failed", "", response.path, "", path.status());
+        return sendLine(control, formatReply(550, path.status().message()));
     }
     session->setWorkingDirectory(path.value().virtualPath);
-    return sendLine(controlFd,
+    return sendLine(control,
                     formatReply(250, "Directory changed to " + path.value().virtualPath));
 }
 
-common::Status runListLike(int controlFd, ControlSession& session, PassiveListener* passive,
+common::Status runListLike(core::io::TlsConnection* control, ControlSession& session, PassiveListener* passive,
                            const ControlServerOptions& controlOptions,
-                           const ControlResponse& response, bool namesOnly) {
+                           const ControlResponse& response, bool namesOnly,
+                           const EventLoggerPtr& logger) {
     if (passive == nullptr || !passive->fd.isValid()) {
-        return sendLine(controlFd, formatReply(550, "Passive data listener is not ready"));
+        emitControlEvent(logger, namesOnly ? "nlst_failed" : "list_failed", "", response.path, "",
+                         common::Status::runtimeError("Passive data listener is not ready"));
+        return sendLine(control, formatReply(550, "Passive data listener is not ready"));
     }
     auto path = resolveControlPath(controlOptions.root, session.workingDirectory(), response.path,
                                    ControlPathKind::ExistingDirectory, namesOnly ? "NLST" : "LIST");
     if (!path.isOk()) {
         passive->fd.reset();
         session.clearPassiveReady();
-        return sendLine(controlFd, formatReply(550, path.status().message()));
+        emitControlEvent(logger, namesOnly ? "nlst_failed" : "list_failed", "", response.path, "",
+                         path.status());
+        return sendLine(control, formatReply(550, path.status().message()));
     }
     auto entries = readDirectoryEntries(path.value().fullPath);
     if (!entries.isOk()) {
         passive->fd.reset();
         session.clearPassiveReady();
-        return sendLine(controlFd, formatReply(550, entries.status().message()));
+        emitControlEvent(logger, namesOnly ? "nlst_failed" : "list_failed", "", response.path, "",
+                         entries.status());
+        return sendLine(control, formatReply(550, entries.status().message()));
     }
 
     const std::string payload =
         namesOnly ? formatNlst(entries.value()) : formatList(entries.value());
     common::Status status = sendLine(
-        controlFd, formatReply(150, namesOnly ? "Opening NLST data" : "Opening LIST data"));
+        control, formatReply(150, namesOnly ? "Opening NLST data" : "Opening LIST data"));
     if (!status.isOk()) {
         return status;
     }
     status = sendAsciiData(passive, payload);
     session.clearPassiveReady();
     if (!status.isOk()) {
-        (void)sendLine(controlFd, formatReply(425, status.message()));
+        (void)sendLine(control, formatReply(425, status.message()));
+        emitControlEvent(logger, namesOnly ? "nlst_failed" : "list_failed", "", response.path, "",
+                         status);
         return status;
     }
-    return sendLine(controlFd, formatReply(226, namesOnly ? "NLST complete" : "LIST complete"));
+    return sendLine(control, formatReply(226, namesOnly ? "NLST complete" : "LIST complete"));
 }
 
-common::Status runStor(int controlFd, ControlSession& session, PassiveListener* passive,
+common::Status runStor(core::io::TlsConnection* control, ControlSession& session, PassiveListener* passive,
                        const ControlServerOptions& controlOptions,
-                       const ControlResponse& response) {
+                       const ControlResponse& response, const EventLoggerPtr& logger) {
     if (passive == nullptr || !passive->fd.isValid()) {
-        return sendLine(controlFd, formatReply(550, "Passive data listener is not ready"));
+        emitControlEvent(logger, "stor_failed", "upload", response.path, "",
+                         common::Status::runtimeError("Passive data listener is not ready"));
+        return sendLine(control, formatReply(550, "Passive data listener is not ready"));
     }
 
     auto outputPath =
         resolveStorPath(controlOptions.root, session.workingDirectory(), response.path);
     if (!outputPath.isOk()) {
-        return sendLine(controlFd, formatReply(550, outputPath.status().message()));
+        emitControlEvent(logger, "stor_failed", "upload", response.path, "",
+                         outputPath.status());
+        return sendLine(control, formatReply(550, outputPath.status().message()));
     }
 
     const std::string transferId = response.resume ? response.transferId : generateTransferId();
     const common::Status outputStatus =
         validateOutputBeforeStor(outputPath.value(), response.resume);
     if (!outputStatus.isOk()) {
-        return sendLine(controlFd, formatReply(550, outputStatus.message()));
+        emitControlEvent(logger, "stor_failed", "upload", response.path, transferId, outputStatus);
+        return sendLine(control, formatReply(550, outputStatus.message()));
     }
 
     config::FileTransferOptions fileOptions;
@@ -426,41 +503,56 @@ common::Status runStor(int controlFd, ControlSession& session, PassiveListener* 
 
     const std::string prelude = "Opening GridFlux data connection transfer_id=GFID:" + transferId +
                                 " connections=" + std::to_string(response.connections);
-    common::Status status = sendLine(controlFd, formatReply(150, prelude));
+    common::Status status = sendLine(control, formatReply(150, prelude));
     if (!status.isOk()) {
+        emitControlEvent(logger, "stor_failed", "upload", response.path, transferId, status);
         return status;
     }
 
+    const auto startedAt = std::chrono::steady_clock::now();
+    emitControlEvent(logger, "stor_start", "upload", response.path, transferId,
+                     common::Status::ok(), 0, startedAt);
     core::io::UniqueFd listener = std::move(passive->fd);
     passive->port = 0;
     status = core::io::runFileTransferServerOnListener(fileOptions, std::move(listener));
     if (!status.isOk()) {
-        (void)sendLine(controlFd, formatReply(550, "Transfer failed: " + status.message()));
+        (void)sendLine(control, formatReply(550, "Transfer failed: " + status.message()));
+        emitControlEvent(logger, "stor_failed", "upload", response.path, transferId, status, 0,
+                         startedAt);
         return status;
     }
 
     session.clearPassiveReady();
-    return sendLine(controlFd,
+    auto bytes = fileSizeOfPath(outputPath.value());
+    emitControlEvent(logger, "stor_complete", "upload", response.path, transferId,
+                     common::Status::ok(), bytes.isOk() ? bytes.value() : 0, startedAt);
+    return sendLine(control,
                     formatReply(226, "Transfer complete transfer_id=GFID:" + transferId));
 }
 
-common::Status runRetr(int controlFd, ControlSession& session, PassiveListener* passive,
+common::Status runRetr(core::io::TlsConnection* control, ControlSession& session, PassiveListener* passive,
                        const ControlServerOptions& controlOptions,
-                       const ControlResponse& response) {
+                       const ControlResponse& response, const EventLoggerPtr& logger) {
     if (passive == nullptr || !passive->fd.isValid()) {
-        return sendLine(controlFd, formatReply(550, "Passive data listener is not ready"));
+        emitControlEvent(logger, "retr_failed", "download", response.path, "",
+                         common::Status::runtimeError("Passive data listener is not ready"));
+        return sendLine(control, formatReply(550, "Passive data listener is not ready"));
     }
 
     auto inputPath =
         resolveRetrPath(controlOptions.root, session.workingDirectory(), response.path);
     if (!inputPath.isOk()) {
-        return sendLine(controlFd, formatReply(550, inputPath.status().message()));
+        emitControlEvent(logger, "retr_failed", "download", response.path, "",
+                         inputPath.status());
+        return sendLine(control, formatReply(550, inputPath.status().message()));
     }
 
     const std::string transferId = response.resume ? response.transferId : generateTransferId();
     auto sourceVirtualPath = resolveVirtualPath(session.workingDirectory(), response.path, false);
     if (!sourceVirtualPath.isOk()) {
-        return sendLine(controlFd, formatReply(550, sourceVirtualPath.status().message()));
+        emitControlEvent(logger, "retr_failed", "download", response.path, transferId,
+                         sourceVirtualPath.status());
+        return sendLine(control, formatReply(550, sourceVirtualPath.status().message()));
     }
     std::string sourcePath = sourceVirtualPath.value();
     if (!sourcePath.empty() && sourcePath.front() == '/') {
@@ -481,108 +573,151 @@ common::Status runRetr(int controlFd, ControlSession& session, PassiveListener* 
     const std::string prelude =
         "Opening GridFlux download data connection transfer_id=GFID:" + transferId +
         " connections=" + std::to_string(response.connections);
-    common::Status status = sendLine(controlFd, formatReply(150, prelude));
+    common::Status status = sendLine(control, formatReply(150, prelude));
     if (!status.isOk()) {
+        emitControlEvent(logger, "retr_failed", "download", response.path, transferId, status);
         return status;
     }
 
+    const auto startedAt = std::chrono::steady_clock::now();
+    auto bytes = fileSizeOfPath(inputPath.value());
+    emitControlEvent(logger, "retr_start", "download", response.path, transferId,
+                     common::Status::ok(), bytes.isOk() ? bytes.value() : 0, startedAt);
     core::io::UniqueFd listener = std::move(passive->fd);
     passive->port = 0;
     status = core::io::runFramedFileSenderOnListener(senderOptions, std::move(listener));
     if (!status.isOk()) {
-        (void)sendLine(controlFd, formatReply(550, "Transfer failed: " + status.message()));
+        (void)sendLine(control, formatReply(550, "Transfer failed: " + status.message()));
+        emitControlEvent(logger, "retr_failed", "download", response.path, transferId, status,
+                         bytes.isOk() ? bytes.value() : 0, startedAt);
         return status;
     }
 
     session.clearPassiveReady();
-    return sendLine(controlFd,
+    emitControlEvent(logger, "retr_complete", "download", response.path, transferId,
+                     common::Status::ok(), bytes.isOk() ? bytes.value() : 0, startedAt);
+    return sendLine(control,
                     formatReply(226, "Transfer complete transfer_id=GFID:" + transferId));
 }
 
-void handleControlConnection(core::io::UniqueFd controlFd, ControlServerOptions options) {
+void handleControlConnection(core::io::UniqueFd controlFd, ControlServerOptions options,
+                             EventLoggerPtr logger,
+                             std::shared_ptr<core::io::TlsServerContext> tlsContext) {
+    core::io::TlsConnection control;
+    if (options.tls.mode == core::io::TlsMode::Required) {
+        if (!tlsContext) {
+            emitControlEvent(logger, "tls_handshake_failed", "", "", "",
+                             common::Status::runtimeError("TLS required but unavailable"));
+            return;
+        }
+        auto tlsConnection = tlsContext->accept(std::move(controlFd));
+        if (!tlsConnection.isOk()) {
+            emitControlEvent(logger, "tls_handshake_failed", "", "", "", tlsConnection.status());
+            return;
+        }
+        control = std::move(tlsConnection.value());
+        emitControlEvent(logger, "tls_handshake_success", "", "", "", common::Status::ok());
+    } else {
+        control = core::io::TlsConnection::plain(std::move(controlFd));
+    }
+
     ControlSession session(options.auth, options.connections);
     PassiveListener passive;
     std::string inputBuffer;
 
-    if (!sendLine(controlFd.get(), formatReply(220, "GridFlux GridFTP control ready")).isOk()) {
+    if (!sendLine(&control, formatReply(220, "GridFlux GridFTP control ready")).isOk()) {
         return;
     }
 
-    while (controlFd.isValid()) {
-        auto line = readLine(controlFd.get(), &inputBuffer);
+    while (control.valid()) {
+        auto line = readLine(&control, &inputBuffer);
         if (!line.isOk()) {
             return;
         }
 
         auto command = parseControlCommand(line.value());
         if (!command.isOk()) {
-            (void)sendLine(controlFd.get(), formatReply(550, command.status().message()));
+            emitControlEvent(logger, "command_failed", "", "", "", command.status());
+            (void)sendLine(&control, formatReply(550, command.status().message()));
             continue;
         }
 
+        const bool wasAuthenticated = session.authenticated();
         ControlResponse response = session.handleCommand(command.value());
+        const int responseCode = replyCode(response);
+        if (command.value().type == ControlCommandType::Pass) {
+            if (responseCode == 230) {
+                emitControlEvent(logger, "auth_success", "", "", "", common::Status::ok());
+            } else if (responseCode == 530) {
+                emitControlEvent(logger, "auth_failed", "", "", "",
+                                 common::Status::invalidArgument("Login incorrect"));
+            }
+        } else if (!wasAuthenticated && isProtectedCommand(command.value().type) &&
+                   responseCode == 530) {
+            emitControlEvent(logger, "protected_command_rejected", "", command.value().argument, "",
+                             common::Status::invalidArgument("auth required"));
+        }
         if (response.action == ControlAction::OpenPassiveEpsv ||
             response.action == ControlAction::OpenPassivePasv) {
             passive.fd.reset();
             auto passiveResult = openPassiveListener(options, session.connections());
             if (!passiveResult.isOk()) {
-                (void)sendLine(controlFd.get(),
-                               formatReply(421, "Cannot open passive data listener"));
+                (void)sendLine(&control, formatReply(421, "Cannot open passive data listener"));
                 return;
             }
             passive = std::move(passiveResult.value());
             session.markPassiveReady();
             if (response.action == ControlAction::OpenPassiveEpsv) {
-                (void)sendLine(controlFd.get(), epsvReply(passive.port));
+                (void)sendLine(&control, epsvReply(passive.port));
             } else {
-                auto reply = pasvReply(controlFd.get(), options.host, passive.port);
+                auto reply = pasvReply(control.fd(), options.host, passive.port);
                 if (!reply.isOk()) {
-                    (void)sendLine(controlFd.get(), formatReply(550, reply.status().message()));
+                    (void)sendLine(&control, formatReply(550, reply.status().message()));
                     passive.fd.reset();
                     session.clearPassiveReady();
                 } else {
-                    (void)sendLine(controlFd.get(), reply.value());
+                    (void)sendLine(&control, reply.value());
                 }
             }
             continue;
         }
 
         if (response.action == ControlAction::StartStor) {
-            (void)runStor(controlFd.get(), session, &passive, options, response);
+            (void)runStor(&control, session, &passive, options, response, logger);
             continue;
         }
 
         if (response.action == ControlAction::StartRetr) {
-            (void)runRetr(controlFd.get(), session, &passive, options, response);
+            (void)runRetr(&control, session, &passive, options, response, logger);
             continue;
         }
 
         if (response.action == ControlAction::QuerySize) {
-            (void)runSize(controlFd.get(), options, session, response);
+            (void)runSize(&control, options, session, response, logger);
             continue;
         }
 
         if (response.action == ControlAction::QueryMdtm) {
-            (void)runMdtm(controlFd.get(), options, session, response);
+            (void)runMdtm(&control, options, session, response, logger);
             continue;
         }
 
         if (response.action == ControlAction::ChangeDirectory) {
-            (void)runCwd(controlFd.get(), options, &session, response);
+            (void)runCwd(&control, options, &session, response, logger);
             continue;
         }
 
         if (response.action == ControlAction::StartList) {
-            (void)runListLike(controlFd.get(), session, &passive, options, response, false);
+            (void)runListLike(&control, session, &passive, options, response, false, logger);
             continue;
         }
 
         if (response.action == ControlAction::StartNlst) {
-            (void)runListLike(controlFd.get(), session, &passive, options, response, true);
+            (void)runListLike(&control, session, &passive, options, response, true, logger);
             continue;
         }
 
-        const common::Status sendStatus = sendResponse(controlFd.get(), response);
+        const common::Status sendStatus = sendResponse(&control, response);
         if (!sendStatus.isOk() || response.action == ControlAction::Quit) {
             return;
         }
@@ -592,6 +727,28 @@ void handleControlConnection(core::io::UniqueFd controlFd, ControlServerOptions 
 }  // namespace
 
 common::Status runControlServer(const ControlServerOptions& options) {
+    EventLoggerPtr eventLogger;
+    if (!options.eventLogPath.empty()) {
+        auto logger = core::metrics::EventLogger::open(options.eventLogPath);
+        if (!logger.isOk()) {
+            return logger.status();
+        }
+        eventLogger = std::make_shared<core::metrics::EventLogger>(std::move(logger.value()));
+    }
+    std::shared_ptr<core::io::TlsServerContext> tlsContext;
+    if (options.tls.mode == core::io::TlsMode::Explicit) {
+        return common::Status::invalidArgument(
+            "TLS explicit mode is reserved for a later phase");
+    }
+    if (options.tls.mode == core::io::TlsMode::Required) {
+        auto context = core::io::TlsServerContext::create(options.tls);
+        if (!context.isOk()) {
+            emitControlEvent(eventLogger, "tls_config_failed", "", "", "", context.status());
+            return context.status();
+        }
+        tlsContext = std::make_shared<core::io::TlsServerContext>(std::move(context.value()));
+    }
+
     auto listenerResult = core::io::createListener(options.host.c_str(), options.port, 32);
     if (!listenerResult.isOk()) {
         return listenerResult.status();
@@ -602,8 +759,10 @@ common::Status runControlServer(const ControlServerOptions& options) {
               << " port=" << options.port << " root=" << options.root
               << " data_port_base=" << options.dataPortBase
               << " connections=" << options.connections
-              << " auth_mode=" << authModeName(options.auth.mode) << '\n'
+              << " auth_mode=" << authModeName(options.auth.mode)
+              << " tls_mode=" << core::io::tlsModeName(options.tls.mode) << '\n'
               << std::flush;
+    emitControlEvent(eventLogger, "server_start", "", options.root, "", common::Status::ok());
 
     while (true) {
         pollfd pollFd{};
@@ -629,7 +788,9 @@ common::Status runControlServer(const ControlServerOptions& options) {
                 return systemStatus("accept control", errno);
             }
 
-            std::thread(handleControlConnection, core::io::UniqueFd(acceptedFd), options).detach();
+            std::thread(handleControlConnection, core::io::UniqueFd(acceptedFd), options,
+                        eventLogger, tlsContext)
+                .detach();
         }
     }
 }

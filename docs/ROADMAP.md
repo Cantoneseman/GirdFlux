@@ -2,15 +2,15 @@
 
 ## 当前状态
 
-**阶段：** Phase 6A — 安全与认证 alpha 设计/原型（进行中）
+**阶段：** Phase 6C — TLS 安全通道 alpha 原型（完成）
 
 **已完成：** 项目设计、技术选型、工程规范制定、CMake 工程骨架初始化、GoogleTest 工具链测试、本机与<redacted>二构建验证、GridFTP 源码学习经验整理入设计文档、Phase 1.0 多连接 TCP sink 与本机 loopback 验证、Phase 1.1 性能基线脚本与 loopback smoke matrix、Phase 1.2A offset-aware 单文件传输闭环、Phase 1.2B 文件传输健壮性、Phase 1.3A 文件性能基线自动化、Phase 2A manifest/range-based 断点续传核心、Phase 2B CRC32C chunk checksum 与损坏注入验证、Phase 2C CRC32C backend 自动选择、manifest 批量 flush、恢复统计与 checksum benchmark、Phase 3A GridFTP 风格控制面 STOR 上传与 REST/GFID resume 映射、Phase 3B GridFTP 风格控制面 framed RETR 完整下载、Phase 3C 下载端 manifest/verified_chunks 与 RETR REST/GFID resume、Phase 3D 控制面 SIZE/MDTM/CWD/CDUP/LIST/NLST 与测试工具收敛。
 
 **已完成补充：** Phase 4A 私网 GridFTP-like framed STOR/RETR 性能矩阵脚本、环境指标采集、smoke 矩阵、代表性 1GiB 样本和初步瓶颈判断；Phase 4B 阶段级诊断指标、host/link baseline、download manifest 批量 flush、final verify opt-in policy 和瓶颈报告；Phase 4C 原生 storage benchmark、temp preallocation opt-in、私网矩阵 repeat/summary CSV 和 verified_chunks 可靠性护栏；Phase 4D 文件 IO backend 抽象前置、POSIX file IO advice/buffering 选项、IO call 指标和 storage bench summary；Phase 4E 重型 1GiB repeat=3 storage/private matrix、POSIX knob 默认策略判断和 io_uring Phase 4F 设计闸门；Phase 4F 可选 file-IO-only io_uring backend 原型、CMake/liburing 探测、无 liburing stub fallback、脚本 backend 扫描维度和默认 POSIX 回归验证；Phase 4G 在真实 liburing 环境下完成 POSIX/io_uring storage bench 与私网 STOR/RETR 对照，并新增公开发布脱敏/export 工具链；Phase 4H 完成 file-IO-only io_uring queue depth / batching opt-in prototype、CSV 指标扩展和 smoke/1GiB sample；Phase 4I 完成 storage bench wrapper 修复、1GiB repeat=3 storage/private heavy matrix 和 queue-depth gate 报告；Phase 4J 完成 POSIX storage/writeback、checksum、manifest flush 和 final verify 路径诊断，新增双侧 sender/receiver 阶段字段、manifest flush policy 与 commit sync policy opt-in 诊断参数，以及 Phase 4J median 分析报告；Phase 4K 完成 POSIX temp write/writeback 专项优化实验，新增 POSIX write syscall 级指标、`posix_write_strategy=auto|direct|coalesced` opt-in 策略、storage/private matrix 维度和 Phase 4K median gate 报告；Phase 4L 完成 repeat=5 稳定性矩阵、环境/页缓存 sidecar、summary spread/p95 稳定性标记、RETR sender/receiver 双端瓶颈报告和 opt-in 推荐矩阵。
 
-**未开始：** 系统级文件传输调优、raw FTP stream STOR/RETR、GridFTP TLS/GSI、MLST/MLSD、网络 io_uring、生产级目录同步。
+**未开始：** 系统级文件传输调优、raw FTP stream STOR/RETR、GridFTP GSI、MLST/MLSD、网络 io_uring、生产级目录同步。
 
-**下一步：** 完成 opt-in token auth 的本机/私网 smoke、release gate 和 public hygiene 验收；不改网络 epoll，不默认启用 io_uring，不改变 checksum/manifest/resume 语义。
+**下一步：** Phase 6D 候选方向为更长时间 TLS/token private soak、data-channel encryption 设计评审或继续 operator UX 收口；默认仍保持 anonymous、`tls-mode=off`、POSIX backend、full final verify 和现有 framed STOR/RETR 语义。
 
 ---
 
@@ -330,26 +330,43 @@
 
 状态：已完成。本机与<redacted>二 Debug full CTest 均为 `165/165` passed；本机与<redacted>二 `build-io-uring-real` Release full CTest 均为 `165/165` passed，真实 io_uring smoke 为 `Passed`。Local tiny alpha demo 覆盖 8 个 case 并全部 passed；private tiny alpha demo 覆盖 STOR/resume、RETR/resume 和 tree upload/download/resume 并全部 passed。Quick/full alpha gate 在最终 docs 落盘后运行，并继续保持 artifact manifest freshness、remote artifact sync/verify 和 public export hygiene 闭环。Phase 5D 不改变默认传输策略或单文件 framed STOR/RETR、checksum、manifest、resume、final verify 语义。
 
-- TLS 1.3 / token 认证。
-- 容错容灾（自动重连、超时重试、死任务清理）。
-- 结构化日志 + Prometheus 指标。
-- systemd 集成、优雅停机、配置热加载。
-- 长稳测试（72h+）、ASan/LSan。
-- CI/CD。
-
-**产出：** v1.0 生产可用。
-
----
-
 ## Phase 6：高级能力（持续演进）
 
-- 多文件批量传输与目录同步。
-- 小文件聚合传输（tar-streaming）。
-- Server-to-server 第三方传输。
-- 多节点并行（分布式）。
-- QoS 与带宽限速。
-- 国密 SM4。
-- Web 管理界面 / SDK。
+**6A 安全与认证 alpha**
+
+- 新增 opt-in `--auth-mode anonymous|token` 和 `--auth-token-file <path>`。
+- 默认 `anonymous` 保持 demo/operator 兼容；token 只从权限受限文件读取。
+- Token auth 只保护控制面，不实现 TLS/GSI，也不加密 framed data channel。
+
+状态：已完成。Local/private token smoke、quick/full alpha gate、artifact freshness/sync 和 public hygiene 均通过；默认传输策略不变。
+
+**6B 可观测性与长期稳定性 alpha**
+
+- 新增 opt-in `--event-log <path>` JSONL 事件日志，覆盖 GridFTP control server、file clients/server 和 tree clients。
+- 新增稳定错误码：`ok`、`auth_required`、`auth_failed`、`path_rejected`、`manifest_corrupt`、`checksum_mismatch`、`changed_file`、`remote_sync_failed`、`io_error`、`protocol_error`、`config_error`、`unknown_error`。
+- Alpha demo JSON 增加 event/error summary；release gate step JSON/Markdown 增加 total/passed/failed/error_code/log 摘要。
+- 新增短时本地 soak smoke，循环 tiny demo 覆盖单文件、目录、resume 和 changed-file fail-safe。
+
+状态：已完成。本机与<redacted>二 Debug full CTest 均通过；本机与<redacted>二 `build-io-uring-real` Release full CTest 均通过，真实 io_uring smoke 为 `Passed`。Quick/full alpha gate 增加 event-log 与 soak smoke 并通过；默认传输策略不变。
+
+**6C TLS 安全通道 alpha 原型**
+
+- 新增 opt-in `--tls-mode off|explicit|required`、`--tls-cert-file`、`--tls-key-file`、`--tls-ca-file`。
+- 默认 `off` 保持现有 anonymous/token/demo/operator 流程；`explicit` 本阶段保留并拒绝启动。
+- Phase 6C TLS 只保护 GridFTP-like control connection；STOR/RETR framed data channel 与 LIST/NLST metadata data channel 仍保持现状。
+- Token auth 可与 TLS 叠加：TLS 握手完成后仍使用 `USER token` / `PASS <token>`。
+- Event log 与错误码增加 `tls_required` / `tls_failed`，不记录证书私钥、token 或密码。
+
+状态：已完成。本地 TLS required smoke、<redacted>二发起的 private TLS metadata smoke、quick/full alpha gate、artifact freshness/sync 和 public hygiene 均通过；默认 `tls-mode=off`，不实现 GSI 或 data-channel encryption。
+
+**后续候选**
+
+- TLS/GSI 后续设计：Phase 6C 仅完成 control-plane TLS alpha，data-channel encryption/GSI 仍需设计。
+- 容错容灾（自动重连、超时重试、死任务清理）。
+- Prometheus 或指标导出（在 JSONL alpha 稳定后再评估）。
+- systemd 集成、优雅停机、配置热加载。
+- 长稳测试（72h+）、ASan/LSan。
+- 小文件聚合传输、Server-to-server 第三方传输、多节点并行、QoS、SDK。
 
 ---
 
@@ -418,6 +435,8 @@
 | 2026-05-18 | Phase 5C tree JSON summary 是 opt-in 可观测性，不改变 CLI 默认输出 | perf matrix 和 release gate 使用结构化摘要减少解析漂移；人工 key=value 输出继续保留 |
 | 2026-05-18 | Phase 5D demo runner 只编排现有 framed transfer 能力 | 让 operator 快速演示和排查，不复制 chunk 级传输逻辑，不改变默认 backend 或可靠性事实源 |
 | 2026-05-18 | Phase 6A token auth 只保护控制面且默认关闭 | 保留 anonymous/demo 兼容；token 只从权限受限文件读取，不进入 CLI 参数、日志、artifact manifest 或 public export；TLS/GSI 留到后续设计 |
+| 2026-05-18 | Phase 6B JSONL event log 与稳定错误码保持 opt-in | 增强长期运行排障和 release gate 可读性，不改变默认传输策略，不记录 token/password，不引入 metrics server |
+| 2026-05-18 | Phase 6C TLS 为 opt-in control-plane-only alpha | 默认 `tls-mode=off`；`required` 只包控制连接，passive data channel 仍为现有 framed TCP；不实现 GSI/AUTH TLS/raw FTP TLS，不记录 cert/key/token 内容 |
 
 ---
 

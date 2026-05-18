@@ -5,6 +5,7 @@
 
 #include "gridflux/checksum/checksum.h"
 #include "gridflux/common/status.h"
+#include "gridflux/core/io/tls_socket.h"
 
 namespace gridflux::config {
 
@@ -31,6 +32,8 @@ struct TreeTransferOptions {
     std::string user = "gridflux";
     std::string password = "gridflux";
     std::string jsonSummaryPath;
+    std::string eventLogPath;
+    core::io::TlsConfig tls;
 };
 
 [[nodiscard]] common::Result<TreeTransferOptions> parseTreeTransferOptions(

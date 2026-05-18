@@ -12,19 +12,20 @@
 | [ENGINEERING.md](docs/ENGINEERING.md) | 工程规范、性能基准、验证方案、开发策略 |
 | [DIRECTORY_TRANSFER.md](docs/DIRECTORY_TRANSFER.md) | 多文件/目录传输 alpha 用法、manifest 与恢复边界 |
 | [DEMO.md](docs/DEMO.md) | Alpha demo 数据集、local/private demo runner 与 operator quickstart |
-| [SECURITY.md](docs/SECURITY.md) | Phase 6A token auth alpha 用法、安全边界与 TLS/GSI 后续说明 |
+| [SECURITY.md](docs/SECURITY.md) | Phase 6A token auth 与 Phase 6C control-plane TLS alpha 用法、安全边界 |
+| [OBSERVABILITY.md](docs/OBSERVABILITY.md) | Phase 6B/6C JSONL event log、稳定错误码、demo/gate/soak 排障入口 |
 
 新接手请按 DESIGN → ROADMAP → ENGINEERING 顺序阅读。
 
 ## 项目状态
 
-**当前阶段：** Phase 6A — 安全与认证 alpha 设计/原型（进行中）
+**当前阶段：** Phase 6C — TLS 安全通道 alpha 原型（完成）
 
 **技术栈：** C++20 · epoll 网络基线 · POSIX file IO 默认后端 · 可选 file-IO-only io_uring · CMake · Linux only
 
 **目标场景：** 专线 TB 级（主线）· 虚拟网络 · 广域网
 
-**下一步：** 完成 opt-in token auth 的本机/私网 smoke、alpha gate 和 release hygiene 验收；默认仍保持 anonymous/demo 兼容和 POSIX backend，不切换网络 epoll 或 checksum/manifest/resume/final verify 语义。
+**下一步：** Phase 6D 候选方向为更长时间 TLS/token private soak、data-channel encryption 设计评审或继续 operator UX 收口；默认仍保持 anonymous、`tls-mode=off`、POSIX backend、full final verify 和现有 framed STOR/RETR 语义。
 
 ## AI 协作
 

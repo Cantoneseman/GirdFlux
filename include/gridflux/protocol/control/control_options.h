@@ -9,6 +9,7 @@
 #include "gridflux/core/session/commit_sync_policy.h"
 #include "gridflux/core/session/final_verify_policy.h"
 #include "gridflux/core/session/manifest_flush_policy.h"
+#include "gridflux/core/io/tls_socket.h"
 #include "gridflux/protocol/control/control_auth.h"
 #include "gridflux/storage/file_io.h"
 #include "gridflux/storage/preallocate_mode.h"
@@ -35,6 +36,8 @@ struct ControlServerOptions {
     ControlAuthConfig auth;
     std::string user = "gridflux";
     std::string password = "gridflux";
+    std::string eventLogPath;
+    core::io::TlsConfig tls;
 };
 
 enum class ControlPathKind {

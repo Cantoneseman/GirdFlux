@@ -44,6 +44,7 @@ class StepResult:
     returncode: int
     log: str
     elapsed_seconds: float
+    error_code: str = "ok"
 
 
 def repo_root() -> Path:
@@ -129,13 +130,46 @@ def run_step(name: str, command: list[str], log_dir: Path, *, cwd: Path) -> Step
         "$ " + " ".join(command) + "\n\n" + completed.stdout + completed.stderr,
         encoding="utf-8",
     )
+    error_code = "ok" if completed.returncode == 0 else classify_error_text(completed.stdout + completed.stderr)
     return StepResult(
         name=name,
         status="pass" if completed.returncode == 0 else "fail",
         returncode=completed.returncode,
         log=str(log_path),
         elapsed_seconds=elapsed,
+        error_code=error_code,
     )
+
+
+def classify_error_text(text: str) -> str:
+    lowered = text.lower()
+    if not lowered:
+        return "unknown_error"
+    if "please login" in lowered or "auth required" in lowered:
+        return "auth_required"
+    if "login incorrect" in lowered or "pass rejected" in lowered or "auth failed" in lowered:
+        return "auth_failed"
+    if "changed" in lowered:
+        return "changed_file"
+    if "manifest" in lowered and any(word in lowered for word in ["corrupt", "checksum", "invalid", "stale"]):
+        return "manifest_corrupt"
+    if "checksum" in lowered and ("mismatch" in lowered or "failed" in lowered):
+        return "checksum_mismatch"
+    if "tls required" in lowered:
+        return "tls_required"
+    if any(word in lowered for word in ["tls", "ssl", "certificate", "private key"]):
+        return "tls_failed"
+    if "remote" in lowered and ("sync" in lowered or "artifact" in lowered):
+        return "remote_sync_failed"
+    if "path" in lowered or "escape" in lowered or "outside" in lowered:
+        return "path_rejected"
+    if "protocol" in lowered or "frame" in lowered or "unexpected" in lowered:
+        return "protocol_error"
+    if any(word in lowered for word in ["open", "read", "write", "stat", "connect", "socket", "recv", "send"]):
+        return "io_error"
+    if "unknown option" in lowered or "requires a value" in lowered or "invalid" in lowered:
+        return "config_error"
+    return "unknown_error"
 
 
 def ctest_counts(log_path: Path) -> dict[str, int | str]:
@@ -395,6 +429,7 @@ def collect_alpha_artifact_paths(
         "docs/DIRECTORY_TRANSFER.md",
         "docs/DEMO.md",
         "docs/SECURITY.md",
+        "docs/OBSERVABILITY.md",
         "docs/perf/README.md",
         "docs/perf/PHASE5B_TREE_DATASET_MATRIX.md",
         "docs/perf/PHASE5C_TREE_ALPHA_HARDENING.md",
@@ -507,15 +542,30 @@ def write_markdown_report(path: Path, report: dict[str, object]) -> None:
         f"- Mode: `{report['mode']}`",
         f"- Source tree hash: `{report['source_tree_hash']}`",
         f"- Result: `{'pass' if report['passed'] else 'fail'}`",
+        f"- Total steps: `{report.get('total_steps', len(steps))}`",
+        f"- Passed steps: `{report.get('passed_steps', '')}`",
+        f"- Failed steps: `{report.get('failed_steps', '')}`",
         "",
         "## Step Results",
         "",
-        "| Step | Status | Seconds | Log |",
-        "|------|--------|---------|-----|",
+        "| Step | Status | Error Code | Seconds | Log |",
+        "|------|--------|------------|---------|-----|",
     ]
     for step in steps:
         lines.append(
-            f"| `{step['name']}` | `{step['status']}` | `{step['elapsed_seconds']:.2f}` | `{step['log']}` |"
+            f"| `{step['name']}` | `{step['status']}` | `{step.get('error_code', 'ok')}` | `{step['elapsed_seconds']:.2f}` | `{step['log']}` |"
+        )
+    first_failure = report.get("first_failed_step")
+    if isinstance(first_failure, dict) and first_failure:
+        lines.extend(
+            [
+                "",
+                "First failed step:",
+                "",
+                f"- Name: `{first_failure.get('name', '')}`",
+                f"- Error code: `{first_failure.get('error_code', '')}`",
+                f"- Log: `{first_failure.get('log', '')}`",
+            ]
         )
     lines.extend(["", "## Private Baseline", ""])
     if isinstance(private_matrix, dict) and private_matrix:
@@ -685,6 +735,7 @@ def main() -> int:
         ("metadata_smoke", [sys.executable, "tools/test/run_gridftp_control_metadata_smoke.py", "--build-dir", args.build_dir]),
         ("list_smoke", [sys.executable, "tools/test/run_gridftp_control_list_smoke.py", "--build-dir", args.build_dir]),
         ("token_auth_smoke", [sys.executable, "tools/test/run_gridftp_control_token_smoke.py", "--build-dir", args.build_dir]),
+        ("tls_control_smoke", [sys.executable, "tools/test/run_gridftp_control_tls_smoke.py", "--build-dir", args.build_dir]),
         ("tree_upload_smoke", [sys.executable, "tools/test/run_gridftp_tree_upload_smoke.py", "--build-dir", args.build_dir]),
         ("tree_download_smoke", [sys.executable, "tools/test/run_gridftp_tree_download_smoke.py", "--build-dir", args.build_dir]),
         ("tree_resume_smoke", [sys.executable, "tools/test/run_gridftp_tree_resume_smoke.py", "--build-dir", args.build_dir]),
@@ -707,6 +758,8 @@ def main() -> int:
                 args.results_dir,
                 "--json-output",
                 str(log_dir / "alpha_demo_local.json"),
+                "--event-log",
+                str(log_dir / "alpha_demo_local_events.jsonl"),
             ],
         ),
     ]
@@ -781,6 +834,46 @@ def main() -> int:
             "private_token_auth_smoke", private_token_command, log_dir, cwd=root
         )
         steps.append(private_token_step)
+
+        private_tls_command = [
+            sys.executable,
+            "tools/test/run_gridftp_control_tls_private_once.py",
+            "--remote",
+            args.remote,
+            "--server-host",
+            args.server_host,
+            "--local-build-dir",
+            str((root / args.build_dir).resolve()),
+            "--control-port",
+            str(27000 + (os.getpid() % 1000)),
+            "--data-port-base",
+            str(28000 + (os.getpid() % 1000)),
+            "--output-dir",
+            args.results_dir,
+        ]
+        private_tls_step = run_step("private_tls_control_smoke", private_tls_command, log_dir, cwd=root)
+        steps.append(private_tls_step)
+
+        soak_step = run_step(
+            "alpha_soak_smoke",
+            [
+                sys.executable,
+                "tools/test/run_alpha_soak_smoke.py",
+                "--build-dir",
+                args.build_dir,
+                "--iterations",
+                "2",
+                "--results-dir",
+                str(log_dir / "alpha_soak"),
+                "--json-output",
+                str(log_dir / "alpha_soak.json"),
+                "--event-log",
+                str(log_dir / "alpha_soak_events.jsonl"),
+            ],
+            log_dir,
+            cwd=root,
+        )
+        steps.append(soak_step)
 
         before = set(results_dir.glob("*_gridftp-private-matrix-*.csv"))
         matrix_command = [
@@ -948,6 +1041,11 @@ def main() -> int:
         failures.append("artifact_verify_summary")
     report["steps"] = [asdict(step) for step in steps]
     report["failures"] = failures
+    report["total_steps"] = len(steps)
+    report["passed_steps"] = sum(1 for step in steps if step.status == "pass")
+    report["failed_steps"] = sum(1 for step in steps if step.status != "pass")
+    failed_steps = [asdict(step) for step in steps if step.status != "pass"]
+    report["first_failed_step"] = failed_steps[0] if failed_steps else {}
     report["passed"] = not failures
     write_markdown_report(report_path, report)
     json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -1050,6 +1148,11 @@ def main() -> int:
                 failures.append("artifact_verify_summary")
             report["steps"] = [asdict(step) for step in steps]
             report["failures"] = failures
+            report["total_steps"] = len(steps)
+            report["passed_steps"] = sum(1 for step in steps if step.status == "pass")
+            report["failed_steps"] = sum(1 for step in steps if step.status != "pass")
+            failed_steps = [asdict(step) for step in steps if step.status != "pass"]
+            report["first_failed_step"] = failed_steps[0] if failed_steps else {}
             report["passed"] = not failures
             write_markdown_report(report_path, report)
             json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -1073,6 +1176,11 @@ def main() -> int:
                 failures.append("artifact_manifest_freshness")
                 report["steps"] = [asdict(step) for step in steps]
                 report["failures"] = failures
+                report["total_steps"] = len(steps)
+                report["passed_steps"] = sum(1 for step in steps if step.status == "pass")
+                report["failed_steps"] = sum(1 for step in steps if step.status != "pass")
+                failed_steps = [asdict(step) for step in steps if step.status != "pass"]
+                report["first_failed_step"] = failed_steps[0] if failed_steps else {}
                 report["passed"] = False
                 write_markdown_report(report_path, report)
                 json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")

@@ -12,6 +12,10 @@ raw CSV 会记录 JSON summary 路径和 completed/skipped/failed/changed、
 bytes_total、bytes_transferred、tree_hash/error_message 等字段；stdout
 key=value 仅作为 fallback。
 
+Phase 6B 起可使用 `--event-log <path>` 生成 JSONL 事件日志。性能脚本仍以
+CSV 为主，event log 用于单 case 排障：auth/path/manifest/checksum/changed-file
+等错误会映射到稳定 `error_code`。事件日志不得包含 token/password。
+
 ## Alpha Artifact Sync
 
 ```bash

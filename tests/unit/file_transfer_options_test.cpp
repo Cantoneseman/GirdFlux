@@ -47,6 +47,7 @@ TEST(FileTransferOptionsTest, AppliesServerDefaults) {
     EXPECT_EQ(result.value().fileIo.advice, gridflux::storage::FileIoAdvice::Off);
     EXPECT_EQ(result.value().fileIo.posixWriteStrategy,
               gridflux::storage::PosixWriteStrategy::Auto);
+    EXPECT_TRUE(result.value().eventLogPath.empty());
 }
 
 TEST(FileTransferOptionsTest, AppliesClientDefaults) {
@@ -101,6 +102,8 @@ TEST(FileTransferOptionsTest, ParsesClientOptions) {
                                "sequential",
                                "--posix-write-strategy",
                                "direct",
+                               "--event-log",
+                               "/tmp/gridflux-file-client-events.jsonl",
                                "--corrupt-chunk",
                                "0",
                                "--duplicate-corrupt-chunk",
@@ -128,6 +131,7 @@ TEST(FileTransferOptionsTest, ParsesClientOptions) {
     EXPECT_EQ(result.value().fileIo.advice, gridflux::storage::FileIoAdvice::Sequential);
     EXPECT_EQ(result.value().fileIo.posixWriteStrategy,
               gridflux::storage::PosixWriteStrategy::Direct);
+    EXPECT_EQ(result.value().eventLogPath, "/tmp/gridflux-file-client-events.jsonl");
 }
 
 TEST(FileTransferOptionsTest, ParsesServerFlags) {
@@ -139,7 +143,8 @@ TEST(FileTransferOptionsTest, ParsesServerFlags) {
                "fsync_file_and_dir", "--preallocate", "full", "--file-io-buffer-size", "2097152",
                "--file-io-backend", "io_uring", "--file-io-queue-depth", "8",
                "--file-io-batch-size", "2", "--file-io-advice", "dontneed",
-               "--posix-write-strategy", "coalesced"},
+               "--posix-write-strategy", "coalesced", "--event-log",
+               "/tmp/gridflux-file-server-events.jsonl"},
               gridflux::config::FileTransferRole::Server);
 
     ASSERT_TRUE(result.isOk()) << result.status().message();
@@ -163,6 +168,7 @@ TEST(FileTransferOptionsTest, ParsesServerFlags) {
     EXPECT_EQ(result.value().fileIo.advice, gridflux::storage::FileIoAdvice::DontNeed);
     EXPECT_EQ(result.value().fileIo.posixWriteStrategy,
               gridflux::storage::PosixWriteStrategy::Coalesced);
+    EXPECT_EQ(result.value().eventLogPath, "/tmp/gridflux-file-server-events.jsonl");
 }
 
 TEST(FileTransferOptionsTest, ParsesClientResume) {

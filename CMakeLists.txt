@@ -13,6 +13,7 @@ endif()
 
 option(GRIDFLUX_BUILD_TESTS "Build GridFlux tests" ON)
 option(GRIDFLUX_ENABLE_IO_URING "Enable optional file-IO-only io_uring backend" OFF)
+option(GRIDFLUX_ENABLE_TLS "Enable optional OpenSSL control-plane TLS alpha support when available" ON)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -59,6 +60,19 @@ if(GRIDFLUX_ENABLE_IO_URING)
     endif()
 endif()
 
+set(GRIDFLUX_TLS_SOURCE src/core/io/tls_socket_stub.cpp)
+set(GRIDFLUX_HAS_TLS 0)
+if(GRIDFLUX_ENABLE_TLS)
+    find_package(OpenSSL QUIET)
+    if(OpenSSL_FOUND)
+        set(GRIDFLUX_TLS_SOURCE src/core/io/tls_socket.cpp)
+        set(GRIDFLUX_HAS_TLS 1)
+        message(STATUS "GridFlux control-plane TLS alpha enabled with OpenSSL")
+    else()
+        message(WARNING "OpenSSL development files were not found; building TLS unavailable stub")
+    endif()
+endif()
+
 add_library(gridflux_core STATIC
     src/checkpoint/download_manifest.cpp
     src/checkpoint/manifest_store.cpp
@@ -83,7 +97,10 @@ add_library(gridflux_core STATIC
     src/core/io/socket_utils.cpp
     src/core/io/tcp_sink_client.cpp
     src/core/io/tcp_sink_server.cpp
+    ${GRIDFLUX_TLS_SOURCE}
     src/core/io/tree_transfer_client.cpp
+    src/core/metrics/error_code.cpp
+    src/core/metrics/event_log.cpp
     src/core/metrics/transfer_phase_stats.cpp
     src/core/protocol/frame.cpp
     src/core/session/download_session.cpp
@@ -119,6 +136,7 @@ target_link_libraries(gridflux_core
 target_compile_definitions(gridflux_core
     PUBLIC
         GRIDFLUX_HAS_IO_URING=${GRIDFLUX_HAS_IO_URING}
+        GRIDFLUX_HAS_TLS=${GRIDFLUX_HAS_TLS}
 )
 
 if(GRIDFLUX_HAS_IO_URING)
@@ -129,6 +147,14 @@ if(GRIDFLUX_HAS_IO_URING)
     target_link_libraries(gridflux_core
         PRIVATE
             ${GRIDFLUX_LIBURING_LIBRARY}
+    )
+endif()
+
+if(GRIDFLUX_HAS_TLS)
+    target_link_libraries(gridflux_core
+        PRIVATE
+            OpenSSL::SSL
+            OpenSSL::Crypto
     )
 endif()
 
@@ -247,6 +273,7 @@ if(GRIDFLUX_BUILD_TESTS)
         tests/unit/control_session_test.cpp
         tests/unit/download_manifest_test.cpp
         tests/unit/download_session_test.cpp
+        tests/unit/event_log_test.cpp
         tests/unit/file_download_options_test.cpp
         tests/unit/file_io_test.cpp
         tests/unit/file_transfer_options_test.cpp
@@ -318,6 +345,14 @@ if(GRIDFLUX_BUILD_TESTS)
         COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/test/run_gridftp_control_token_smoke.py --build-dir ${CMAKE_BINARY_DIR}
     )
     add_test(
+        NAME gridflux_gridftp_control_tls_smoke
+        COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/test/run_gridftp_control_tls_smoke.py --build-dir ${CMAKE_BINARY_DIR}
+    )
+    add_test(
+        NAME gridflux_event_log_smoke
+        COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/test/run_gridftp_event_log_smoke.py --build-dir ${CMAKE_BINARY_DIR}
+    )
+    add_test(
         NAME gridflux_tree_upload_smoke
         COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/test/run_gridftp_tree_upload_smoke.py --build-dir ${CMAKE_BINARY_DIR}
     )
@@ -360,6 +395,10 @@ if(GRIDFLUX_BUILD_TESTS)
     add_test(
         NAME gridflux_alpha_demo_helper_behavior
         COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/demo/test_alpha_demo.py
+    )
+    add_test(
+        NAME gridflux_alpha_soak_smoke
+        COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/test/run_alpha_soak_smoke.py --build-dir ${CMAKE_BINARY_DIR} --iterations 1 --results-dir ${CMAKE_BINARY_DIR}/alpha-soak-smoke
     )
     add_test(
         NAME gridflux_storage_bench_wrapper_behavior
