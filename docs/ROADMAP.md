@@ -262,6 +262,16 @@
 
 状态：已完成。本机与<redacted>二默认 Debug full CTest 均为 `144/144` passed；`build-io-uring-real` Release full CTest 均为 `144/144` passed，真实 io_uring smoke 为 `Passed`。Phase 4L private matrix `240/240` pass，sha256 全一致；summary `48` 组，`21` 组 throughput spread 超过 `20%`。median 结论：STOR 仍主要由 temp write/writeback 主导，最高吞吐和默认 baseline 都受较大波动影响；RETR 在不同策略下会在 sender network send 与 receiver download write 之间切换主要瓶颈；当前数据不支持改变默认或给出强 opt-in 推荐，继续保持 POSIX 默认、full final verify、every_n_chunks manifest flush 和 `posix_write_strategy=auto`。
 
+**4M alpha release gate 与稳定性收敛**
+
+- 新增 `tools/release/run_alpha_release_gate.py`，将 build、CTest、io_uring CTest、public export hygiene、STOR/RETR full/resume smoke、metadata/list smoke 和可选 private baseline matrix 编排为 quick/full release gate。
+- 新增 `tools/release/check_remote_artifact_sync.py`，校验 release 文档、JSON、raw/summary CSV 和 CSV 引用 sidecar logs 在本机/<redacted>二之间 hash 一致；只检查和报告，不删除远端文件。
+- 新增 `docs/release/README.md`、`docs/release/ALPHA_READINESS.md` 和生成式 `docs/release/ALPHA_RELEASE_GATE.md`。
+- Release gate 输出 Markdown 报告与 `tools/perf/results/<timestamp>_alpha-release-gate.json`，记录 build/CTest、smoke、hygiene、private baseline、artifact sync、残留进程检查和 alpha pass/fail。
+- Phase 4M 不新增性能开关，不改变 POSIX 默认、不切网络 epoll、不改变 STOR/RETR framed data path 或 checksum/manifest/resume/final verify 语义。
+
+状态：已完成。本机与<redacted>二默认 Debug full CTest 均为 `145/145` passed；`build-io-uring-real` Release full CTest 均为 `145/145` passed，真实 io_uring smoke 为 `Passed`。`run_alpha_release_gate.py --quick` 和 `--full` 均通过；full gate private baseline `24/24` pass，sha256 全一致，summary `fail_count=0`。Release artifact sync 校验 `152` 个 artifact（含 raw/summary CSV 和 sidecar logs）通过。alpha-ready 表示 framed STOR/RETR/resume/checksum/metadata 可演示，不代表 beta/production。
+
 **产出：** 多后端可切换引擎，各场景性能数据。
 
 ---
@@ -346,6 +356,7 @@
 | 2026-05-17 | `manifest_flush_policy=final_only` 和 `commit_sync_policy=*` 仅为诊断开关 | final_only 失败/commit 前仍强制 flush，不改变恢复事实源；commit fsync 用于测量 rename/fsync 成本，默认继续 `none` |
 | 2026-05-17 | Phase 4K 不默认启用 POSIX coalesced write strategy | 1GiB repeat=3 显示 coalescing 的收益不贯穿 STOR/RETR 与 crc32c/none；默认继续 `auto` + `file_io_buffer_size=0`，`direct`/`coalesced` 仅保留 opt-in 诊断 |
 | 2026-05-18 | Phase 4L 不基于高波动样本改变默认或推荐强 opt-in | repeat=5 1GiB 私网矩阵 21/48 summary rows spread 超过 20%；STOR 仍是 temp write/writeback 主导，RETR 在 sender send 与 receiver write 间切换，默认继续保持 POSIX/full/every_n_chunks/auto |
+| 2026-05-18 | Phase 4M 以 alpha release gate 收敛发布质量 | 不再堆性能开关；用 quick/full gate、public hygiene、artifact sync 和 alpha readiness 报告固定可复现验收流程，默认配置与传输语义保持不变 |
 
 ---
 

@@ -718,6 +718,53 @@ test -f /tmp/gridflux-public/AGENTS.example.md
 
 私有工作区的 hygiene check 可能因本地 `AGENTS.md` 和历史私网拓扑记录失败；这是预期的发布闸门。公开目录必须由 `export_public_repo.py` 生成并通过 strict check。
 
+## Alpha Release Gate
+
+Phase 4M 将已有构建、CTest、smoke、public hygiene 和 private baseline 编排为 alpha release gate。文档见 `docs/release/README.md` 与 `docs/release/ALPHA_READINESS.md`。
+
+Quick gate：
+
+```bash
+python3 tools/release/run_alpha_release_gate.py \
+  --quick \
+  --build-dir build \
+  --io-uring-build-dir build-io-uring-real \
+  --remote <remote> \
+  --remote-root /root/projects/GridFlux \
+  --results-dir tools/perf/results
+```
+
+Full gate 会在 quick 基础上跑 1GiB repeat=3 STOR/RETR private baseline，并输出 Markdown 与 JSON：
+
+```bash
+GRIDFLUX_SSH_PASSWORD='***' python3 tools/release/run_alpha_release_gate.py \
+  --full \
+  --build-dir build \
+  --io-uring-build-dir build-io-uring-real \
+  --remote <remote> \
+  --remote-root /root/projects/GridFlux \
+  --server-host <server-host> \
+  --results-dir tools/perf/results
+```
+
+远端 artifact 同步检查：
+
+```bash
+python3 tools/release/check_remote_artifact_sync.py \
+  --remote <remote> \
+  --local-root /root/projects/GridFlux \
+  --remote-root /root/projects/GridFlux \
+  --path INDEX.md \
+  --path docs/ROADMAP.md \
+  --path docs/PROJECT_STATE.md \
+  --path docs/release/ALPHA_RELEASE_GATE.md \
+  --path docs/release/ALPHA_READINESS.md \
+  --csv <phase4m-private-raw.csv> \
+  --csv <phase4m-private-summary.csv>
+```
+
+该检查只报告缺失或 hash mismatch，不会删除远端文件。CSV 中引用的 `*_log` 与 env sidecar log 也会被校验。
+
 Phase 4C repeat=3 代表性矩阵：
 
 ```bash

@@ -15,13 +15,13 @@
 
 ## 项目状态
 
-**当前阶段：** Phase 4L — 性能稳定性、RETR 双端拆解与 opt-in 推荐矩阵（已完成）
+**当前阶段：** Phase 4M — alpha release gate 与稳定性收敛（已完成）
 
 **技术栈：** C++20 · epoll 网络基线 · POSIX file IO 默认后端 · 可选 file-IO-only io_uring · CMake · Linux only
 
 **目标场景：** 专线 TB 级（主线）· 虚拟网络 · 广域网
 
-**下一步：** Phase 4M — 基于 Phase 4L 稳定性结论继续做专项评估；默认仍保持 POSIX backend，不切换网络 epoll 或 STOR/RETR framed data path。
+**下一步：** 进入 beta/production 缺口评估与 Phase 5 产品化加固；默认仍保持 POSIX backend，不切换网络 epoll 或 STOR/RETR framed data path。
 
 ## AI 协作
 

@@ -3396,3 +3396,164 @@ python3 tools/perf/analyze_phase4l.py \
 - Phase 4L does not introduce a new transfer protocol.
 - Phase 4L does not change network epoll, raw FTP STOR/RETR boundaries, checksum, manifest, resume, or final verify semantics.
 - `verified_chunks`, `final_only`, `coalesced`, preallocate full, commit fsync, and io_uring remain explicit opt-in / diagnostic choices only.
+
+## 2026-05-18 Phase 4M alpha release gate and stability convergence
+
+### Implementation
+
+- Added `tools/release/run_alpha_release_gate.py`.
+  - `--quick` runs existing build, default CTest, io_uring CTest, public export hygiene, STOR/RETR smoke, STOR/RETR resume smoke, metadata/list smoke, and residual process checks.
+  - `--full` adds a 1GiB repeat=3 private baseline matrix for STOR/RETR with `crc32c,none` and `full,verified_chunks`, while keeping defaults otherwise unchanged.
+  - Outputs `docs/release/ALPHA_RELEASE_GATE.md` and `tools/perf/results/<timestamp>_alpha-release-gate.json`.
+- Added `tools/release/check_remote_artifact_sync.py`.
+  - Checks selected docs, JSON, raw/summary CSV, and CSV referenced sidecar logs on local and remote trees by SHA256.
+  - Reports missing/mismatch artifacts and does not delete remote files.
+- Added `tools/release/test_alpha_release_helpers.py` and registered `gridflux_alpha_release_helper_behavior` in CMake.
+- Added release docs:
+  - `docs/release/README.md`
+  - `docs/release/ALPHA_READINESS.md`
+  - generated/placeholder `docs/release/ALPHA_RELEASE_GATE.md`
+- Updated `INDEX.md`, `docs/ROADMAP.md`, and `docs/perf/README.md`.
+
+### Default behavior
+
+- Phase 4M does not add transfer performance knobs.
+- Defaults remain:
+  - `file_io_backend=posix`
+  - `posix_write_strategy=auto`
+  - `file_io_buffer_size=0`
+  - `preallocate=off`
+  - `final_verify_policy=full`
+  - `manifest_flush_policy=every_n_chunks`
+  - `commit_sync_policy=none`
+- Network epoll, GridFlux framed STOR/RETR, checksum, manifest, resume, and final verify semantics are unchanged.
+
+### Local validation
+
+```bash
+python3 -m py_compile \
+  tools/release/run_alpha_release_gate.py \
+  tools/release/check_remote_artifact_sync.py \
+  tools/release/test_alpha_release_helpers.py
+
+python3 tools/release/test_alpha_release_helpers.py
+
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++-13
+cmake --build build
+ctest --test-dir build --output-on-failure
+
+cmake -S . -B build-io-uring-real -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_COMPILER=g++-13 \
+  -DGRIDFLUX_ENABLE_IO_URING=ON
+cmake --build build-io-uring-real
+ctest --test-dir build-io-uring-real --output-on-failure
+ctest --test-dir build-io-uring-real -R FileIoTest.IoUringContextReadWriteSmokeWhenAvailable --output-on-failure
+```
+
+- `py_compile`: passed.
+- `tools/release/test_alpha_release_helpers.py`: passed.
+- Default Debug configure/build: passed.
+- Default Debug full CTest: `145/145` passed. The new `gridflux_alpha_release_helper_behavior` CTest passed.
+- `build-io-uring-real` Release configure/build: passed.
+- `build-io-uring-real` Release full CTest: `145/145` passed.
+- Real io_uring smoke: `FileIoTest.IoUringContextReadWriteSmokeWhenAvailable` passed.
+
+### Alpha release gate quick
+
+```bash
+python3 tools/release/run_alpha_release_gate.py \
+  --quick \
+  --build-dir build \
+  --io-uring-build-dir build-io-uring-real \
+  --results-dir tools/perf/results
+```
+
+- Local-only quick result: passed.
+- Remote artifact-sync quick result: passed.
+- Markdown report: `docs/release/ALPHA_RELEASE_GATE.md`.
+- Local-only JSON report: `tools/perf/results/20260518T022637Z_alpha-release-gate.json`.
+- Remote artifact-sync JSON report: `tools/perf/results/20260518T022940Z_alpha-release-gate.json`.
+- Quick gate steps passed:
+  - `build_debug`
+  - `ctest_debug`
+  - `ctest_iouring`
+  - `ctest_iouring_smoke`
+  - `public_export_hygiene`
+  - `stor_smoke`
+  - `retr_smoke`
+  - `stor_resume_smoke`
+  - `retr_resume_smoke`
+  - `metadata_smoke`
+  - `list_smoke`
+- Private baseline was not run in quick mode.
+- Artifact sync check in remote quick gate: passed.
+- Residual process check: no local or remote GridFlux business processes.
+
+### Public hygiene
+
+```bash
+rm -rf /tmp/gridflux-public-phase4m-check
+python3 tools/release/export_public_repo.py --output /tmp/gridflux-public-phase4m-check --force
+python3 tools/release/check_public_hygiene.py --path /tmp/gridflux-public-phase4m-check --strict
+```
+
+- Public export strict hygiene: passed.
+- Export summary during validation: `copied_files=188 skipped_files=1 skipped_dirs=10 skipped_build_dirs=7`.
+- Release docs and scripts were checked for known private IP/password patterns; no matches were found.
+
+### Remote validation
+
+```bash
+GRIDFLUX_SSH_PASSWORD='***' SSHPASS='***' tools/perf/sync_remote.sh \
+  --host <remote> \
+  --source /root/projects/GridFlux \
+  --target /root/projects/GridFlux
+
+SSHPASS='***' sshpass -e ssh <remote> \
+  'cd /root/projects/GridFlux && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++-13 && cmake --build build && ctest --test-dir build --output-on-failure'
+
+SSHPASS='***' sshpass -e ssh <remote> \
+  'cd /root/projects/GridFlux && cmake -S . -B build-io-uring-real -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13 -DGRIDFLUX_ENABLE_IO_URING=ON && cmake --build build-io-uring-real && ctest --test-dir build-io-uring-real --output-on-failure && ctest --test-dir build-io-uring-real -R FileIoTest.IoUringContextReadWriteSmokeWhenAvailable --output-on-failure'
+```
+
+- Sync to machine two: passed.
+- Machine two default Debug configure/build/full CTest: `145/145` passed.
+- Machine two `build-io-uring-real` Release configure/build/full CTest: `145/145` passed.
+- Machine two real io_uring smoke: passed.
+
+### Remaining full validation
+
+```bash
+GRIDFLUX_SSH_PASSWORD='***' SSHPASS='***' python3 tools/release/run_alpha_release_gate.py \
+  --full \
+  --build-dir build \
+  --io-uring-build-dir build-io-uring-real \
+  --remote <remote> \
+  --remote-root /root/projects/GridFlux \
+  --server-host <server-host> \
+  --results-dir tools/perf/results
+```
+
+- Full gate result: passed.
+- Markdown report: `docs/release/ALPHA_RELEASE_GATE.md`.
+- JSON report: `tools/perf/results/20260518T023057Z_alpha-release-gate.json`.
+- Private raw CSV: `tools/perf/results/20260518T023115Z_gridftp-private-matrix-smoke.csv`.
+- Private summary CSV: `tools/perf/results/20260518T023115Z_gridftp-private-matrix-smoke-summary.csv`.
+- Private matrix: `24` rows, `24` pass, `0` sha256 mismatches.
+- Summary: `8` rows, `fail_count=0`, `2` default baseline rows.
+- Default baseline rows:
+  - STOR crc32c/full/defaults median throughput `0.919468 Gbps`, spread `19.548261%`.
+  - RETR crc32c/full/defaults median throughput `3.395120 Gbps`, spread `40.870720%`.
+- Remote artifact sync check: passed, `152` artifacts checked, including raw/summary CSV and sidecar logs.
+- Final residual process check: no local or remote `gridflux-gridftp-server` / `gridflux-file-*` processes.
+
+### Alpha readiness conclusion
+
+- Alpha status: passed for demonstrable GridFTP-like framed STOR/RETR, bidirectional resume, CRC32C chunk verification, control metadata, release hygiene, and release artifact sync.
+- Not beta/production:
+  - private baseline spread remains high, especially RETR default baseline;
+  - 100G dedicated-line validation is not complete;
+  - TLS/GSI/DCAU and production authentication are not implemented;
+  - raw FTP STOR/RETR stream compatibility is intentionally unsupported;
+  - directory sync/multi-file production workflow is not implemented.
