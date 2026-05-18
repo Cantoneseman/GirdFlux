@@ -170,6 +170,10 @@ CSV_FIELDS = [
     "result",
     "server_log",
     "client_log",
+    "server_env_before_log",
+    "server_env_after_log",
+    "client_env_before_log",
+    "client_env_after_log",
     "server_hostname",
     "client_hostname",
     "server_kernel",
@@ -927,6 +931,10 @@ def initial_row(args: argparse.Namespace, case: Case, env: EnvironmentSnapshot, 
         "result": "fail",
         "server_log": str(server_log),
         "client_log": str(client_log),
+        "server_env_before_log": "",
+        "server_env_after_log": "",
+        "client_env_before_log": "",
+        "client_env_after_log": "",
         "server_hostname": env.server_hostname,
         "client_hostname": env.client_hostname,
         "server_kernel": env.server_kernel,
@@ -1064,10 +1072,13 @@ SUMMARY_FIELDS = [
     "repeat_count",
     "pass_count",
     "fail_count",
+    "unstable_spread_gt_20pct",
+    "unstable_minmax_outlier",
+    "stage_throughput_mismatch",
     *[
         f"{field}_{stat}"
         for field in SUMMARY_METRIC_FIELDS
-        for stat in ("min", "median", "max")
+        for stat in ("min", "median", "max", "spread_pct", "p95")
     ],
 ]
 
@@ -1080,6 +1091,27 @@ def float_values(rows: list[dict[str, str]], field: str) -> list[float]:
         except (KeyError, TypeError, ValueError):
             continue
     return values
+
+
+def median(values: list[float]) -> float | None:
+    return statistics.median(values) if values else None
+
+
+def nearest_rank_p95(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1, int((len(ordered) * 95 + 99) / 100) - 1))
+    return ordered[index]
+
+
+def spread_pct(values: list[float]) -> float | None:
+    if not values:
+        return None
+    center = statistics.median(values)
+    if center == 0:
+        return 0.0 if max(values) == min(values) else None
+    return ((max(values) - min(values)) / abs(center)) * 100.0
 
 
 def is_valid_write_strategy_case(strategy: str, file_io_buffer_size: int) -> bool:
@@ -1125,13 +1157,111 @@ def summarize_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
                 "fail_count": str(len(grouped_rows) - pass_count),
             }
         )
+        throughput_values = float_values(grouped_rows, "throughput_gbps")
+        elapsed_values = float_values(grouped_rows, "elapsed")
+        throughput_spread = spread_pct(throughput_values) or 0.0
+        elapsed_spread = spread_pct(elapsed_values) or 0.0
+        stage_probe_fields = [
+            "receiver_temp_write_seconds",
+            "receiver_download_temp_write_seconds",
+            "sender_network_send_seconds",
+            "sender_source_read_seconds",
+            "temp_write_seconds",
+            "download_temp_write_seconds",
+            "stage_write_seconds",
+            "stage_send_seconds",
+        ]
+        stage_spreads = [
+            spread
+            for field in stage_probe_fields
+            if (spread := spread_pct(float_values(grouped_rows, field))) is not None
+        ]
+        max_stage_spread = max(stage_spreads) if stage_spreads else 0.0
+        min_throughput = min(throughput_values) if throughput_values else 0.0
+        max_throughput = max(throughput_values) if throughput_values else 0.0
+        summary["unstable_spread_gt_20pct"] = "1" if throughput_spread > 20.0 else "0"
+        summary["unstable_minmax_outlier"] = (
+            "1" if min_throughput > 0.0 and (max_throughput / min_throughput) > 1.5 else "0"
+        )
+        summary["stage_throughput_mismatch"] = (
+            "1"
+            if (throughput_spread > 20.0 and max_stage_spread < 10.0)
+            or (throughput_spread < 10.0 and max_stage_spread > 30.0 and elapsed_spread < 10.0)
+            else "0"
+        )
         for field in SUMMARY_METRIC_FIELDS:
             values = float_values(grouped_rows, field)
+            value_median = median(values)
+            value_spread = spread_pct(values)
+            value_p95 = nearest_rank_p95(values)
             summary[f"{field}_min"] = f"{min(values):.6f}" if values else ""
-            summary[f"{field}_median"] = f"{statistics.median(values):.6f}" if values else ""
+            summary[f"{field}_median"] = f"{value_median:.6f}" if value_median is not None else ""
             summary[f"{field}_max"] = f"{max(values):.6f}" if values else ""
+            summary[f"{field}_spread_pct"] = f"{value_spread:.6f}" if value_spread is not None else ""
+            summary[f"{field}_p95"] = f"{value_p95:.6f}" if value_p95 is not None else ""
         summaries.append(summary)
     return summaries
+
+
+def local_environment_text(path: Path) -> str:
+    command = f"""
+set +e
+echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "hostname=$(hostname)"
+echo "path={shlex.quote(str(path))}"
+echo "section=free_m"
+free -m 2>&1 || true
+echo "section=meminfo"
+grep -E '^(Dirty|Writeback|Cached):' /proc/meminfo 2>&1 || true
+echo "section=df_h"
+df -h {shlex.quote(str(path))} 2>&1 || true
+echo "section=iostat"
+if command -v iostat >/dev/null 2>&1; then
+  iostat -xz 1 1 2>&1 || true
+else
+  echo "iostat=unavailable"
+fi
+"""
+    completed = subprocess.run(["bash", "-lc", command], text=True, capture_output=True, check=False)
+    return completed.stdout + completed.stderr
+
+
+def remote_environment_text(remote: str, path: str) -> str:
+    command = f"""
+set +e
+echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "hostname=$(hostname)"
+echo "path={shlex.quote(path)}"
+echo "section=free_m"
+free -m 2>&1 || true
+echo "section=meminfo"
+grep -E '^(Dirty|Writeback|Cached):' /proc/meminfo 2>&1 || true
+echo "section=df_h"
+df -h {shlex.quote(path)} 2>&1 || true
+echo "section=iostat"
+if command -v iostat >/dev/null 2>&1; then
+  iostat -xz 1 1 2>&1 || true
+else
+  echo "iostat=unavailable"
+fi
+"""
+    completed = run_remote(remote, command, check=False, timeout=30)
+    return completed.stdout + completed.stderr
+
+
+def capture_environment_sidecars(
+    args: argparse.Namespace,
+    server_path: Path,
+    client_path: str,
+    server_log: Path,
+    client_log: Path,
+    label: str,
+) -> tuple[Path, Path]:
+    server_env_log = server_log.with_name(f"{server_log.stem}_env_{label}.log")
+    client_env_log = client_log.with_name(f"{client_log.stem}_env_{label}.log")
+    write_text(server_env_log, local_environment_text(server_path))
+    write_text(client_env_log, remote_environment_text(args.remote, client_path))
+    return server_env_log, client_env_log
 
 
 def run_case(args: argparse.Namespace, case: Case, run_root: Path, env: EnvironmentSnapshot) -> dict[str, str]:
@@ -1159,6 +1289,7 @@ def run_case(args: argparse.Namespace, case: Case, run_root: Path, env: Environm
     output_name = f"{case_id}.bin"
     local_source = server_root / f"{case_id}.source.bin"
     local_output = server_root / output_name
+    env_client_path = remote_source if case.direction.startswith("stor") else str(Path(remote_output).parent)
 
     try:
         cleanup_remote_paths(args, remote_source, remote_output)
@@ -1169,6 +1300,11 @@ def run_case(args: argparse.Namespace, case: Case, run_root: Path, env: Environm
             source_sha = remote_sha256(args.remote, remote_source)
             row["remote_path"] = remote_source
             row["local_path"] = str(local_output)
+            before_server, before_client = capture_environment_sidecars(
+                args, server_root, env_client_path, server_log, client_log, "before"
+            )
+            row["server_env_before_log"] = str(before_server)
+            row["client_env_before_log"] = str(before_client)
             if case.direction == "stor":
                 transfer_id, client_text = run_stor_once(args, case, remote_source, output_name)
             else:
@@ -1179,12 +1315,22 @@ def run_case(args: argparse.Namespace, case: Case, run_root: Path, env: Environm
             source_sha = sha256_file(local_source)
             row["remote_path"] = remote_output
             row["local_path"] = str(local_source)
+            before_server, before_client = capture_environment_sidecars(
+                args, server_root, env_client_path, server_log, client_log, "before"
+            )
+            row["server_env_before_log"] = str(before_server)
+            row["client_env_before_log"] = str(before_client)
             if case.direction == "retr":
                 transfer_id, client_text = run_retr_once(args, case, local_source.name, remote_output)
             else:
                 transfer_id, client_text = run_retr_resume(args, case, local_source.name, remote_output)
             dest_sha = remote_sha256(args.remote, remote_output)
 
+        after_server, after_client = capture_environment_sidecars(
+            args, server_root, env_client_path, server_log, client_log, "after"
+        )
+        row["server_env_after_log"] = str(after_server)
+        row["client_env_after_log"] = str(after_client)
         write_text(client_log, client_text)
         server_text = server_log.read_text(encoding="utf-8", errors="replace")
         row["transfer_id"] = transfer_id
@@ -1197,6 +1343,15 @@ def run_case(args: argparse.Namespace, case: Case, run_root: Path, env: Environm
         return row
     except Exception as error:  # noqa: BLE001 - preserve case diagnostics in CSV.
         row["error"] = str(error).replace("\n", " ")[:1000]
+        if row["server_env_before_log"] and not row["server_env_after_log"]:
+            try:
+                after_server, after_client = capture_environment_sidecars(
+                    args, server_root, env_client_path, server_log, client_log, "after"
+                )
+                row["server_env_after_log"] = str(after_server)
+                row["client_env_after_log"] = str(after_client)
+            except Exception as sidecar_error:  # noqa: BLE001
+                row["error"] = (row["error"] + f" env_sidecar_after={sidecar_error}").strip()[:1000]
         if not client_log.exists():
             write_text(client_log, "")
         return row

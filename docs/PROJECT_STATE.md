@@ -3279,3 +3279,120 @@ SSHPASS=<redacted> sshpass -e ssh root@<redacted> \
 - Phase 4K 不引入 raw FTP STOR/RETR，不改网络 epoll，不默认启用 io_uring、preallocate full、verified_chunks、final_only 或 commit fsync。
 - 默认仍为 `file_io_backend=posix`、`preallocate=off`、`final_verify_policy=full`、`manifest_flush_policy=every_n_chunks`、`commit_sync_policy=none`。
 - POSIX write strategy 默认仍为 `auto`，并保持 `file_io_buffer_size=0`。
+
+## 2026-05-18 Phase 4L performance stability, RETR breakdown, and opt-in recommendation matrix
+
+### Implementation
+
+- Extended `tools/perf/run_gridftp_private_matrix.py` summary output with repeat stability fields:
+  - `*_spread_pct` using `(max-min)/median*100`.
+  - approximate nearest-rank `*_p95`.
+  - `unstable_spread_gt_20pct`, `unstable_minmax_outlier`, `stage_throughput_mismatch`, and `repeat_count`.
+- Added per-case before/after environment sidecars for both server and client:
+  - `server_env_before_log`, `server_env_after_log`, `client_env_before_log`, `client_env_after_log`.
+  - Sidecars capture `free -m`, Dirty/Writeback/Cached from `/proc/meminfo`, `df -h`, and `iostat -xz 1 1` when available; otherwise they record `iostat=unavailable`.
+- Added `tools/perf/analyze_phase4l.py`.
+  - Reads one or more private matrix summary CSVs.
+  - Generates `docs/perf/PHASE4L_STABILITY_AND_RETR_BREAKDOWN.md` with STOR bottleneck rows, RETR sender/receiver breakdown, high-variance rows, opt-in recommendation matrix, and gate conclusion.
+  - RETR stage percentages are reported as shares of listed key stages because sender/receiver stage times can be connection-accumulated and cross-side rather than wall-clock percentages.
+- Updated `INDEX.md`, `docs/ROADMAP.md`, `docs/perf/README.md`, and `docs/perf/PHASE4L_STABILITY_AND_RETR_BREAKDOWN.md`.
+
+### Local validation
+
+```bash
+python3 -m py_compile tools/perf/run_gridftp_private_matrix.py tools/perf/analyze_phase4l.py
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++-13
+cmake --build build
+ctest --test-dir build --output-on-failure
+cmake -S . -B build-io-uring-real -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13 -DGRIDFLUX_ENABLE_IO_URING=ON
+cmake --build build-io-uring-real
+ctest --test-dir build-io-uring-real --output-on-failure
+ctest --test-dir build-io-uring-real -R FileIoTest.IoUringContextReadWriteSmokeWhenAvailable --output-on-failure
+```
+
+- `py_compile`: passed.
+- Default Debug configure/build: passed.
+- Default Debug full CTest: `144/144` passed.
+- `build-io-uring-real` Release configure/build: passed.
+- `build-io-uring-real` Release full CTest: `144/144` passed.
+- Real io_uring smoke: `FileIoTest.IoUringContextReadWriteSmokeWhenAvailable` passed.
+- Note: one earlier local Debug CTest was run concurrently with Release CTest and hit a fixed-port `gridflux_file_transfer_smoke` `Connection refused`; the sequential rerun above passed `144/144`.
+
+### Remote validation
+
+```bash
+GRIDFLUX_SSH_PASSWORD='***' SSHPASS='***' tools/perf/sync_remote.sh \
+  --host root@<redacted> \
+  --source /root/projects/GridFlux \
+  --target /root/projects/GridFlux
+
+SSHPASS='***' sshpass -e ssh root@<redacted> \
+  'cd /root/projects/GridFlux && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++-13 && cmake --build build && ctest --test-dir build --output-on-failure'
+
+SSHPASS='***' sshpass -e ssh root@<redacted> \
+  'cd /root/projects/GridFlux && cmake -S . -B build-io-uring-real -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13 -DGRIDFLUX_ENABLE_IO_URING=ON && cmake --build build-io-uring-real && ctest --test-dir build-io-uring-real --output-on-failure && ctest --test-dir build-io-uring-real -R FileIoTest.IoUringContextReadWriteSmokeWhenAvailable --output-on-failure'
+```
+
+- Sync to machine two: passed.
+- Machine two default Debug configure/build/full CTest: `144/144` passed.
+- Machine two `build-io-uring-real` Release configure/build/full CTest: `144/144` passed.
+- Machine two real io_uring smoke: passed.
+- Note: one earlier remote Release CTest was run concurrently with Debug CTest and hit the same fixed-port `gridflux_file_transfer_smoke` `Connection refused`; the sequential rerun above passed `144/144`.
+
+### Phase 4L private matrix
+
+```bash
+GRIDFLUX_SSH_PASSWORD='***' SSHPASS='***' python3 tools/perf/run_gridftp_private_matrix.py \
+  --smoke \
+  --directions stor,retr \
+  --bytes 1073741824 \
+  --connections 8 \
+  --chunk-sizes 4194304 \
+  --buffer-sizes 262144 \
+  --checksums crc32c,none \
+  --checksum-backend auto \
+  --file-io-backends posix \
+  --file-io-buffer-sizes 0,262144 \
+  --posix-write-strategies auto,coalesced \
+  --file-io-advices off \
+  --preallocates off \
+  --manifest-flush-policies every_n_chunks,final_only \
+  --manifest-flush-interval-chunks-list 16 \
+  --commit-sync-policies none \
+  --final-verify-policies full,verified_chunks \
+  --repeat 5 \
+  --remote root@<redacted> \
+  --server-host <redacted> \
+  --local-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --output-dir tools/perf/results \
+  --case-timeout 900
+```
+
+- Raw CSV: `tools/perf/results/20260518T004459Z_gridftp-private-matrix-smoke.csv`
+- Summary CSV: `tools/perf/results/20260518T004459Z_gridftp-private-matrix-smoke-summary.csv`
+- Result: `cases=240 failures=0`; raw CSV has `240` rows, `0` sha256 mismatches, and all four sidecar env log paths populated for every row.
+- Summary: `48` grouped rows, grouped `fail_count=0`, `21` rows with `unstable_spread_gt_20pct=1`.
+- The generator skipped invalid `coalesced + file_io_buffer_size=0` combinations.
+
+### Phase 4L analysis
+
+```bash
+python3 tools/perf/analyze_phase4l.py \
+  --matrix-summary-csv tools/perf/results/20260518T004459Z_gridftp-private-matrix-smoke-summary.csv \
+  --output docs/perf/PHASE4L_STABILITY_AND_RETR_BREAKDOWN.md
+```
+
+- Report: `docs/perf/PHASE4L_STABILITY_AND_RETR_BREAKDOWN.md`.
+- Main conclusions:
+  - STOR remains dominated by temp write/writeback. Many STOR rows show temp write around `90%+` of wall time; the default-like STOR crc32c/full/every_n_chunks/auto/fiobuf=0 row had median `1.000700 Gbps` with `48.464675%` spread.
+  - RETR is faster but still unstable. The default-like RETR crc32c/full/every_n_chunks/auto/fiobuf=0 row had median `3.323950 Gbps` with `16.588396%` spread.
+  - RETR focus changes by row: every_n_chunks rows often lean toward sender network send, while final_only rows often lean toward receiver download temp write.
+  - `21/48` summary rows exceed `20%` spread, so Phase 4L does not recommend changing defaults or promoting a strong opt-in combination.
+  - Defaults remain: `file_io_backend=posix`, `posix_write_strategy=auto`, `file_io_buffer_size=0`, `preallocate=off`, `final_verify_policy=full`, `manifest_flush_policy=every_n_chunks`, `commit_sync_policy=none`.
+
+### Status notes
+
+- Phase 4L does not introduce a new transfer protocol.
+- Phase 4L does not change network epoll, raw FTP STOR/RETR boundaries, checksum, manifest, resume, or final verify semantics.
+- `verified_chunks`, `final_only`, `coalesced`, preallocate full, commit fsync, and io_uring remain explicit opt-in / diagnostic choices only.

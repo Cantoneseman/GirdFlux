@@ -657,6 +657,53 @@ python3 tools/perf/analyze_phase4k.py \
 
 Phase 4K 结论记录在 `docs/perf/PHASE4K_POSIX_WRITEBACK_OPTIMIZATION.md`：没有策略同时稳定改善 STOR 与 RETR；默认继续 `posix_write_strategy=auto` 且 `file_io_buffer_size=0`，`direct` 和 `coalesced` 仅作为 opt-in 诊断策略。
 
+Phase 4L stability and RETR breakdown matrix:
+
+```bash
+GRIDFLUX_SSH_PASSWORD='***' python3 tools/perf/run_gridftp_private_matrix.py \
+  --smoke \
+  --directions stor,retr \
+  --bytes 1073741824 \
+  --connections 8 \
+  --chunk-sizes 4194304 \
+  --buffer-sizes 262144 \
+  --checksums crc32c,none \
+  --checksum-backend auto \
+  --file-io-backends posix \
+  --file-io-buffer-sizes 0,262144 \
+  --posix-write-strategies auto,coalesced \
+  --file-io-advices off \
+  --preallocates off \
+  --manifest-flush-policies every_n_chunks,final_only \
+  --manifest-flush-interval-chunks-list 16 \
+  --commit-sync-policies none \
+  --final-verify-policies full,verified_chunks \
+  --repeat 5 \
+  --remote root@<redacted> \
+  --server-host <redacted> \
+  --local-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --output-dir tools/perf/results \
+  --case-timeout 900
+```
+
+The generator skips invalid `coalesced + file_io_buffer_size=0` combinations. Phase 4L adds per-case sidecar environment logs next to each server/client log:
+
+- `*_env_before.log`
+- `*_env_after.log`
+
+Each sidecar records `free -m`, Dirty/Writeback/Cached from `/proc/meminfo`, `df -h` for the test path, and `iostat -xz 1 1` when available. If `iostat` is missing, the sidecar records `iostat=unavailable`.
+
+Phase 4L analysis:
+
+```bash
+python3 tools/perf/analyze_phase4l.py \
+  --matrix-summary-csv tools/perf/results/20260518T004459Z_gridftp-private-matrix-smoke-summary.csv \
+  --output docs/perf/PHASE4L_STABILITY_AND_RETR_BREAKDOWN.md
+```
+
+Phase 4L 结论记录在 `docs/perf/PHASE4L_STABILITY_AND_RETR_BREAKDOWN.md`：repeat=5 1GiB private matrix `240/240` pass，summary `21/48` rows 的 throughput spread 超过 `20%`。STOR 仍主要由 temp write/writeback 主导；RETR 的主要瓶颈会在 sender network send 与 receiver download temp write 之间切换。由于波动较大且方向不一致，默认继续保持 POSIX backend、`posix_write_strategy=auto`、`file_io_buffer_size=0`、full final verify 和 every_n_chunks manifest flush；暂无强 opt-in 推荐。
+
 ## Public Release Hygiene
 
 本地 `AGENTS.md` 是私有协作上下文，不得公开发布。公开发布前使用 export gate：
@@ -713,10 +760,10 @@ timestamp,mode,host,port,connections,chunk_size,buffer_size,bytes,checksum_enabl
 GridFTP-like 私网矩阵 CSV 字段：
 
 ```text
-timestamp,mode,direction,bytes,connections,chunk_size,buffer_size,checksum_algorithm,checksum_backend,preallocate,file_io_backend,file_io_buffer_size,posix_write_strategy,posix_write_strategy_effective,file_io_queue_depth,file_io_batch_size,file_io_advice,repeat_index,elapsed,throughput_gbps,skipped_bytes,resent_bytes,verified_bytes,manifest_flush_count,manifest_flush_policy,manifest_flush_interval_chunks,commit_sync_policy,final_verify_policy,final_verify_policy_effective,stage_*,write_call_count,write_syscall_count,write_retry_count,write_short_count,write_zero_count,write_total_bytes,write_avg_bytes_per_call,write_avg_bytes_per_syscall,data_receive_seconds,temp_write_seconds,source_read_seconds,network_send_seconds,download_temp_write_seconds,sender_*,receiver_*,host_baseline_csv,storage_bench_csv,source_sha256,dest_sha256,result,server_log,client_log,server_hostname,client_hostname,server_kernel,client_kernel,server_cpu_flags,client_cpu_flags,server_fs_type,client_fs_type,server_free_bytes,client_free_bytes
+timestamp,mode,direction,bytes,connections,chunk_size,buffer_size,checksum_algorithm,checksum_backend,preallocate,file_io_backend,file_io_buffer_size,posix_write_strategy,posix_write_strategy_effective,file_io_queue_depth,file_io_batch_size,file_io_advice,repeat_index,elapsed,throughput_gbps,skipped_bytes,resent_bytes,verified_bytes,manifest_flush_count,manifest_flush_policy,manifest_flush_interval_chunks,commit_sync_policy,final_verify_policy,final_verify_policy_effective,stage_*,write_call_count,write_syscall_count,write_retry_count,write_short_count,write_zero_count,write_total_bytes,write_avg_bytes_per_call,write_avg_bytes_per_syscall,data_receive_seconds,temp_write_seconds,source_read_seconds,network_send_seconds,download_temp_write_seconds,sender_*,receiver_*,host_baseline_csv,storage_bench_csv,source_sha256,dest_sha256,result,server_log,client_log,server_env_before_log,server_env_after_log,client_env_before_log,client_env_after_log,server_hostname,client_hostname,server_kernel,client_kernel,server_cpu_flags,client_cpu_flags,server_fs_type,client_fs_type,server_free_bytes,client_free_bytes
 ```
 
-实际 CSV 还会附加 `transfer_id`、端口、临时路径和错误摘要。`throughput_gbps` / `elapsed` 优先使用接收端语义：STOR 取 server receiver，RETR 取 download client receiver。RETR sender 的 `verified_bytes` 表示 sender 已确认/发送的 verified range 字节；download client 的 `verified_bytes` 表示接收端本地校验完成字节。Phase 4J 起 CSV 同时保留 `sender_*` / `receiver_*` 双侧阶段字段，便于同一 RETR row 同时分析 sender read/send 与 receiver write/final verify。
+实际 CSV 还会附加 `transfer_id`、端口、临时路径和错误摘要。`throughput_gbps` / `elapsed` 优先使用接收端语义：STOR 取 server receiver，RETR 取 download client receiver。RETR sender 的 `verified_bytes` 表示 sender 已确认/发送的 verified range 字节；download client 的 `verified_bytes` 表示接收端本地校验完成字节。Phase 4J 起 CSV 同时保留 `sender_*` / `receiver_*` 双侧阶段字段，便于同一 RETR row 同时分析 sender read/send 与 receiver write/final verify。Phase 4L 起 summary CSV 对数值字段追加 `*_spread_pct` 和近似 `*_p95`，并输出 `unstable_spread_gt_20pct`、`unstable_minmax_outlier`、`stage_throughput_mismatch` 与 `repeat_count`。
 
 Phase 4B host baseline CSV 字段：
 
