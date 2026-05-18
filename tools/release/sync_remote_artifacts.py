@@ -13,6 +13,8 @@ import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import remote_auth
+
 
 BUILD_LIKE_NAMES = {"build", "out", "dist", ".cache", "Testing", "CMakeFiles", "_deps"}
 BUILD_FILES = {
@@ -184,21 +186,16 @@ def load_manifest(manifest_path: Path, local_root: Path) -> tuple[dict[str, obje
 
 
 def ssh_prefix(remote: str) -> list[str]:
-    if os.environ.get("GRIDFLUX_SSH_PASSWORD"):
-        return ["sshpass", "-e", "ssh", "-o", "StrictHostKeyChecking=no", remote]
-    return ["ssh", "-o", "StrictHostKeyChecking=no", remote]
+    return remote_auth.ssh_prefix(remote)
 
 
 def run_remote(remote: str, command: str) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    if env.get("GRIDFLUX_SSH_PASSWORD") and not env.get("SSHPASS"):
-        env["SSHPASS"] = env["GRIDFLUX_SSH_PASSWORD"]
     return subprocess.run(
         ssh_prefix(remote) + [command],
         text=True,
         capture_output=True,
         check=False,
-        env=env,
+        env=remote_auth.command_env(remote),
     )
 
 
@@ -249,11 +246,7 @@ def rsync_artifacts(remote: str, remote_root: str, local_root: Path, paths: list
         *paths,
         f"{remote}:{remote_root.rstrip('/')}/",
     ]
-    if os.environ.get("GRIDFLUX_SSH_PASSWORD"):
-        command = ["sshpass", "-e", *command]
-    env = os.environ.copy()
-    if env.get("GRIDFLUX_SSH_PASSWORD") and not env.get("SSHPASS"):
-        env["SSHPASS"] = env["GRIDFLUX_SSH_PASSWORD"]
+    command, env = remote_auth.wrap_with_sshpass(remote, command, root=local_root)
     completed = subprocess.run(
         command,
         cwd=local_root,
@@ -324,6 +317,30 @@ def summarize(statuses: list[ArtifactStatus], *, mode: str, synced: int = 0, rsy
     return summary
 
 
+def count_missing(statuses: list[ArtifactStatus]) -> int:
+    return sum(1 for status in statuses if status.status in {"missing", "missing_local"})
+
+
+def count_mismatch(statuses: list[ArtifactStatus]) -> int:
+    return sum(1 for status in statuses if status.status == "mismatch")
+
+
+def add_pre_post_summary(
+    summary: dict[str, object],
+    *,
+    initial: list[ArtifactStatus],
+    final: list[ArtifactStatus],
+) -> dict[str, object]:
+    post_missing = count_missing(final)
+    post_mismatch = count_mismatch(final)
+    summary["pre_sync_missing"] = count_missing(initial)
+    summary["pre_sync_mismatch"] = count_mismatch(initial)
+    summary["post_sync_missing"] = post_missing
+    summary["post_sync_mismatch"] = post_mismatch
+    summary["post_sync_status"] = "pass" if post_missing == 0 and post_mismatch == 0 else "fail"
+    return summary
+
+
 def sync_from_manifest(
     *,
     manifest_path: Path,
@@ -347,9 +364,11 @@ def sync_from_manifest(
         if status.required and status.local_exists and status.status in {"missing", "mismatch"}
     ]
     if mode == "verify-only":
-        return summarize(initial, mode=mode)
+        return add_pre_post_summary(summarize(initial, mode=mode), initial=initial, final=initial)
     if mode == "dry-run":
-        return summarize(initial, mode=mode, synced=len(to_sync))
+        return add_pre_post_summary(
+            summarize(initial, mode=mode, synced=len(to_sync)), initial=initial, final=initial
+        )
     if mode != "sync":
         raise ValueError(f"unsupported mode: {mode}")
     rsync_log = ""
@@ -362,7 +381,7 @@ def sync_from_manifest(
         if returncode != 0:
             summary = summarize(initial, mode=mode, synced=0, rsync_log=rsync_log)
             summary["status"] = "fail"
-            return summary
+            return add_pre_post_summary(summary, initial=initial, final=initial)
         synced = len(to_sync)
     final = check_artifacts(
         artifacts=artifacts,
@@ -373,7 +392,11 @@ def sync_from_manifest(
     )
     for status in final:
         status.synced = status.path in set(to_sync)
-    return summarize(final, mode=mode, synced=synced, rsync_log=rsync_log)
+    return add_pre_post_summary(
+        summarize(final, mode=mode, synced=synced, rsync_log=rsync_log),
+        initial=initial,
+        final=final,
+    )
 
 
 def main() -> int:
@@ -427,6 +450,11 @@ def main() -> int:
         f"synced={summary.get('synced')} "
         f"missing={summary.get('missing')} "
         f"mismatch={summary.get('mismatch')} "
+        f"pre_sync_missing={summary.get('pre_sync_missing')} "
+        f"pre_sync_mismatch={summary.get('pre_sync_mismatch')} "
+        f"post_sync_missing={summary.get('post_sync_missing')} "
+        f"post_sync_mismatch={summary.get('post_sync_mismatch')} "
+        f"post_sync_status={summary.get('post_sync_status')} "
         f"status={summary.get('status')}"
     )
     if summary.get("status") not in {"pass", "would_sync"}:

@@ -14,6 +14,8 @@
 #include <cstring>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <mutex>
 #include <random>
@@ -25,6 +27,7 @@
 #include <utility>
 #include <vector>
 
+#include "gridflux/checksum/checksum.h"
 #include "gridflux/checkpoint/transfer_manifest.h"
 #include "gridflux/config/file_download_options.h"
 #include "gridflux/config/file_transfer_options.h"
@@ -581,6 +584,176 @@ struct TreeSummary {
     std::uint64_t changedFiles = 0;
 };
 
+std::string hex32(std::uint32_t value) {
+    std::ostringstream output;
+    output << std::hex << std::nouppercase << std::setw(8) << std::setfill('0') << value;
+    return output.str();
+}
+
+std::string jsonEscape(const std::string& value) {
+    std::ostringstream output;
+    for (const unsigned char ch : value) {
+        switch (ch) {
+            case '"':
+                output << "\\\"";
+                break;
+            case '\\':
+                output << "\\\\";
+                break;
+            case '\b':
+                output << "\\b";
+                break;
+            case '\f':
+                output << "\\f";
+                break;
+            case '\n':
+                output << "\\n";
+                break;
+            case '\r':
+                output << "\\r";
+                break;
+            case '\t':
+                output << "\\t";
+                break;
+            default:
+                if (ch < 0x20) {
+                    output << "\\u" << std::hex << std::setw(4) << std::setfill('0')
+                           << static_cast<int>(ch) << std::dec;
+                } else {
+                    output << static_cast<char>(ch);
+                }
+                break;
+        }
+    }
+    return output.str();
+}
+
+struct ChangedErrorDetails {
+    std::string changedPath;
+    std::string manifestSize;
+    std::string manifestMtime;
+    std::string currentSize;
+    std::string currentMtime;
+};
+
+ChangedErrorDetails parseChangedError(const std::string& message) {
+    ChangedErrorDetails details;
+    const std::string marker = " manifest_size=";
+    const std::size_t markerPos = message.find(marker);
+    if (markerPos != std::string::npos) {
+        const std::size_t colon = message.rfind(": ", markerPos);
+        details.changedPath =
+            message.substr(colon == std::string::npos ? 0 : colon + 2,
+                           markerPos - (colon == std::string::npos ? 0 : colon + 2));
+    }
+    std::istringstream input(message);
+    std::string token;
+    while (input >> token) {
+        const std::size_t equals = token.find('=');
+        if (equals == std::string::npos) {
+            continue;
+        }
+        const std::string key = token.substr(0, equals);
+        const std::string value = token.substr(equals + 1);
+        if (key == "manifest_size") {
+            details.manifestSize = value;
+        } else if (key == "manifest_mtime") {
+            details.manifestMtime = value;
+        } else if (key == "current_size") {
+            details.currentSize = value;
+        } else if (key == "current_mtime") {
+            details.currentMtime = value;
+        }
+    }
+    return details;
+}
+
+common::Result<std::string> computeTreeVerificationHash(const std::string& root) {
+    std::error_code error;
+    const std::filesystem::path rootPath(root);
+    if (!std::filesystem::exists(rootPath, error) || error ||
+        !std::filesystem::is_directory(rootPath, error) || error) {
+        return common::Status::invalidArgument("tree hash root is not a directory");
+    }
+    std::vector<std::filesystem::path> files;
+    for (std::filesystem::recursive_directory_iterator iterator(
+             rootPath, std::filesystem::directory_options::none, error);
+         iterator != std::filesystem::recursive_directory_iterator(); iterator.increment(error)) {
+        if (error) {
+            return common::Status::systemError("tree hash scan failed: " + error.message(),
+                                               error.value());
+        }
+        const auto& entry = *iterator;
+        if (entry.is_symlink(error)) {
+            return common::Status::invalidArgument("tree hash rejects symlink");
+        }
+        if (error) {
+            return common::Status::systemError("tree hash entry failed: " + error.message(),
+                                               error.value());
+        }
+        if (entry.is_regular_file(error)) {
+            const std::filesystem::path relative =
+                std::filesystem::relative(entry.path(), rootPath, error);
+            if (error) {
+                return common::Status::systemError("tree hash relative failed: " + error.message(),
+                                                   error.value());
+            }
+            const std::string relativeText = relative.generic_string();
+            if (relativeText.find(".gridflux.") != std::string::npos ||
+                relativeText.find(".part.") != std::string::npos) {
+                continue;
+            }
+            files.push_back(entry.path());
+        } else if (!entry.is_directory(error)) {
+            return common::Status::invalidArgument("tree hash rejects non-regular file");
+        }
+    }
+    std::sort(files.begin(), files.end(), [&](const auto& left, const auto& right) {
+        return std::filesystem::relative(left, rootPath).generic_string() <
+               std::filesystem::relative(right, rootPath).generic_string();
+    });
+
+    checksum::ChecksumComputer computer(checksum::ChecksumAlgorithm::Crc32c,
+                                        checksum::ChecksumBackend::Software);
+    std::vector<std::uint8_t> buffer(1024 * 1024);
+    for (const auto& path : files) {
+        const std::filesystem::path relative = std::filesystem::relative(path, rootPath, error);
+        if (error) {
+            return common::Status::systemError("tree hash relative failed: " + error.message(),
+                                               error.value());
+        }
+        const std::string relativeText = relative.generic_string();
+        const std::uint64_t size = std::filesystem::file_size(path, error);
+        if (error) {
+            return common::Status::systemError("tree hash file size failed: " + error.message(),
+                                               error.value());
+        }
+        const std::string sizeText = std::to_string(size);
+        computer.update(reinterpret_cast<const std::uint8_t*>(relativeText.data()),
+                        relativeText.size());
+        const std::uint8_t zero = 0;
+        computer.update(&zero, 1);
+        computer.update(reinterpret_cast<const std::uint8_t*>(sizeText.data()), sizeText.size());
+        computer.update(&zero, 1);
+        std::ifstream input(path, std::ios::binary);
+        if (!input) {
+            return common::Status::runtimeError("tree hash failed to open file: " + path.string());
+        }
+        while (input) {
+            input.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
+            const std::streamsize read = input.gcount();
+            if (read > 0) {
+                computer.update(buffer.data(), static_cast<std::size_t>(read));
+            }
+        }
+        if (!input.eof()) {
+            return common::Status::runtimeError("tree hash read failed: " + path.string());
+        }
+        computer.update(&zero, 1);
+    }
+    return "crc32c:" + hex32(computer.finalize().value);
+}
+
 TreeSummary summarizeManifest(const core::tree::TreeManifest& manifest) {
     TreeSummary summary;
     for (const auto& file : manifest.files) {
@@ -621,6 +794,110 @@ void printTreeSummary(const char* label, const char* result,
               << " transferred_bytes=" << stats.transferredBytes.load()
               << " elapsed_seconds=" << elapsed << " throughput_gbps=" << throughputGbps
               << '\n';
+}
+
+common::Status writeTreeJsonSummary(const char* direction, const char* result,
+                                    const config::TreeTransferOptions& options,
+                                    const core::tree::TreeManifest& manifest,
+                                    const TreeRunStats& stats,
+                                    std::chrono::steady_clock::time_point startedAt,
+                                    const common::Status& status) {
+    if (options.jsonSummaryPath.empty()) {
+        return common::Status::ok();
+    }
+    const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - startedAt)
+                             .count();
+    const std::uint64_t logicalBytes = totalBytes(manifest);
+    const double throughputGbps =
+        elapsed > 0.0 ? static_cast<double>(logicalBytes) * 8.0 / elapsed / 1'000'000'000.0 : 0.0;
+    const TreeSummary summary = summarizeManifest(manifest);
+    std::string treeHash;
+    const std::string hashRoot = std::string(direction) == "upload" ? options.sourceDir : options.destDir;
+    auto hash = computeTreeVerificationHash(hashRoot);
+    if (hash.isOk()) {
+        treeHash = hash.value();
+    }
+
+    const std::filesystem::path outputPath(options.jsonSummaryPath);
+    std::error_code error;
+    if (!outputPath.parent_path().empty()) {
+        std::filesystem::create_directories(outputPath.parent_path(), error);
+        if (error) {
+            return common::Status::systemError("create JSON summary directory failed: " +
+                                                   error.message(),
+                                               error.value());
+        }
+    }
+    std::ofstream output(outputPath, std::ios::trunc);
+    if (!output) {
+        return common::Status::runtimeError("failed to open JSON summary: " + outputPath.string());
+    }
+    output << "{\n";
+    output << "  \"direction\": \"" << jsonEscape(direction) << "\",\n";
+    output << "  \"source\": \"" << jsonEscape(options.sourceDir) << "\",\n";
+    output << "  \"dest\": \"" << jsonEscape(options.destDir) << "\",\n";
+    output << "  \"file_count\": " << manifest.files.size() << ",\n";
+    output << "  \"completed_files\": " << summary.completedFiles << ",\n";
+    output << "  \"skipped_files\": " << stats.skippedFiles.load() << ",\n";
+    output << "  \"failed_files\": " << summary.failedFiles << ",\n";
+    output << "  \"changed_files\": " << summary.changedFiles << ",\n";
+    output << "  \"bytes_total\": " << logicalBytes << ",\n";
+    output << "  \"bytes_transferred\": " << stats.transferredBytes.load() << ",\n";
+    output << "  \"file_parallelism\": " << options.fileParallelism << ",\n";
+    output << "  \"connections\": " << options.connections << ",\n";
+    output << "  \"checksum_algorithm\": \""
+           << checksum::checksumAlgorithmName(options.checksumAlgorithm) << "\",\n";
+    output << "  \"checksum_backend\": \"" << checksum::checksumBackendName(options.checksumBackend)
+           << "\",\n";
+    output << "  \"resume\": " << (options.resume ? "true" : "false") << ",\n";
+    output << "  \"elapsed_seconds\": " << elapsed << ",\n";
+    output << "  \"throughput_gbps\": " << throughputGbps << ",\n";
+    output << "  \"result\": \"" << jsonEscape(result) << "\",\n";
+    output << "  \"tree_hash\": \"" << jsonEscape(treeHash) << "\",\n";
+    if (status.isOk()) {
+        output << "  \"error\": null\n";
+    } else {
+        const ChangedErrorDetails details = parseChangedError(status.message());
+        output << "  \"error\": {\n";
+        output << "    \"message\": \"" << jsonEscape(status.message()) << "\"";
+        if (!details.changedPath.empty()) {
+            output << ",\n    \"changed_path\": \"" << jsonEscape(details.changedPath) << "\"";
+        }
+        if (!details.manifestSize.empty()) {
+            output << ",\n    \"manifest_size\": \"" << jsonEscape(details.manifestSize) << "\"";
+        }
+        if (!details.manifestMtime.empty()) {
+            output << ",\n    \"manifest_mtime\": \"" << jsonEscape(details.manifestMtime) << "\"";
+        }
+        if (!details.currentSize.empty()) {
+            output << ",\n    \"current_size\": \"" << jsonEscape(details.currentSize) << "\"";
+        }
+        if (!details.currentMtime.empty()) {
+            output << ",\n    \"current_mtime\": \"" << jsonEscape(details.currentMtime) << "\"";
+        }
+        output << "\n  }\n";
+    }
+    output << "}\n";
+    if (!output) {
+        return common::Status::runtimeError("failed to write JSON summary: " + outputPath.string());
+    }
+    return common::Status::ok();
+}
+
+common::Status emitTreeSummary(const char* label, const char* direction,
+                               const common::Status& status,
+                               const config::TreeTransferOptions& options,
+                               const core::tree::TreeManifest& manifest,
+                               const TreeRunStats& stats,
+                               std::chrono::steady_clock::time_point startedAt) {
+    const char* result = status.isOk() ? "pass" : "fail";
+    printTreeSummary(label, result, manifest, stats, options.fileParallelism, startedAt);
+    const common::Status jsonStatus =
+        writeTreeJsonSummary(direction, result, options, manifest, stats, startedAt, status);
+    if (!jsonStatus.isOk()) {
+        return jsonStatus;
+    }
+    return status;
 }
 
 struct SchedulerState {
@@ -1120,17 +1397,15 @@ common::Status runTreeUploadClient(const config::TreeTransferOptions& options) {
         preflightUploadResume(options, &manifest, manifestPath);
     if (!preflightStatus.isOk()) {
         TreeRunStats stats;
-        printTreeSummary("tree_upload_complete", "fail", manifest, stats, options.fileParallelism,
-                         startedAt);
-        return preflightStatus;
+        return emitTreeSummary("tree_upload_complete", "upload", preflightStatus, options,
+                               manifest, stats, startedAt);
     }
 
     TreeRunStats stats;
     const common::Status status =
         runTreeScheduler(&manifest, manifestPath, options, processUploadFile, &stats);
-    printTreeSummary("tree_upload_complete", status.isOk() ? "pass" : "fail", manifest, stats,
-                     options.fileParallelism, startedAt);
-    return status;
+    return emitTreeSummary("tree_upload_complete", "upload", status, options, manifest, stats,
+                           startedAt);
 }
 
 common::Status runTreeDownloadClient(const config::TreeTransferOptions& options) {
@@ -1204,17 +1479,15 @@ common::Status runTreeDownloadClient(const config::TreeTransferOptions& options)
         preflightDownloadResume(options, &manifest, manifestPath);
     if (!preflightStatus.isOk()) {
         TreeRunStats stats;
-        printTreeSummary("tree_download_complete", "fail", manifest, stats, options.fileParallelism,
-                         startedAt);
-        return preflightStatus;
+        return emitTreeSummary("tree_download_complete", "download", preflightStatus, options,
+                               manifest, stats, startedAt);
     }
 
     TreeRunStats stats;
     const common::Status status =
         runTreeScheduler(&manifest, manifestPath, options, processDownloadFile, &stats);
-    printTreeSummary("tree_download_complete", status.isOk() ? "pass" : "fail", manifest, stats,
-                     options.fileParallelism, startedAt);
-    return status;
+    return emitTreeSummary("tree_download_complete", "download", status, options, manifest, stats,
+                           startedAt);
 }
 
 }  // namespace gridflux::core::io

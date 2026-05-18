@@ -56,6 +56,17 @@ docs, release helper scripts, gate JSON, private matrix raw/summary CSV, and
 CSV-referenced sidecar logs. `AGENTS.md`, build outputs, secrets, keys, tokens,
 and password-like paths are rejected.
 
+Phase 5C hardens manifest freshness: the gate writes final reports and JSON
+first, then writes the final artifact manifest, immediately checks every listed
+file against the current local size/SHA256, and only then syncs and verifies the
+remote. A full gate is not valid unless local freshness is `pass`.
+
+Artifact sync JSON distinguishes pre-sync and post-sync state:
+
+- `pre_sync_missing` / `pre_sync_mismatch`: what was wrong before sync.
+- `post_sync_missing` / `post_sync_mismatch`: what remains after sync.
+- `post_sync_status`: final verification status after sync.
+
 Manual verification:
 
 ```bash

@@ -36,6 +36,15 @@ CSV_FIELDS = [
     "checksum_backend",
     "elapsed_seconds",
     "throughput_gbps",
+    "json_summary",
+    "completed_files",
+    "skipped_files",
+    "failed_files",
+    "changed_files",
+    "bytes_total",
+    "bytes_transferred",
+    "summary_tree_hash",
+    "error_message",
     "source_tree_hash",
     "dest_tree_hash",
     "result",
@@ -73,6 +82,11 @@ SUMMARY_FIELDS = [
     "elapsed_seconds_max",
     "file_count",
     "total_bytes",
+    "completed_files",
+    "skipped_files",
+    "failed_files",
+    "changed_files",
+    "bytes_transferred",
 ]
 
 
@@ -310,6 +324,12 @@ def cleanup_remote(remote: str, *paths: str) -> None:
     run_remote(remote, command, check=False, timeout=60)
 
 
+def fetch_remote_file(remote: str, remote_path: str, local_path: Path) -> None:
+    completed = run_remote(remote, "cat " + shlex.quote(remote_path), check=False, timeout=60)
+    if completed.returncode == 0:
+        write_text(local_path, completed.stdout)
+
+
 def parse_summary_line(text: str, prefix: str) -> dict[str, str]:
     result: dict[str, str] = {}
     for line in text.splitlines():
@@ -320,6 +340,37 @@ def parse_summary_line(text: str, prefix: str) -> dict[str, str]:
                 key, value = token.split("=", 1)
                 result[key] = value
     return result
+
+
+def load_json_summary(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    result: dict[str, str] = {}
+    for key, value in data.items():
+        if key == "error":
+            if isinstance(value, dict):
+                result["error_message"] = str(value.get("message", ""))
+            elif value:
+                result["error_message"] = str(value)
+            continue
+        if isinstance(value, bool):
+            result[key] = "1" if value else "0"
+        elif value is None:
+            result[key] = ""
+        else:
+            result[key] = str(value)
+    return result
+
+
+def summary_from_completed(completed: subprocess.CompletedProcess[str], json_path: Path, prefix: str) -> dict[str, str]:
+    parsed = load_json_summary(json_path)
+    if parsed:
+        return parsed
+    return parse_summary_line(completed.stdout, prefix)
 
 
 def run_tree_command(remote: str, command: list[str], log_path: Path, *, check: bool = True, timeout: int = 900) -> subprocess.CompletedProcess[str]:
@@ -376,6 +427,8 @@ def run_case(args: argparse.Namespace, case: Case, run_id: str, output_dir: Path
     remote_dest = f"/tmp/gridflux-tree-matrix-dest-{case_id}"
     server_log = output_dir / f"{case_id}_server.log"
     client_log = output_dir / f"{case_id}_client.log"
+    summary_json = output_dir / f"{case_id}_tree_summary.json"
+    remote_summary_json = f"/tmp/{case_id}_tree_summary.json"
     row = {field: "" for field in CSV_FIELDS}
     row.update(
         {
@@ -390,6 +443,7 @@ def run_case(args: argparse.Namespace, case: Case, run_id: str, output_dir: Path
             "checksum_backend": args.checksum_backend,
             "server_log": str(server_log),
             "client_log": str(client_log),
+            "json_summary": str(summary_json),
             "control_port": str(control_port(args, case)),
             "data_port_base": str(data_port_base(args, case)),
             "local_root": str(local_root),
@@ -399,7 +453,7 @@ def run_case(args: argparse.Namespace, case: Case, run_id: str, output_dir: Path
     )
     process: subprocess.Popen[str] | None = None
     try:
-        cleanup_remote(args.remote, remote_source, remote_dest)
+        cleanup_remote(args.remote, remote_source, remote_dest, remote_summary_json)
         if local_root.exists():
             subprocess.run(["rm", "-rf", str(local_root)], check=False)
         local_root.mkdir(parents=True)
@@ -425,14 +479,17 @@ def run_case(args: argparse.Namespace, case: Case, run_id: str, output_dir: Path
                 case.checksum,
                 "--checksum-backend",
                 args.checksum_backend,
+                "--json-summary",
+                remote_summary_json,
             ]
             if case.resume:
                 partial = [*command, "--max-files", "1"]
                 run_tree_command(args.remote, partial, client_log, check=False, timeout=args.case_timeout)
                 command.append("--resume")
             completed = run_tree_command(args.remote, command, client_log, check=True, timeout=args.case_timeout)
+            fetch_remote_file(args.remote, remote_summary_json, summary_json)
             dest_hash, _, _ = tree_hash_local(local_root / "dataset")
-            summary = parse_summary_line(completed.stdout, "tree_upload_complete")
+            summary = summary_from_completed(completed, summary_json, "tree_upload_complete")
         else:
             source_hash, file_count, total_bytes = make_local_dataset(local_root / "dataset", case.dataset)
             command = [
@@ -453,14 +510,17 @@ def run_case(args: argparse.Namespace, case: Case, run_id: str, output_dir: Path
                 case.checksum,
                 "--checksum-backend",
                 args.checksum_backend,
+                "--json-summary",
+                remote_summary_json,
             ]
             if case.resume:
                 partial = [*command, "--max-files", "1"]
                 run_tree_command(args.remote, partial, client_log, check=False, timeout=args.case_timeout)
                 command.append("--resume")
             completed = run_tree_command(args.remote, command, client_log, check=True, timeout=args.case_timeout)
+            fetch_remote_file(args.remote, remote_summary_json, summary_json)
             dest_hash, _, _ = tree_hash_remote(args.remote, remote_dest)
-            summary = parse_summary_line(completed.stdout, "tree_download_complete")
+            summary = summary_from_completed(completed, summary_json, "tree_download_complete")
         elapsed = time.monotonic() - start
         throughput = float(total_bytes) * 8.0 / elapsed / 1_000_000_000.0 if elapsed > 0 else 0.0
         row.update(
@@ -469,6 +529,14 @@ def run_case(args: argparse.Namespace, case: Case, run_id: str, output_dir: Path
                 "total_bytes": str(total_bytes),
                 "elapsed_seconds": summary.get("elapsed_seconds", f"{elapsed:.6f}"),
                 "throughput_gbps": summary.get("throughput_gbps", f"{throughput:.6f}"),
+                "completed_files": summary.get("completed_files", ""),
+                "skipped_files": summary.get("skipped_files", ""),
+                "failed_files": summary.get("failed_files", ""),
+                "changed_files": summary.get("changed_files", ""),
+                "bytes_total": summary.get("bytes_total", summary.get("total_bytes", "")),
+                "bytes_transferred": summary.get("bytes_transferred", summary.get("transferred_bytes", "")),
+                "summary_tree_hash": summary.get("tree_hash", ""),
+                "error_message": summary.get("error_message", ""),
                 "source_tree_hash": source_hash,
                 "dest_tree_hash": dest_hash,
                 "result": "pass" if source_hash == dest_hash else "fail",
@@ -479,6 +547,10 @@ def run_case(args: argparse.Namespace, case: Case, run_id: str, output_dir: Path
     except Exception as exc:  # noqa: BLE001
         row["result"] = "fail"
         row["error"] = str(exc).replace("\n", " ")[:1000]
+        fetch_remote_file(args.remote, remote_summary_json, summary_json)
+        summary = load_json_summary(summary_json)
+        if summary:
+            row["error_message"] = summary.get("error_message", row["error"])
         if not client_log.exists():
             write_text(client_log, row["error"])
     finally:
@@ -488,7 +560,7 @@ def run_case(args: argparse.Namespace, case: Case, run_id: str, output_dir: Path
             except Exception as exc:  # noqa: BLE001
                 row["result"] = "fail"
                 row["error"] = (row.get("error", "") + " stop_server=" + str(exc)).strip()
-        cleanup_remote(args.remote, remote_source, remote_dest)
+        cleanup_remote(args.remote, remote_source, remote_dest, remote_summary_json)
     return row
 
 
@@ -532,6 +604,11 @@ def summarize_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
                 "elapsed_seconds_max": f"{max(elapsed):.6f}" if elapsed else "",
                 "file_count": grouped[0].get("file_count", ""),
                 "total_bytes": grouped[0].get("total_bytes", ""),
+                "completed_files": grouped[0].get("completed_files", ""),
+                "skipped_files": grouped[0].get("skipped_files", ""),
+                "failed_files": grouped[0].get("failed_files", ""),
+                "changed_files": grouped[0].get("changed_files", ""),
+                "bytes_transferred": grouped[0].get("bytes_transferred", ""),
             }
         )
         summaries.append(summary)

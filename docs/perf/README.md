@@ -7,6 +7,10 @@ Phase 4N 起，alpha release gate 会生成 `tools/perf/results/<timestamp>_alph
 Phase 5A 起，目录级 alpha smoke 通过 `gridflux-tree-upload-client` /
 `gridflux-tree-download-client` 验证多文件 upload/download/resume。目录传输仍逐文件复用
 GridFlux framed STOR/RETR；性能矩阵默认仍以单文件 STOR/RETR 为主要口径。
+Phase 5C 起 tree private matrix 会给每次 tree CLI 调用传入 `--json-summary`，
+raw CSV 会记录 JSON summary 路径和 completed/skipped/failed/changed、
+bytes_total、bytes_transferred、tree_hash/error_message 等字段；stdout
+key=value 仅作为 fallback。
 
 ## Alpha Artifact Sync
 
@@ -21,6 +25,7 @@ python3 tools/release/sync_remote_artifacts.py \
 ```
 
 `--dry-run` 只打印缺失/不一致计划，`--sync` 只同步 manifest 中 required 且安全的缺失或不一致文件，然后再 verify。不使用 `--delete`，不会清理远端历史 build/private 目录。
+JSON summary 中的 `pre_sync_*` 字段表示同步前状态，`post_sync_*` 字段表示同步后状态。
 
 ## 基础构建验证
 
@@ -167,6 +172,32 @@ python3 tools/benchmark/run_storage_bench.py \
 `--file-io-advice` 支持 `off`、`sequential`、`noreuse`、`dontneed`、`sequential_dontneed`；非 off 会显式调用 `posix_fadvise`，调用失败则当前 case 失败。
 Phase 4F 起 `--file-io-backend` 支持 `posix|io_uring`。`posix` 是默认值；`io_uring` 只有在构建时显式启用 `-DGRIDFLUX_ENABLE_IO_URING=ON` 且探测到 liburing 时可用。Phase 4G 中本机和<redacted>二均已安装 `liburing-dev` 并完成真实 io_uring 构建、CTest 与 POSIX/io_uring 对比；即便如此，默认 backend 仍保持 POSIX。Phase 4H 起 storage bench 和 private matrix 支持 `--file-io-queue-depths` 与 `--file-io-batch-sizes`；未显式传 batch size 时默认跟随 queue depth。queue/batch 只影响 `io_uring` backend，POSIX 路径仅记录参数用于公平 CSV 对照。
 Phase 4K 起 `--posix-write-strategy auto|direct|coalesced` 用于 POSIX temp write/writeback 诊断。默认 `auto` 保持既有语义：`file_io_buffer_size=0` 直写，`>0` 使用 contiguous coalescing；`direct` 强制直写；`coalesced` 要求 `--file-io-buffer-size > 0`。
+
+## Tree Private Matrix
+
+Phase 5B/5C 的目录级私网矩阵使用现有 `gridflux-gridftp-server` 与
+`gridflux-tree-upload-client` / `gridflux-tree-download-client`：
+
+```bash
+python3 tools/perf/run_gridftp_tree_private_matrix.py \
+  --remote <remote> \
+  --server-host <server-host> \
+  --local-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --datasets small,mixed \
+  --directions upload,download \
+  --file-parallelisms 1,2,4 \
+  --connections 2 \
+  --checksums crc32c,none \
+  --repeat 3 \
+  --output-dir tools/perf/results
+```
+
+Phase 5C raw CSV includes `json_summary`, `completed_files`,
+`skipped_files`, `failed_files`, `changed_files`, `bytes_total`,
+`bytes_transferred`, `summary_tree_hash`, and `error_message`. Summary CSV
+keeps min/median/max throughput and tree hash mismatch counts grouped by
+dataset, direction, file parallelism, connection count, and checksum.
 
 Phase 4F/4G no-liburing fallback 验证：
 

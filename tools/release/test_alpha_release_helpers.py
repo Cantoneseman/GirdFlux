@@ -6,9 +6,11 @@ from __future__ import annotations
 import csv
 import json
 import tempfile
+import os
 from pathlib import Path
 
 import check_remote_artifact_sync
+import remote_auth
 import run_alpha_release_gate
 import sync_remote_artifacts
 
@@ -258,6 +260,51 @@ def test_artifact_path_rejects_traversal_and_sensitive_paths() -> None:
         raise AssertionError(f"unsafe path was accepted: {path}")
 
 
+def test_artifact_manifest_freshness_detects_stale_required_doc() -> None:
+    with tempfile.TemporaryDirectory(prefix="gridflux-alpha-freshness.") as temp:
+        root = Path(temp)
+        write(root / "docs" / "PROJECT_STATE.md", "state-v1\n")
+        manifest_path = root / "tools" / "perf" / "results" / "alpha-artifacts.json"
+        run_alpha_release_gate.write_alpha_artifact_manifest(
+            path=manifest_path,
+            root=root,
+            source_hash="test",
+            remote_required=False,
+            artifact_paths=["docs/PROJECT_STATE.md"],
+        )
+        fresh = run_alpha_release_gate.check_alpha_artifact_manifest_freshness(manifest_path, root)
+        if fresh["status"] != "pass":
+            raise AssertionError(f"fresh manifest unexpectedly failed: {fresh}")
+        write(root / "docs" / "PROJECT_STATE.md", "state-v2\n")
+        stale = run_alpha_release_gate.check_alpha_artifact_manifest_freshness(manifest_path, root)
+        if stale["status"] != "fail" or stale["stale_count"] != 1:
+            raise AssertionError(f"stale manifest was not detected: {stale}")
+
+
+def test_remote_auth_reads_matching_private_agents_row() -> None:
+    with tempfile.TemporaryDirectory(prefix="gridflux-remote-auth.") as temp:
+        root = Path(temp)
+        write(
+            root / "AGENTS.md",
+            "\n".join(
+                [
+                    "|<redacted>|公网 IP|私网 IP|用户|密码|",
+                    "|---|---|---|---|---|",
+                    "|<redacted>一|203.0.113.1|192.0.2.1|root|first-secret|",
+                    "|<redacted>二|203.0.113.2|192.0.2.2|root|second-secret|",
+                    "",
+                ]
+            ),
+        )
+        for key in ["GRIDFLUX_SSH_PASSWORD", "SSHPASS"]:
+            os.environ.pop(key, None)
+        auth = remote_auth.resolve_auth("root@192.0.2.2", root)
+        if auth is None or auth.password != "second-secret" or auth.source != "AGENTS.md":
+            raise AssertionError(f"unexpected remote auth resolution: {auth}")
+        if remote_auth.resolve_auth("admin@192.0.2.2", root) is not None:
+            raise AssertionError("remote auth ignored username mismatch")
+
+
 def main() -> int:
     test_source_tree_hash_excludes_private_and_build()
     test_csv_sidecar_extraction()
@@ -265,6 +312,8 @@ def main() -> int:
     test_artifact_manifest_excludes_private_paths_and_includes_sidecars()
     test_remote_artifact_sync_local_verify_and_sync()
     test_artifact_path_rejects_traversal_and_sensitive_paths()
+    test_artifact_manifest_freshness_detects_stale_required_doc()
+    test_remote_auth_reads_matching_private_agents_row()
     print("alpha release helper tests passed")
     return 0
 

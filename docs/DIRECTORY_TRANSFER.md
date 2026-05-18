@@ -32,6 +32,20 @@ Common options include `--file-parallelism`, `--chunk-size`, `--buffer-size`,
 `--checksum`, `--checksum-backend`, `--resume`, `--max-files`, `--user`, and
 `--password`.
 
+Phase 5C adds opt-in structured summaries:
+
+```bash
+gridflux-tree-upload-client ... --json-summary /tmp/tree-upload-summary.json
+gridflux-tree-download-client ... --summary-json /tmp/tree-download-summary.json
+```
+
+`--json-summary` is the canonical flag; `--summary-json` is an alias. The JSON
+contains direction, source/destination, file counts, completed/skipped/failed/
+changed counts, total and transferred bytes, file parallelism, per-file
+connections, checksum settings, resume flag, elapsed seconds, throughput,
+result, a stable tree verification hash when available, and a structured error
+object on failure.
+
 Phase 5B makes `--file-parallelism` active: it controls how many files are
 processed concurrently. The default remains `1`. Each file worker opens its own
 control session and each file still uses `--connections` for per-file framed
@@ -68,6 +82,15 @@ the relative path, manifest size/mtime, and current size/mtime. Phase 5B does
 not automatically overwrite, delete, or retransfer changed files; a future
 `--retransfer-changed` option may be designed separately.
 
+When JSON summary is enabled, changed-file failures also write:
+
+- `error.message`
+- `error.changed_path`
+- `error.manifest_size`
+- `error.manifest_mtime`
+- `error.current_size`
+- `error.current_mtime`
+
 `--max-files <N>` intentionally stops after scheduling N file transfers and
 exits nonzero; it is intended for smoke tests and recovery drills. Already
 completed file state remains in the tree manifest for resume.
@@ -79,8 +102,10 @@ paths, `..`, Windows drive-style paths, backslashes, and control characters are
 rejected. Remote paths are always interpreted relative to the configured
 `gridflux-gridftp-server --root`.
 
-Phase 5A/5B does not preserve empty directories, permissions, owner/group, xattrs,
-ACLs, or directory mtimes. It is not a replacement for production rsync.
+Phase 5A/5B/5C does not preserve empty directories, permissions, owner/group,
+xattrs, ACLs, or directory mtimes. Empty directories are intentionally not
+created on the destination; only regular file entries are transferred. It is
+not a replacement for production rsync.
 
 ## Boundaries
 

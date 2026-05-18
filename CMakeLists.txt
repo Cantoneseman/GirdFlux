@@ -333,6 +333,10 @@ if(GRIDFLUX_BUILD_TESTS)
         COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/test/run_gridftp_tree_changed_file_smoke.py --build-dir ${CMAKE_BINARY_DIR}
     )
     add_test(
+        NAME gridflux_tree_edge_cases_smoke
+        COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/test/run_gridftp_tree_edge_cases_smoke.py --build-dir ${CMAKE_BINARY_DIR}
+    )
+    add_test(
         NAME gridflux_tree_manifest_corrupt_smoke
         COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/test/run_gridftp_tree_manifest_corrupt_smoke.py --build-dir ${CMAKE_BINARY_DIR}
     )

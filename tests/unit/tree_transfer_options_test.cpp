@@ -36,7 +36,9 @@ TEST(TreeTransferOptionsTest, ParsesUploadOptions) {
                           "--user",
                           "alice",
                           "--password",
-                          "secret"};
+                          "secret",
+                          "--json-summary",
+                          "/tmp/tree-summary.json"};
     auto parsed = gridflux::config::parseTreeTransferOptions(
         static_cast<int>(std::size(argv)), argv, gridflux::config::TreeTransferRole::Upload);
     ASSERT_TRUE(parsed.isOk()) << parsed.status().message();
@@ -47,6 +49,7 @@ TEST(TreeTransferOptionsTest, ParsesUploadOptions) {
     EXPECT_EQ(parsed.value().bufferSize, 262144U);
     EXPECT_EQ(parsed.value().checksumAlgorithm, gridflux::checksum::ChecksumAlgorithm::None);
     EXPECT_EQ(parsed.value().user, "alice");
+    EXPECT_EQ(parsed.value().jsonSummaryPath, "/tmp/tree-summary.json");
     std::filesystem::remove_all(root);
 }
 
@@ -60,11 +63,14 @@ TEST(TreeTransferOptionsTest, ParsesDownloadOptionsAndCreatesDestination) {
                           "remote/data",
                           "--dest-dir",
                           rootText.c_str(),
-                          "--resume"};
+                          "--resume",
+                          "--summary-json",
+                          "/tmp/tree-download-summary.json"};
     auto parsed = gridflux::config::parseTreeTransferOptions(
         static_cast<int>(std::size(argv)), argv, gridflux::config::TreeTransferRole::Download);
     ASSERT_TRUE(parsed.isOk()) << parsed.status().message();
     EXPECT_TRUE(parsed.value().resume);
+    EXPECT_EQ(parsed.value().jsonSummaryPath, "/tmp/tree-download-summary.json");
     std::filesystem::remove_all(root);
 }
 
@@ -84,5 +90,15 @@ TEST(TreeTransferOptionsTest, RejectsInvalidOptions) {
                                "--dest-dir", "/tmp/out"};
     EXPECT_FALSE(gridflux::config::parseTreeTransferOptions(
                      5, badRemote, gridflux::config::TreeTransferRole::Download)
+                     .isOk());
+
+    const char* missingSummary[] = {"gridflux-tree-upload-client",
+                                    "--source-dir",
+                                    "/tmp",
+                                    "--dest-dir",
+                                    "remote",
+                                    "--json-summary"};
+    EXPECT_FALSE(gridflux::config::parseTreeTransferOptions(
+                     6, missingSummary, gridflux::config::TreeTransferRole::Upload)
                      .isOk());
 }

@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**阶段：** Phase 5B — 目录传输并发、changed-file 防护与数据集级性能验收（已完成）
+**阶段：** Phase 5C — 目录传输 alpha 硬化与 release 自一致性（已完成）
 
 **已完成：** 项目设计、技术选型、工程规范制定、CMake 工程骨架初始化、GoogleTest 工具链测试、本机与<redacted>二构建验证、GridFTP 源码学习经验整理入设计文档、Phase 1.0 多连接 TCP sink 与本机 loopback 验证、Phase 1.1 性能基线脚本与 loopback smoke matrix、Phase 1.2A offset-aware 单文件传输闭环、Phase 1.2B 文件传输健壮性、Phase 1.3A 文件性能基线自动化、Phase 2A manifest/range-based 断点续传核心、Phase 2B CRC32C chunk checksum 与损坏注入验证、Phase 2C CRC32C backend 自动选择、manifest 批量 flush、恢复统计与 checksum benchmark、Phase 3A GridFTP 风格控制面 STOR 上传与 REST/GFID resume 映射、Phase 3B GridFTP 风格控制面 framed RETR 完整下载、Phase 3C 下载端 manifest/verified_chunks 与 RETR REST/GFID resume、Phase 3D 控制面 SIZE/MDTM/CWD/CDUP/LIST/NLST 与测试工具收敛。
 
@@ -10,7 +10,7 @@
 
 **未开始：** 系统级文件传输调优、raw FTP stream STOR/RETR、GridFTP TLS/GSI、MLST/MLSD、网络 io_uring、生产级目录同步。
 
-**下一步：** 基于 Phase 5B 的目录并发和数据集矩阵结果，继续做目录传输 alpha UX/恢复策略加固或进入生产认证/TLS/GSI 设计；不改网络 epoll，不默认启用 io_uring，不改变 checksum/manifest/resume 语义。
+**下一步：** Phase 5D 可继续做目录传输 alpha 发布后的 UX/运维打磨，或另起阶段设计生产认证/TLS/GSI；不改网络 epoll，不默认启用 io_uring，不改变 checksum/manifest/resume 语义。
 
 ---
 
@@ -308,6 +308,17 @@
 
 状态：已完成。本机与<redacted>二 Debug full CTest 均为 `163/163` passed；本机与<redacted>二 `build-io-uring-real` Release full CTest 均为 `163/163` passed，真实 io_uring smoke 为 `Passed`。新增 tree parallel / changed-file loopback smoke 均通过；changed-file smoke 覆盖 upload source 改动、download remote source 改动和 completed local target 改动，均 fail-safe 且输出 changed path 与 manifest/current metadata。私网 tree smoke 通过，4 个文件、1,179,670 bytes、tree hash 一致。mixed dataset 私网矩阵 repeat=3 全部通过：36/36 pass，12 个 summary row `fail_count=0`、`tree_hash_mismatch_count=0`；file-level parallelism 从 1 提升到 4 时，mixed upload median 约从 `0.286 Gbps` 提升到 `1.074-1.088 Gbps`，download median 约从 `0.266-0.268 Gbps` 提升到 `0.830-0.834 Gbps`。Quick/full alpha release gate 均通过，artifact sync/verify status 为 `pass`。默认单文件传输策略保持不变。
 
+**5C 目录传输 alpha 硬化与 release 自一致性**
+
+- `gridflux-tree-upload-client` / `gridflux-tree-download-client` 新增 opt-in `--json-summary`，`--summary-json` 作为别名；保留人类可读 key=value 输出。
+- JSON summary 记录方向、source/dest、file counts、completed/skipped/failed/changed、bytes、file parallelism、connections、checksum、resume、elapsed、throughput、tree verification hash 和结构化 error。
+- Changed-file fail-safe 失败时 JSON error 记录 changed path、manifest/current size 与 mtime。
+- 新增 tree edge-case smoke，覆盖特殊字符路径、深层目录、大量小文件、空目录不保留、symlink 拒绝和 same-size mtime drift fail-safe。
+- tree private matrix 优先读取 JSON summary，stdout 仅作为 fallback；raw/summary CSV 增加 JSON summary 路径与关键字段。
+- alpha release gate 增加 manifest freshness check：最终报告/JSON 写入后生成 artifact manifest，并立即按当前本地文件 size/SHA256 检测 stale artifact；artifact sync JSON 分离 pre-sync 与 post-sync 状态。
+
+状态：已完成。本机与<redacted>二 Debug full CTest 均为 `164/164` passed；本机与<redacted>二 `build-io-uring-real` Release full CTest 均为 `164/164` passed，真实 io_uring smoke 为 `Passed`。新增 JSON summary、edge-case smoke 和 manifest freshness regression 均通过。Phase 5C small+mixed tree private matrix repeat=3 覆盖 upload/download、checksum `crc32c|none`、file parallelism `1|2|4`，共 72/72 pass，24 个 summary row `fail_count=0`、`tree_hash_mismatch_count=0`。mixed dataset median：upload fp1 `0.286-0.290 Gbps`、fp2 `0.556-0.563 Gbps`、fp4 `1.089 Gbps`；download fp1 `0.265-0.266 Gbps`、fp2 `0.488-0.489 Gbps`、fp4 `0.826-0.844 Gbps`。Phase 5C 不改变默认传输策略或单文件 framed STOR/RETR、checksum、manifest、resume、final verify 语义。
+
 - TLS 1.3 / token 认证。
 - 容错容灾（自动重连、超时重试、死任务清理）。
 - 结构化日志 + Prometheus 指标。
@@ -392,6 +403,8 @@
 | 2026-05-18 | Phase 5A 目录传输保持 alpha 边界 | 支持多文件 upload/download/resume，但不保存权限、owner、xattr、ACL 或空目录，不实现 raw FTP recursive transfer、MLST/MLSD、TLS/GSI 或生产认证 |
 | 2026-05-18 | Phase 5B 目录并发只做 file-level bounded queue | `--file-parallelism` 不复制 chunk 级逻辑；每个文件仍复用现有 STOR/RETR framed data path、per-file manifest、CRC32C 和 final verify |
 | 2026-05-18 | Phase 5B changed-file 策略保持 fail-safe | Resume 前校验 size/mtime，发现变化即标记 `changed` 并失败；不自动覆盖、不删除、不重传 changed file |
+| 2026-05-18 | Phase 5C artifact manifest 必须在最终报告落盘后生成并本地自检 | 防止 release report、PROJECT_STATE 或 gate JSON 在 manifest 生成后变化导致<redacted>二同步闭环拿到陈旧 hash |
+| 2026-05-18 | Phase 5C tree JSON summary 是 opt-in 可观测性，不改变 CLI 默认输出 | perf matrix 和 release gate 使用结构化摘要减少解析漂移；人工 key=value 输出继续保留 |
 
 ---
 

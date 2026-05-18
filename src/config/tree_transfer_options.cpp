@@ -175,6 +175,11 @@ common::Result<TreeTransferOptions> parseTreeTransferOptions(int argc, const cha
                 return common::Status::invalidArgument("--password must not be empty");
             }
             options.password = std::string(value);
+        } else if (option == "--json-summary" || option == "--summary-json") {
+            if (value.empty()) {
+                return common::Status::invalidArgument(std::string(option) + " must not be empty");
+            }
+            options.jsonSummaryPath = std::string(value);
         } else {
             return common::Status::invalidArgument("unknown option: " + std::string(option));
         }
@@ -223,7 +228,7 @@ std::string treeTransferUsage(const char* programName, TreeTransferRole role) {
            " [--connections <N>] [--file-parallelism <N>] [--chunk-size <bytes>] "
            "[--buffer-size <bytes>] [--checksum <crc32c|none>] "
            "[--checksum-backend <auto|software|hardware>] [--resume] [--max-files <N>] "
-           "[--user <name>] [--password <password>]";
+           "[--user <name>] [--password <password>] [--json-summary <path>]";
 }
 
 }  // namespace gridflux::config

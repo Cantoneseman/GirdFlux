@@ -40,6 +40,9 @@ if [[ -z "$remote_host" || -z "$source_path" || -z "$target_path" ]]; then
     exit 2
 fi
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/../.." && pwd)"
+
 source_path="${source_path%/}/"
 target="${remote_host}:${target_path%/}/"
 
@@ -67,14 +70,10 @@ rsync_cmd=(
     "$target"
 )
 
-if [[ -n "${GRIDFLUX_SSH_PASSWORD:-}" ]]; then
-    if ! command -v sshpass >/dev/null 2>&1; then
-        echo "sshpass is required when GRIDFLUX_SSH_PASSWORD is set" >&2
-        exit 1
-    fi
-    SSHPASS="$GRIDFLUX_SSH_PASSWORD" sshpass -e "${rsync_cmd[@]}"
-else
-    "${rsync_cmd[@]}"
-fi
+python3 "$repo_root/tools/release/remote_auth.py" \
+    --remote "$remote_host" \
+    --repo-root "$repo_root" \
+    --sshpass-prefix \
+    -- "${rsync_cmd[@]}"
 
 echo "synced ${source_path} to ${remote_host}:${target_path%/}/"

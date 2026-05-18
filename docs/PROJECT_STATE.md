@@ -3561,6 +3561,15 @@ GRIDFLUX_SSH_PASSWORD='***' SSHPASS='***' python3 tools/release/run_alpha_releas
   - rerun strict `check_remote_artifact_sync.py --manifest tools/perf/results/20260518T073545Z_alpha-artifacts.json`.
 - No transfer code, defaults, checksum, manifest, resume, or final verify semantics changed.
 
+### 2026-05-18 Remote SSH/sync reliability fix
+
+- Added `tools/release/remote_auth.py` as a shared remote-auth helper for release and sync tools.
+- The helper uses `GRIDFLUX_SSH_PASSWORD` / `SSHPASS` when present; otherwise it can read the local private `AGENTS.md` topology table and inject the password through `sshpass -e` without printing or storing the secret.
+- Updated `tools/perf/sync_remote.sh`, `tools/release/sync_remote_artifacts.py`, `tools/release/check_remote_artifact_sync.py`, and `tools/release/run_alpha_release_gate.py` to use the shared helper.
+- Added release helper regression coverage for selecting the correct AGENTS row by remote host and username.
+- Verified that `tools/perf/sync_remote.sh` works with `GRIDFLUX_SSH_PASSWORD` and `SSHPASS` unset.
+- After this tool change, the artifact manifest must be regenerated because the release tool hashes changed.
+
 ### Alpha readiness conclusion
 
 - Alpha status: passed for demonstrable GridFTP-like framed STOR/RETR, bidirectional resume, CRC32C chunk verification, control metadata, release hygiene, and release artifact sync.
@@ -3848,3 +3857,54 @@ python3 tools/release/run_alpha_release_gate.py --full --build-dir build --io-ur
   - does not preserve permissions, owner/group, xattrs, ACLs, or empty directories;
   - does not implement raw FTP recursive transfer, MLST/MLSD, TLS/GSI, production auth, or third-party server-to-server transfer;
   - does not publish or sync private `AGENTS.md`, passwords, tokens, or private topology.
+
+## 2026-05-18 Phase 5C 目录传输 alpha 硬化完成
+
+### 实现范围
+
+- 新增 tree CLI opt-in JSON summary：`--json-summary <path>`，并支持 `--summary-json` 别名。
+- JSON summary 覆盖 direction/source/dest、文件计数、completed/skipped/failed/changed、bytes、file_parallelism、connections、checksum、resume、elapsed、throughput、tree verification hash 和 error 对象。
+- Changed-file fail-safe 失败时，JSON error 写入 changed path、manifest/current size 和 mtime。
+- 新增 `gridflux_tree_edge_cases_smoke`，覆盖特殊字符路径、深层目录、大量小文件、空目录不保留、symlink 拒绝和 same-size mtime drift fail-safe。
+- `run_gridftp_tree_private_matrix.py` 现在为每个 tree CLI case 传入 JSON summary，优先读取 JSON，stdout key=value 仅作为 fallback，并把关键 summary 字段写入 raw/summary CSV。
+- `run_alpha_release_gate.py` 增加 artifact manifest freshness check；`sync_remote_artifacts.py` JSON 增加 pre/post sync missing/mismatch 字段。
+
+### 已执行验证
+
+- 通过：`python3 -m py_compile tools/perf/run_gridftp_tree_private_matrix.py tools/release/run_alpha_release_gate.py tools/release/sync_remote_artifacts.py tools/test/run_gridftp_tree_edge_cases_smoke.py tools/perf/analyze_phase5c.py`
+- 通过：`cmake --build build --target gridflux-tree-upload-client gridflux-tree-download-client gridflux_unit_tests`
+- 通过：`python3 tools/release/test_alpha_release_helpers.py`
+- 通过：`ctest --test-dir build -R "TreeTransferOptions|gridflux_tree_edge_cases_smoke|gridflux_alpha_release_helper_behavior" --output-on-failure`，5/5 passed。
+- 通过：`ctest --test-dir build -R "gridflux_tree_upload_smoke|gridflux_tree_download_smoke|gridflux_tree_resume_smoke|gridflux_tree_changed_file_smoke|gridflux_tree_edge_cases_smoke" --output-on-failure`，5/5 passed。
+
+### 构建与 CTest 验证
+
+- 本机 Debug full CTest：`164/164` passed。
+- 本机 `build-io-uring-real` Release full CTest：`164/164` passed；`FileIoTest.IoUringContextReadWriteSmokeWhenAvailable` passed, not skipped。
+- <redacted>二 Debug full CTest after sync：`164/164` passed。
+- <redacted>二 `build-io-uring-real` Release full CTest after sync：`164/164` passed；real io_uring smoke passed。
+
+### Phase 5C tree private matrix
+
+- Raw CSV：`tools/perf/results/20260518T084912Z_gridftp-tree-private-matrix.csv`。
+- Summary CSV：`tools/perf/results/20260518T084912Z_gridftp-tree-private-matrix-summary.csv`。
+- Report：`docs/perf/PHASE5C_TREE_ALPHA_HARDENING.md`。
+- Coverage：datasets `small,mixed`，directions `upload,download`，checksum `crc32c|none`，file parallelism `1|2|4`，repeat `3`。
+- Result：72/72 pass；24 summary rows；`fail_count=0`；`tree_hash_mismatch_count=0`。
+- Mixed dataset：49 files，79,750,738 bytes。
+- Small dataset：128 files，524,288 bytes。
+- Mixed median throughput:
+  - upload crc32c：fp1 `0.289718 Gbps`，fp2 `0.562667 Gbps`，fp4 `1.088710 Gbps`；
+  - upload none：fp1 `0.285576 Gbps`，fp2 `0.556227 Gbps`，fp4 `1.088570 Gbps`；
+  - download crc32c：fp1 `0.264512 Gbps`，fp2 `0.489268 Gbps`，fp4 `0.826199 Gbps`；
+  - download none：fp1 `0.266293 Gbps`，fp2 `0.487775 Gbps`，fp4 `0.843826 Gbps`。
+
+### Release gate and hygiene
+
+- Quick/full alpha release gate are run after final docs are written so the final artifact manifest records final hashes.
+- Full gate includes local manifest freshness check before artifact sync/verify; if a required artifact changes after manifest generation, the gate fails with stale paths.
+- Public export strict hygiene remains required; local private `AGENTS.md`, passwords, tokens, and private topology are excluded from public export and artifact sync.
+
+### 默认策略
+
+Phase 5C 不改变默认传输策略：`file_io_backend=posix`、`final_verify_policy=full`、`manifest_flush_policy=every_n_chunks`、`preallocate=off`、`posix_write_strategy=auto`。

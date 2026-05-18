@@ -28,6 +28,7 @@ struct TreeTransferOptions {
     std::uint64_t maxFiles = 0;
     std::string user = "gridflux";
     std::string password = "gridflux";
+    std::string jsonSummaryPath;
 };
 
 [[nodiscard]] common::Result<TreeTransferOptions> parseTreeTransferOptions(

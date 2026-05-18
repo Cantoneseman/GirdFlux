@@ -14,6 +14,7 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
+import remote_auth
 import sync_remote_artifacts
 
 
@@ -39,21 +40,16 @@ class ArtifactCheck:
 
 
 def ssh_prefix(remote: str) -> list[str]:
-    if os.environ.get("GRIDFLUX_SSH_PASSWORD"):
-        return ["sshpass", "-e", "ssh", "-o", "StrictHostKeyChecking=no", remote]
-    return ["ssh", "-o", "StrictHostKeyChecking=no", remote]
+    return remote_auth.ssh_prefix(remote)
 
 
 def run_remote(remote: str, command: str) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    if env.get("GRIDFLUX_SSH_PASSWORD") and not env.get("SSHPASS"):
-        env["SSHPASS"] = env["GRIDFLUX_SSH_PASSWORD"]
     return subprocess.run(
         ssh_prefix(remote) + [command],
         text=True,
         capture_output=True,
         check=False,
-        env=env,
+        env=remote_auth.command_env(remote),
     )
 
 
