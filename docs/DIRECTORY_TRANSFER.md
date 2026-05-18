@@ -30,8 +30,13 @@ gridflux-tree-download-client \
 
 Common options include `--file-parallelism`, `--chunk-size`, `--buffer-size`,
 `--checksum`, `--checksum-backend`, `--resume`, `--max-files`, `--user`, and
-`--password`. Phase 5A validates `--file-parallelism` but keeps execution
-conservative; files are processed in stable order.
+`--password`.
+
+Phase 5B makes `--file-parallelism` active: it controls how many files are
+processed concurrently. The default remains `1`. Each file worker opens its own
+control session and each file still uses `--connections` for per-file framed
+data connections; the directory scheduler never reimplements chunk transfer
+logic.
 
 ## Manifests
 
@@ -53,17 +58,19 @@ Each file still has its existing single-file manifest:
 ## Resume
 
 Use `--resume` to continue a directory transfer. Completed files are skipped
-only after size validation. Pending or failed files reuse their stored
-`transfer_id` and enter the existing `REST GFID:<transfer_id>` per-file resume
-path.
+only after validation. Pending or failed files reuse their stored `transfer_id`
+and enter the existing `REST GFID:<transfer_id>` per-file resume path.
 
 If the tree manifest is corrupt, resume fails. If a source or destination file
 has changed relative to the tree manifest, the file is marked `changed` and the
-transfer fails safely. Phase 5A does not automatically overwrite or delete
-already committed files.
+transfer fails safely before new file tasks are dispatched. Error text includes
+the relative path, manifest size/mtime, and current size/mtime. Phase 5B does
+not automatically overwrite, delete, or retransfer changed files; a future
+`--retransfer-changed` option may be designed separately.
 
-`--max-files <N>` intentionally stops after N completed files and exits nonzero;
-it is intended for smoke tests and recovery drills.
+`--max-files <N>` intentionally stops after scheduling N file transfers and
+exits nonzero; it is intended for smoke tests and recovery drills. Already
+completed file state remains in the tree manifest for resume.
 
 ## Path And Metadata Limits
 
@@ -72,7 +79,7 @@ paths, `..`, Windows drive-style paths, backslashes, and control characters are
 rejected. Remote paths are always interpreted relative to the configured
 `gridflux-gridftp-server --root`.
 
-Phase 5A does not preserve empty directories, permissions, owner/group, xattrs,
+Phase 5A/5B does not preserve empty directories, permissions, owner/group, xattrs,
 ACLs, or directory mtimes. It is not a replacement for production rsync.
 
 ## Boundaries

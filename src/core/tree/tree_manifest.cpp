@@ -286,6 +286,12 @@ common::Result<TreeFileStatus> parseTreeFileStatus(const std::string& text) {
     return common::Status::invalidArgument("invalid tree file status");
 }
 
+bool isTreeTransferComplete(const TreeManifest& manifest) {
+    return std::all_of(manifest.files.begin(), manifest.files.end(), [](const TreeFileRecord& file) {
+        return file.status == TreeFileStatus::Completed;
+    });
+}
+
 common::Result<std::string> serializeTreeManifest(const TreeManifest& manifest) {
     if (manifest.version != kTreeManifestVersion) {
         return common::Status::invalidArgument("unsupported tree manifest version");

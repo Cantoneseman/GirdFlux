@@ -3548,6 +3548,19 @@ GRIDFLUX_SSH_PASSWORD='***' SSHPASS='***' python3 tools/release/run_alpha_releas
 - Remote artifact sync check: passed, `152` artifacts checked, including raw/summary CSV and sidecar logs.
 - Final residual process check: no local or remote `gridflux-gridftp-server` / `gridflux-file-*` processes.
 
+### 2026-05-18 Phase 5B release artifact manifest freshness fix
+
+- Architecture acceptance found that `tools/perf/results/20260518T073545Z_alpha-artifacts.json` still recorded the old `docs/PROJECT_STATE.md` hash after the final state document update.
+- The stale-manifest strict check reproduced as expected:
+  - `docs/PROJECT_STATE.md`: mismatch;
+  - `docs/release/ALPHA_RELEASE_GATE.md`: mismatch.
+- Fix procedure:
+  - update this status record first;
+  - regenerate the same artifact manifest path from the final file contents;
+  - sync the manifest-listed artifacts to machine two;
+  - rerun strict `check_remote_artifact_sync.py --manifest tools/perf/results/20260518T073545Z_alpha-artifacts.json`.
+- No transfer code, defaults, checksum, manifest, resume, or final verify semantics changed.
+
 ### Alpha readiness conclusion
 
 - Alpha status: passed for demonstrable GridFTP-like framed STOR/RETR, bidirectional resume, CRC32C chunk verification, control metadata, release hygiene, and release artifact sync.
@@ -3748,6 +3761,90 @@ python3 tools/test/run_gridftp_tree_private_once.py --remote <remote> --server-h
 
 - Defaults unchanged: POSIX file IO backend, `final_verify_policy=full`, `manifest_flush_policy=every_n_chunks`, `preallocate=off`, `posix_write_strategy=auto`.
 - Directory transfer remains alpha:
+  - does not preserve permissions, owner/group, xattrs, ACLs, or empty directories;
+  - does not implement raw FTP recursive transfer, MLST/MLSD, TLS/GSI, production auth, or third-party server-to-server transfer;
+  - does not publish or sync private `AGENTS.md`, passwords, tokens, or private topology.
+
+## 2026-05-18 Phase 5B directory transfer concurrency and changed-file hardening
+
+### Implementation
+
+- `gridflux-tree-upload-client` and `gridflux-tree-download-client` now use a bounded file-level scheduler for `--file-parallelism`.
+- Each worker opens an independent GridFTP-like control session and still delegates file content to the existing single-file framed STOR/RETR path.
+- Tree manifest updates are serialized and atomically saved on `Transferring`, `Completed`, `Failed`, and `Changed` transitions.
+- Resume now runs a tree-level changed-file preflight before dispatching new file tasks:
+  - upload compares local source size/mtime with manifest records;
+  - download compares remote `SIZE`/`MDTM` and completed local target size/mtime with manifest records.
+- Download completion aligns local file mtime with the remote manifest mtime so later completed-file validation is meaningful.
+- New loopback smokes:
+  - `gridflux_tree_parallel_smoke`;
+  - `gridflux_tree_changed_file_smoke`.
+- New private dataset matrix tooling:
+  - `tools/perf/run_gridftp_tree_private_matrix.py`;
+  - `tools/perf/analyze_phase5b.py`;
+  - `docs/perf/PHASE5B_TREE_DATASET_MATRIX.md`.
+
+### Validation
+
+```bash
+cmake --build build --target gridflux-tree-upload-client gridflux-tree-download-client gridflux_unit_tests
+python3 -m py_compile tools/test/run_gridftp_tree_parallel_smoke.py tools/test/run_gridftp_tree_changed_file_smoke.py tools/perf/run_gridftp_tree_private_matrix.py tools/perf/analyze_phase5b.py tools/release/run_alpha_release_gate.py
+ctest --test-dir build -R "Tree|gridflux_tree" --output-on-failure
+ctest --test-dir build --output-on-failure
+ctest --test-dir build-io-uring-real --output-on-failure
+ctest --test-dir build-io-uring-real -R FileIoTest.IoUringContextReadWriteSmokeWhenAvailable --output-on-failure
+python3 tools/test/run_gridftp_tree_private_once.py --remote <remote> --server-host <server-host> --local-build-dir /root/projects/GridFlux/build --remote-build-dir /root/projects/GridFlux/build --connections 2 --output-dir tools/perf/results
+python3 tools/perf/run_gridftp_tree_private_matrix.py --remote <remote> --server-host <server-host> --local-build-dir /root/projects/GridFlux/build-io-uring-real --remote-build-dir /root/projects/GridFlux/build-io-uring-real --directions upload,download --datasets mixed --file-parallelisms 1,2,4 --connections 2 --checksums crc32c,none --repeat 3 --output-dir tools/perf/results --case-timeout 900
+python3 tools/release/run_alpha_release_gate.py --quick --build-dir build --io-uring-build-dir build-io-uring-real --remote <remote> --remote-root /root/projects/GridFlux --results-dir tools/perf/results
+python3 tools/release/run_alpha_release_gate.py --full --build-dir build --io-uring-build-dir build-io-uring-real --remote <remote> --remote-root /root/projects/GridFlux --server-host <server-host> --results-dir tools/perf/results
+```
+
+- Tree unit and loopback smoke subset: `17/17` passed.
+- Changed-file smoke verifies upload source changes, remote download source changes, and completed local download target changes fail nonzero with the changed relative path and manifest/current metadata.
+- Local default Debug full CTest: `163/163` passed.
+- Local `build-io-uring-real` Release full CTest: `163/163` passed; `FileIoTest.IoUringContextReadWriteSmokeWhenAvailable` passed, not skipped.
+- Machine two default Debug full CTest after sync: `163/163` passed.
+- Machine two `build-io-uring-real` Release full CTest after sync: `163/163` passed; real io_uring smoke passed.
+- Private tree smoke: passed.
+  - JSON: `tools/perf/results/20260518T071014Z_gridftp-tree-private.json`.
+  - File count: `4`.
+  - Total bytes: `1,179,670`.
+  - Tree hash: `fcc6ed5a7de263a23097b5ee20519f093781f5601cf462827fae5d3606e3afdb`.
+  - Upload, download, upload resume, and download resume tree hashes matched.
+- Private tree mixed dataset matrix: passed.
+  - Raw CSV: `tools/perf/results/20260518T071018Z_gridftp-tree-private-matrix.csv`.
+  - Summary CSV: `tools/perf/results/20260518T071018Z_gridftp-tree-private-matrix-summary.csv`.
+  - Report: `docs/perf/PHASE5B_TREE_DATASET_MATRIX.md`.
+  - Coverage: mixed dataset, upload/download, checksum `crc32c|none`, file parallelism `1|2|4`, repeat `3`.
+  - Result: `36/36` pass; `12` summary rows; `fail_count=0`; `tree_hash_mismatch_count=0`.
+  - Mixed dataset: `49` files, `79,750,738` bytes.
+  - Median throughput:
+    - upload crc32c: fp1 `0.286074 Gbps`, fp2 `0.568577 Gbps`, fp4 `1.073540 Gbps`;
+    - upload none: fp1 `0.288154 Gbps`, fp2 `0.562555 Gbps`, fp4 `1.088320 Gbps`;
+    - download crc32c: fp1 `0.266167 Gbps`, fp2 `0.487340 Gbps`, fp4 `0.833951 Gbps`;
+    - download none: fp1 `0.267951 Gbps`, fp2 `0.488943 Gbps`, fp4 `0.829606 Gbps`.
+- Quick alpha release gate: passed.
+  - JSON: `tools/perf/results/20260518T071313Z_alpha-release-gate.json`.
+- Full alpha release gate: passed.
+  - JSON: `tools/perf/results/20260518T071402Z_alpha-release-gate.json`.
+  - Artifact manifest: `tools/perf/results/20260518T071402Z_alpha-artifacts.json`.
+  - Private baseline matrix inside full: `24/24` pass, `fail_count=0`, sha256 matched.
+  - Artifact sync summary: `checked=173`, `synced=3`, `missing=0`, `mismatch=0`, `status=pass`.
+  - Artifact verify summary: `checked=173`, `missing=0`, `mismatch=0`, `status=pass`.
+- Release manifest collection was hardened after the full gate to include Phase 5B tree matrix scripts, analyzer, report, latest tree matrix raw/summary CSV, and CSV-referenced logs. Release helper regression passed.
+  - Hardened artifact manifest: `tools/perf/results/20260518T073545Z_alpha-artifacts.json`.
+  - Hardened artifact sync summary: `checked=250`, `synced=75`, `missing=0`, `mismatch=0`, `status=pass`.
+  - Hardened artifact verify summary: `checked=250`, `missing=0`, `mismatch=0`, `status=pass`.
+- Public export strict hygiene: passed for `/tmp/gridflux-public-phase5b`.
+- Final public export strict hygiene after artifact hardening: passed for `/tmp/gridflux-public-phase5b-final`.
+- Final residual process check: no local or remote `gridflux-gridftp-server` / `gridflux-file-*` processes.
+
+### Defaults and boundaries
+
+- Defaults unchanged: POSIX file IO backend, `final_verify_policy=full`, `manifest_flush_policy=every_n_chunks`, `preallocate=off`, `posix_write_strategy=auto`.
+- `--file-parallelism` is now real bounded file-level concurrency and defaults to `1`; per-file data transfer still uses the existing framed STOR/RETR path and `--connections`.
+- Directory transfer remains alpha:
+  - not rsync;
   - does not preserve permissions, owner/group, xattrs, ACLs, or empty directories;
   - does not implement raw FTP recursive transfer, MLST/MLSD, TLS/GSI, production auth, or third-party server-to-server transfer;
   - does not publish or sync private `AGENTS.md`, passwords, tokens, or private topology.

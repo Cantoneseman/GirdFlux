@@ -75,3 +75,17 @@ TEST(TreeManifestTest, SavesAndLoadsAtomicManifest) {
     EXPECT_EQ(loaded.value().files[0].relativePath, "file.bin");
     std::filesystem::remove_all(root);
 }
+
+TEST(TreeManifestTest, DetectsCompleteManifest) {
+    gridflux::core::tree::TreeManifest manifest;
+    manifest.rootLogicalPath = "root";
+    manifest.files = {
+        {"a.txt", 1, 10, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+         gridflux::core::tree::TreeFileStatus::Completed, ""},
+        {"b.txt", 2, 20, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+         gridflux::core::tree::TreeFileStatus::Completed, ""},
+    };
+    EXPECT_TRUE(gridflux::core::tree::isTreeTransferComplete(manifest));
+    manifest.files[1].status = gridflux::core::tree::TreeFileStatus::Changed;
+    EXPECT_FALSE(gridflux::core::tree::isTreeTransferComplete(manifest));
+}

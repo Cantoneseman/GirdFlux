@@ -1,19 +1,27 @@
 #include "gridflux/core/io/tree_transfer_client.h"
 
+#include <fcntl.h>
 #include <netdb.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <cctype>
+#include <chrono>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <iostream>
+#include <mutex>
 #include <random>
 #include <regex>
 #include <sstream>
 #include <string>
+#include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -228,7 +236,30 @@ class ControlClient {
         if (reply.value().code != 213 || reply.value().lines.empty()) {
             return common::Status::runtimeError("MDTM rejected");
         }
-        return 0;
+        const std::string line = reply.value().lines.front();
+        const std::size_t space = line.find(' ');
+        if (space == std::string::npos || line.size() < space + 1 + 14) {
+            return common::Status::runtimeError("MDTM response missing timestamp");
+        }
+        const std::string text = line.substr(space + 1, 14);
+        if (!std::all_of(text.begin(), text.end(), [](unsigned char ch) {
+                return std::isdigit(ch) != 0;
+            })) {
+            return common::Status::runtimeError("MDTM response has invalid timestamp");
+        }
+        std::tm tm{};
+        tm.tm_year = std::stoi(text.substr(0, 4)) - 1900;
+        tm.tm_mon = std::stoi(text.substr(4, 2)) - 1;
+        tm.tm_mday = std::stoi(text.substr(6, 2));
+        tm.tm_hour = std::stoi(text.substr(8, 2));
+        tm.tm_min = std::stoi(text.substr(10, 2));
+        tm.tm_sec = std::stoi(text.substr(12, 2));
+        tm.tm_isdst = 0;
+        const std::time_t value = ::timegm(&tm);
+        if (value < 0) {
+            return common::Status::runtimeError("MDTM timestamp is out of range");
+        }
+        return static_cast<std::int64_t>(value);
     }
 
    private:
@@ -480,9 +511,577 @@ common::Status createParentDirectory(const std::filesystem::path& path) {
     return common::Status::ok();
 }
 
+struct FileMetadata {
+    std::uint64_t size = 0;
+    std::int64_t mtimeUnixSeconds = 0;
+};
+
+common::Result<FileMetadata> statRegularFile(const std::filesystem::path& path) {
+    struct stat statBuffer {};
+    if (::stat(path.c_str(), &statBuffer) != 0) {
+        return common::Status::systemError("stat: " + std::string(std::strerror(errno)), errno);
+    }
+    if (!S_ISREG(statBuffer.st_mode)) {
+        return common::Status::invalidArgument("tree path is not a regular file: " + path.string());
+    }
+    return FileMetadata{static_cast<std::uint64_t>(statBuffer.st_size),
+                        static_cast<std::int64_t>(statBuffer.st_mtime)};
+}
+
+std::string changedMessage(const char* prefix, const core::tree::TreeFileRecord& record,
+                           const FileMetadata& current) {
+    std::ostringstream output;
+    output << prefix << ": " << record.relativePath << " manifest_size=" << record.size
+           << " manifest_mtime=" << record.mtimeUnixSeconds << " current_size=" << current.size
+           << " current_mtime=" << current.mtimeUnixSeconds;
+    return output.str();
+}
+
+std::string changedMissingMessage(const char* prefix, const core::tree::TreeFileRecord& record,
+                                  const std::string& detail) {
+    std::ostringstream output;
+    output << prefix << ": " << record.relativePath << " manifest_size=" << record.size
+           << " manifest_mtime=" << record.mtimeUnixSeconds
+           << " current_size=missing current_mtime=missing detail=" << detail;
+    return output.str();
+}
+
+bool metadataMatches(const core::tree::TreeFileRecord& record, const FileMetadata& current) {
+    return record.size == current.size && record.mtimeUnixSeconds == current.mtimeUnixSeconds;
+}
+
+common::Status setRegularFileMtime(const std::filesystem::path& path, std::int64_t mtimeUnixSeconds) {
+    timespec times[2]{};
+    times[0].tv_sec = static_cast<time_t>(mtimeUnixSeconds);
+    times[1].tv_sec = static_cast<time_t>(mtimeUnixSeconds);
+    if (::utimensat(AT_FDCWD, path.c_str(), times, 0) != 0) {
+        return common::Status::systemError("utimensat: " + std::string(std::strerror(errno)),
+                                           errno);
+    }
+    return common::Status::ok();
+}
+
+std::uint64_t totalBytes(const core::tree::TreeManifest& manifest) {
+    std::uint64_t total = 0;
+    for (const auto& file : manifest.files) {
+        total += file.size;
+    }
+    return total;
+}
+
+struct TreeRunStats {
+    std::atomic<std::uint64_t> completedThisRun{0};
+    std::atomic<std::uint64_t> skippedFiles{0};
+    std::atomic<std::uint64_t> transferredBytes{0};
+};
+
+struct TreeSummary {
+    std::uint64_t completedFiles = 0;
+    std::uint64_t failedFiles = 0;
+    std::uint64_t changedFiles = 0;
+};
+
+TreeSummary summarizeManifest(const core::tree::TreeManifest& manifest) {
+    TreeSummary summary;
+    for (const auto& file : manifest.files) {
+        switch (file.status) {
+            case core::tree::TreeFileStatus::Completed:
+                ++summary.completedFiles;
+                break;
+            case core::tree::TreeFileStatus::Failed:
+                ++summary.failedFiles;
+                break;
+            case core::tree::TreeFileStatus::Changed:
+                ++summary.changedFiles;
+                break;
+            case core::tree::TreeFileStatus::Pending:
+            case core::tree::TreeFileStatus::Transferring:
+                break;
+        }
+    }
+    return summary;
+}
+
+void printTreeSummary(const char* label, const char* result,
+                      const core::tree::TreeManifest& manifest, const TreeRunStats& stats,
+                      std::uint32_t fileParallelism,
+                      std::chrono::steady_clock::time_point startedAt) {
+    const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - startedAt)
+                             .count();
+    const std::uint64_t logicalBytes = totalBytes(manifest);
+    const double throughputGbps =
+        elapsed > 0.0 ? static_cast<double>(logicalBytes) * 8.0 / elapsed / 1'000'000'000.0 : 0.0;
+    const TreeSummary summary = summarizeManifest(manifest);
+    std::cout << label << " result=" << result << " file_count=" << manifest.files.size()
+              << " completed_files=" << summary.completedFiles
+              << " skipped_files=" << stats.skippedFiles.load()
+              << " failed_files=" << summary.failedFiles
+              << " changed_files=" << summary.changedFiles
+              << " active_file_parallelism=" << fileParallelism << " total_bytes=" << logicalBytes
+              << " transferred_bytes=" << stats.transferredBytes.load()
+              << " elapsed_seconds=" << elapsed << " throughput_gbps=" << throughputGbps
+              << '\n';
+}
+
+struct SchedulerState {
+    core::tree::TreeManifest* manifest = nullptr;
+    std::string manifestPath;
+    std::mutex mutex;
+    std::size_t nextIndex = 0;
+    std::uint64_t startedTransfers = 0;
+    bool stop = false;
+    bool stoppedByMaxFiles = false;
+    common::Status firstError = common::Status::ok();
+    TreeRunStats stats;
+};
+
+void setFirstErrorLocked(SchedulerState* state, common::Status status) {
+    if (status.isOk()) {
+        return;
+    }
+    if (state->firstError.isOk()) {
+        state->firstError = std::move(status);
+    }
+    state->stop = true;
+}
+
+common::Status updateRecord(SchedulerState* state, std::size_t index,
+                            core::tree::TreeFileStatus status, std::string error = "") {
+    std::lock_guard<std::mutex> lock(state->mutex);
+    auto& record = state->manifest->files[index];
+    record.status = status;
+    record.error = std::move(error);
+    const common::Status saveStatus = saveManifest(state->manifest, state->manifestPath);
+    if (!saveStatus.isOk()) {
+        setFirstErrorLocked(state, saveStatus);
+    }
+    return saveStatus;
+}
+
+common::Status updateRecordForTransfer(SchedulerState* state, std::size_t index,
+                                       std::string transferId) {
+    std::lock_guard<std::mutex> lock(state->mutex);
+    auto& record = state->manifest->files[index];
+    record.transferId = std::move(transferId);
+    record.status = core::tree::TreeFileStatus::Transferring;
+    record.error.clear();
+    const common::Status saveStatus = saveManifest(state->manifest, state->manifestPath);
+    if (!saveStatus.isOk()) {
+        setFirstErrorLocked(state, saveStatus);
+    }
+    return saveStatus;
+}
+
+bool acquireTransferSlot(SchedulerState* state, const config::TreeTransferOptions& options) {
+    if (options.maxFiles == 0) {
+        return true;
+    }
+    std::lock_guard<std::mutex> lock(state->mutex);
+    if (state->startedTransfers >= options.maxFiles) {
+        state->stoppedByMaxFiles = true;
+        state->stop = true;
+        return false;
+    }
+    ++state->startedTransfers;
+    return true;
+}
+
+common::Status nextWorkItem(SchedulerState* state, std::size_t* index) {
+    std::lock_guard<std::mutex> lock(state->mutex);
+    if (state->stop) {
+        return common::Status::runtimeError("tree scheduler stopped");
+    }
+    if (state->nextIndex >= state->manifest->files.size()) {
+        return common::Status::ok();
+    }
+    *index = state->nextIndex++;
+    return common::Status::ok();
+}
+
+void markChanged(SchedulerState* state, std::size_t index, const std::string& message) {
+    (void)updateRecord(state, index, core::tree::TreeFileStatus::Changed, message);
+    std::lock_guard<std::mutex> lock(state->mutex);
+    setFirstErrorLocked(state, common::Status::invalidArgument(message));
+}
+
+common::Status markManifestChanged(core::tree::TreeManifest* manifest,
+                                   const std::string& manifestPath, std::size_t index,
+                                   const std::string& message) {
+    manifest->files[index].status = core::tree::TreeFileStatus::Changed;
+    manifest->files[index].error = message;
+    const common::Status saveStatus = saveManifest(manifest, manifestPath);
+    if (!saveStatus.isOk()) {
+        return saveStatus;
+    }
+    return common::Status::invalidArgument(message);
+}
+
+common::Status preflightUploadResume(const config::TreeTransferOptions& options,
+                                     core::tree::TreeManifest* manifest,
+                                     const std::string& manifestPath) {
+    if (!options.resume) {
+        return common::Status::ok();
+    }
+    auto scanned = core::tree::scanLocalTree(options.sourceDir);
+    if (!scanned.isOk()) {
+        return scanned.status();
+    }
+    std::unordered_map<std::string, FileMetadata> current;
+    current.reserve(scanned.value().size());
+    for (const auto& file : scanned.value()) {
+        current.emplace(file.relativePath, FileMetadata{file.size, file.mtimeUnixSeconds});
+    }
+    for (std::size_t index = 0; index < manifest->files.size(); ++index) {
+        const auto& record = manifest->files[index];
+        auto found = current.find(record.relativePath);
+        if (found == current.end()) {
+            const std::string message =
+                changedMissingMessage("source file changed", record, "missing from source tree");
+            return markManifestChanged(manifest, manifestPath, index, message);
+        }
+        if (!metadataMatches(record, found->second)) {
+            const std::string message = changedMessage("source file changed", record, found->second);
+            return markManifestChanged(manifest, manifestPath, index, message);
+        }
+    }
+    for (const auto& [relativePath, metadata] : current) {
+        const auto found = std::find_if(
+            manifest->files.begin(), manifest->files.end(), [&](const core::tree::TreeFileRecord& record) {
+                return record.relativePath == relativePath;
+            });
+        if (found == manifest->files.end()) {
+            std::ostringstream message;
+            message << "source tree changed: " << relativePath
+                    << " manifest_size=missing manifest_mtime=missing current_size="
+                    << metadata.size << " current_mtime=" << metadata.mtimeUnixSeconds;
+            return common::Status::invalidArgument(message.str());
+        }
+    }
+    return common::Status::ok();
+}
+
+common::Status preflightDownloadResume(const config::TreeTransferOptions& options,
+                                       core::tree::TreeManifest* manifest,
+                                       const std::string& manifestPath) {
+    if (!options.resume) {
+        return common::Status::ok();
+    }
+    ControlClient control;
+    const common::Status readyStatus = ensureControlReady(&control, options);
+    if (!readyStatus.isOk()) {
+        return readyStatus;
+    }
+    for (std::size_t index = 0; index < manifest->files.size(); ++index) {
+        const auto& record = manifest->files[index];
+        const std::string remotePath = joinRemotePath(options.sourceDir, record.relativePath);
+        auto remoteSize = control.size(remotePath);
+        if (!remoteSize.isOk()) {
+            const std::string message =
+                changedMissingMessage("remote file changed", record, remoteSize.status().message());
+            return markManifestChanged(manifest, manifestPath, index, message);
+        }
+        auto remoteMtime = control.mdtm(remotePath);
+        if (!remoteMtime.isOk()) {
+            const std::string message =
+                changedMissingMessage("remote file changed", record, remoteMtime.status().message());
+            return markManifestChanged(manifest, manifestPath, index, message);
+        }
+        const FileMetadata remoteMetadata{remoteSize.value(), remoteMtime.value()};
+        if (!metadataMatches(record, remoteMetadata)) {
+            const std::string message = changedMessage("remote file changed", record, remoteMetadata);
+            return markManifestChanged(manifest, manifestPath, index, message);
+        }
+        if (record.status == core::tree::TreeFileStatus::Completed) {
+            const std::filesystem::path localPath =
+                std::filesystem::path(options.destDir) / record.relativePath;
+            auto localMetadata = statRegularFile(localPath);
+            if (!localMetadata.isOk()) {
+                const std::string message = changedMissingMessage(
+                    "completed download file changed", record, localMetadata.status().message());
+                return markManifestChanged(manifest, manifestPath, index, message);
+            }
+            if (!metadataMatches(record, localMetadata.value())) {
+                const std::string message =
+                    changedMessage("completed download file changed", record, localMetadata.value());
+                return markManifestChanged(manifest, manifestPath, index, message);
+            }
+        }
+    }
+    return common::Status::ok();
+}
+
+common::Status processUploadFile(SchedulerState* state, std::size_t index,
+                                 const config::TreeTransferOptions& options) {
+    const core::tree::TreeFileRecord record = state->manifest->files[index];
+    const std::filesystem::path localPath = std::filesystem::path(options.sourceDir) / record.relativePath;
+    const std::string remotePath = joinRemotePath(options.destDir, record.relativePath);
+
+    auto metadata = statRegularFile(localPath);
+    if (!metadata.isOk()) {
+        const std::string message =
+            changedMissingMessage("source file changed", record, metadata.status().message());
+        markChanged(state, index, message);
+        return common::Status::invalidArgument(message);
+    }
+    if (options.resume && !metadataMatches(record, metadata.value())) {
+        const std::string message = changedMessage("source file changed", record, metadata.value());
+        markChanged(state, index, message);
+        return common::Status::invalidArgument(message);
+    }
+
+    ControlClient control;
+    const common::Status readyStatus = ensureControlReady(&control, options);
+    if (!readyStatus.isOk()) {
+        return readyStatus;
+    }
+
+    if (record.status == core::tree::TreeFileStatus::Completed) {
+        const common::Status status = validateCompletedUploadFile(&control, remotePath, record);
+        if (!status.isOk()) {
+            const std::string message = changedMissingMessage("completed upload file changed", record,
+                                                              status.message());
+            markChanged(state, index, message);
+            return common::Status::invalidArgument(message);
+        }
+        state->stats.skippedFiles.fetch_add(1);
+        return common::Status::ok();
+    }
+
+    if (!acquireTransferSlot(state, options)) {
+        return common::Status::runtimeError("tree upload stopped after --max-files");
+    }
+
+    auto port = control.epsv();
+    if (!port.isOk()) {
+        return port.status();
+    }
+    const bool resumeFile = options.resume && record.status != core::tree::TreeFileStatus::Pending;
+    if (resumeFile) {
+        const common::Status restStatus = control.rest(record.transferId);
+        if (!restStatus.isOk()) {
+            return restStatus;
+        }
+    }
+    auto transferId = control.startTransfer("STOR", remotePath);
+    if (!transferId.isOk()) {
+        (void)updateRecord(state, index, core::tree::TreeFileStatus::Failed,
+                           transferId.status().message());
+        return transferId.status();
+    }
+    const std::string effectiveTransferId = resumeFile ? record.transferId : transferId.value();
+    const common::Status saveStatus = updateRecordForTransfer(state, index, effectiveTransferId);
+    if (!saveStatus.isOk()) {
+        return saveStatus;
+    }
+
+    config::FileTransferOptions fileOptions;
+    fileOptions.host = options.host;
+    fileOptions.port = port.value();
+    fileOptions.connections = options.connections;
+    fileOptions.bufferSize = options.bufferSize;
+    fileOptions.chunkSize = options.chunkSize;
+    fileOptions.path = localPath.string();
+    fileOptions.transferId = effectiveTransferId;
+    fileOptions.checksumAlgorithm = options.checksumAlgorithm;
+    fileOptions.checksumBackend = options.checksumBackend;
+    fileOptions.resume = resumeFile;
+
+    const common::Status transferStatus = runFileTransferClient(fileOptions);
+    if (!transferStatus.isOk()) {
+        (void)updateRecord(state, index, core::tree::TreeFileStatus::Failed,
+                           transferStatus.message());
+        return transferStatus;
+    }
+    const common::Status completeStatus = control.waitTransferComplete();
+    if (!completeStatus.isOk()) {
+        (void)updateRecord(state, index, core::tree::TreeFileStatus::Failed,
+                           completeStatus.message());
+        return completeStatus;
+    }
+    const common::Status doneStatus = updateRecord(state, index, core::tree::TreeFileStatus::Completed);
+    if (!doneStatus.isOk()) {
+        return doneStatus;
+    }
+    state->stats.completedThisRun.fetch_add(1);
+    state->stats.transferredBytes.fetch_add(record.size);
+    return common::Status::ok();
+}
+
+common::Status processDownloadFile(SchedulerState* state, std::size_t index,
+                                   const config::TreeTransferOptions& options) {
+    const core::tree::TreeFileRecord record = state->manifest->files[index];
+    const std::filesystem::path localPath = std::filesystem::path(options.destDir) / record.relativePath;
+    const std::string remotePath = joinRemotePath(options.sourceDir, record.relativePath);
+
+    ControlClient control;
+    const common::Status readyStatus = ensureControlReady(&control, options);
+    if (!readyStatus.isOk()) {
+        return readyStatus;
+    }
+
+    if (record.status == core::tree::TreeFileStatus::Completed) {
+        auto metadata = statRegularFile(localPath);
+        if (!metadata.isOk()) {
+            const std::string message = changedMissingMessage("completed download file changed",
+                                                              record, metadata.status().message());
+            markChanged(state, index, message);
+            return common::Status::invalidArgument(message);
+        }
+        if (!metadataMatches(record, metadata.value())) {
+            const std::string message =
+                changedMessage("completed download file changed", record, metadata.value());
+            markChanged(state, index, message);
+            return common::Status::invalidArgument(message);
+        }
+        state->stats.skippedFiles.fetch_add(1);
+        return common::Status::ok();
+    }
+
+    auto remoteSize = control.size(remotePath);
+    if (!remoteSize.isOk()) {
+        return remoteSize.status();
+    }
+    auto remoteMtime = control.mdtm(remotePath);
+    if (!remoteMtime.isOk()) {
+        return remoteMtime.status();
+    }
+    const FileMetadata remoteMetadata{remoteSize.value(), remoteMtime.value()};
+    if (options.resume && !metadataMatches(record, remoteMetadata)) {
+        const std::string message = changedMessage("remote file changed", record, remoteMetadata);
+        markChanged(state, index, message);
+        return common::Status::invalidArgument(message);
+    }
+
+    if (!acquireTransferSlot(state, options)) {
+        return common::Status::runtimeError("tree download stopped after --max-files");
+    }
+
+    const common::Status parentStatus = createParentDirectory(localPath);
+    if (!parentStatus.isOk()) {
+        return parentStatus;
+    }
+    auto port = control.epsv();
+    if (!port.isOk()) {
+        return port.status();
+    }
+    const bool resumeFile = options.resume && record.status != core::tree::TreeFileStatus::Pending;
+    if (resumeFile) {
+        const common::Status restStatus = control.rest(record.transferId);
+        if (!restStatus.isOk()) {
+            return restStatus;
+        }
+    }
+    auto transferId = control.startTransfer("RETR", remotePath);
+    if (!transferId.isOk()) {
+        (void)updateRecord(state, index, core::tree::TreeFileStatus::Failed,
+                           transferId.status().message());
+        return transferId.status();
+    }
+    const std::string effectiveTransferId = resumeFile ? record.transferId : transferId.value();
+    const common::Status saveStatus = updateRecordForTransfer(state, index, effectiveTransferId);
+    if (!saveStatus.isOk()) {
+        return saveStatus;
+    }
+
+    config::FileDownloadOptions fileOptions;
+    fileOptions.host = options.host;
+    fileOptions.port = port.value();
+    fileOptions.connections = options.connections;
+    fileOptions.bufferSize = options.bufferSize;
+    fileOptions.path = localPath.string();
+    fileOptions.transferId = effectiveTransferId;
+    fileOptions.checksumAlgorithm = options.checksumAlgorithm;
+    fileOptions.checksumBackend = options.checksumBackend;
+    fileOptions.resume = resumeFile;
+
+    const common::Status transferStatus = runFileDownloadClient(fileOptions);
+    if (!transferStatus.isOk()) {
+        (void)updateRecord(state, index, core::tree::TreeFileStatus::Failed,
+                           transferStatus.message());
+        return transferStatus;
+    }
+    const common::Status completeStatus = control.waitTransferComplete();
+    if (!completeStatus.isOk()) {
+        (void)updateRecord(state, index, core::tree::TreeFileStatus::Failed,
+                           completeStatus.message());
+        return completeStatus;
+    }
+    const common::Status mtimeStatus = setRegularFileMtime(localPath, record.mtimeUnixSeconds);
+    if (!mtimeStatus.isOk()) {
+        (void)updateRecord(state, index, core::tree::TreeFileStatus::Failed,
+                           mtimeStatus.message());
+        return mtimeStatus;
+    }
+    const common::Status doneStatus = updateRecord(state, index, core::tree::TreeFileStatus::Completed);
+    if (!doneStatus.isOk()) {
+        return doneStatus;
+    }
+    state->stats.completedThisRun.fetch_add(1);
+    state->stats.transferredBytes.fetch_add(record.size);
+    return common::Status::ok();
+}
+
+common::Status runTreeScheduler(core::tree::TreeManifest* manifest, const std::string& manifestPath,
+                                const config::TreeTransferOptions& options,
+                                common::Status (*processFile)(SchedulerState*, std::size_t,
+                                                              const config::TreeTransferOptions&),
+                                TreeRunStats* stats) {
+    SchedulerState state;
+    state.manifest = manifest;
+    state.manifestPath = manifestPath;
+    const auto copyStats = [&]() {
+        if (stats != nullptr) {
+            stats->completedThisRun.store(state.stats.completedThisRun.load());
+            stats->skippedFiles.store(state.stats.skippedFiles.load());
+            stats->transferredBytes.store(state.stats.transferredBytes.load());
+        }
+    };
+    const std::uint32_t workerCount =
+        std::max<std::uint32_t>(1, std::min<std::uint32_t>(options.fileParallelism,
+                                                          static_cast<std::uint32_t>(
+                                                              std::max<std::size_t>(1, manifest->files.size()))));
+    std::vector<std::thread> workers;
+    workers.reserve(workerCount);
+    for (std::uint32_t worker = 0; worker < workerCount; ++worker) {
+        workers.emplace_back([&state, &options, processFile]() {
+            while (true) {
+                std::size_t index = 0;
+                {
+                    std::lock_guard<std::mutex> lock(state.mutex);
+                    if (state.stop || state.nextIndex >= state.manifest->files.size()) {
+                        return;
+                    }
+                    index = state.nextIndex++;
+                }
+                common::Status status = processFile(&state, index, options);
+                if (!status.isOk()) {
+                    std::lock_guard<std::mutex> lock(state.mutex);
+                    setFirstErrorLocked(&state, std::move(status));
+                    return;
+                }
+            }
+        });
+    }
+    for (auto& worker : workers) {
+        worker.join();
+    }
+
+    if (state.stoppedByMaxFiles) {
+        copyStats();
+        return common::Status::runtimeError("tree transfer stopped after --max-files");
+    }
+    if (!state.firstError.isOk()) {
+        copyStats();
+        return state.firstError;
+    }
+    copyStats();
+    return common::Status::ok();
+}
+
 }  // namespace
 
 common::Status runTreeUploadClient(const config::TreeTransferOptions& options) {
+    const auto startedAt = std::chrono::steady_clock::now();
     const std::string manifestPath = core::tree::treeManifestPathForUpload(options.sourceDir);
     core::tree::TreeManifest manifest;
     if (options.resume) {
@@ -517,107 +1116,25 @@ common::Status runTreeUploadClient(const config::TreeTransferOptions& options) {
         }
     }
 
-    ControlClient control;
-    const common::Status readyStatus = ensureControlReady(&control, options);
-    if (!readyStatus.isOk()) {
-        return readyStatus;
+    const common::Status preflightStatus =
+        preflightUploadResume(options, &manifest, manifestPath);
+    if (!preflightStatus.isOk()) {
+        TreeRunStats stats;
+        printTreeSummary("tree_upload_complete", "fail", manifest, stats, options.fileParallelism,
+                         startedAt);
+        return preflightStatus;
     }
 
-    std::uint64_t completedThisRun = 0;
-    for (core::tree::TreeFileRecord& record : manifest.files) {
-        const std::filesystem::path localPath = std::filesystem::path(options.sourceDir) / record.relativePath;
-        if (options.resume) {
-            std::error_code error;
-            const std::uint64_t currentSize = std::filesystem::file_size(localPath, error);
-            if (error || currentSize != record.size) {
-                record.status = core::tree::TreeFileStatus::Changed;
-                record.error = "source file changed";
-                (void)saveManifest(&manifest, manifestPath);
-                return common::Status::invalidArgument("source file changed: " + record.relativePath);
-            }
-        }
-        const std::string remotePath = joinRemotePath(options.destDir, record.relativePath);
-        if (record.status == core::tree::TreeFileStatus::Completed) {
-            const common::Status status = validateCompletedUploadFile(&control, remotePath, record);
-            if (!status.isOk()) {
-                record.status = core::tree::TreeFileStatus::Changed;
-                record.error = status.message();
-                (void)saveManifest(&manifest, manifestPath);
-                return status;
-            }
-            continue;
-        }
-
-        auto port = control.epsv();
-        if (!port.isOk()) {
-            return port.status();
-        }
-        const bool resumeFile = options.resume && record.status != core::tree::TreeFileStatus::Pending;
-        if (resumeFile) {
-            const common::Status restStatus = control.rest(record.transferId);
-            if (!restStatus.isOk()) {
-                return restStatus;
-            }
-        }
-        auto transferId = control.startTransfer("STOR", remotePath);
-        if (!transferId.isOk()) {
-            record.status = core::tree::TreeFileStatus::Failed;
-            record.error = transferId.status().message();
-            (void)saveManifest(&manifest, manifestPath);
-            return transferId.status();
-        }
-        if (!resumeFile) {
-            record.transferId = transferId.value();
-        }
-        record.status = core::tree::TreeFileStatus::Transferring;
-        record.error.clear();
-        const common::Status saveStatus = saveManifest(&manifest, manifestPath);
-        if (!saveStatus.isOk()) {
-            return saveStatus;
-        }
-
-        config::FileTransferOptions fileOptions;
-        fileOptions.host = options.host;
-        fileOptions.port = port.value();
-        fileOptions.connections = options.connections;
-        fileOptions.bufferSize = options.bufferSize;
-        fileOptions.chunkSize = options.chunkSize;
-        fileOptions.path = localPath.string();
-        fileOptions.transferId = record.transferId;
-        fileOptions.checksumAlgorithm = options.checksumAlgorithm;
-        fileOptions.checksumBackend = options.checksumBackend;
-        fileOptions.resume = resumeFile;
-
-        const common::Status transferStatus = runFileTransferClient(fileOptions);
-        if (!transferStatus.isOk()) {
-            record.status = core::tree::TreeFileStatus::Failed;
-            record.error = transferStatus.message();
-            (void)saveManifest(&manifest, manifestPath);
-            return transferStatus;
-        }
-        const common::Status completeStatus = control.waitTransferComplete();
-        if (!completeStatus.isOk()) {
-            record.status = core::tree::TreeFileStatus::Failed;
-            record.error = completeStatus.message();
-            (void)saveManifest(&manifest, manifestPath);
-            return completeStatus;
-        }
-        record.status = core::tree::TreeFileStatus::Completed;
-        record.error.clear();
-        const common::Status doneStatus = saveManifest(&manifest, manifestPath);
-        if (!doneStatus.isOk()) {
-            return doneStatus;
-        }
-        ++completedThisRun;
-        if (options.maxFiles != 0 && completedThisRun >= options.maxFiles) {
-            return common::Status::runtimeError("tree upload stopped after --max-files");
-        }
-    }
-    std::cout << "tree_upload_complete files=" << manifest.files.size() << '\n';
-    return common::Status::ok();
+    TreeRunStats stats;
+    const common::Status status =
+        runTreeScheduler(&manifest, manifestPath, options, processUploadFile, &stats);
+    printTreeSummary("tree_upload_complete", status.isOk() ? "pass" : "fail", manifest, stats,
+                     options.fileParallelism, startedAt);
+    return status;
 }
 
 common::Status runTreeDownloadClient(const config::TreeTransferOptions& options) {
+    const auto startedAt = std::chrono::steady_clock::now();
     const std::string manifestPath = core::tree::treeManifestPathForDownload(options.destDir);
     core::tree::TreeManifest manifest;
     ControlClient control;
@@ -655,8 +1172,12 @@ common::Status runTreeDownloadClient(const config::TreeTransferOptions& options)
                     if (!relative.isOk()) {
                         return relative.status();
                     }
+                    auto mtime = control.mdtm(candidate);
+                    if (!mtime.isOk()) {
+                        return mtime.status();
+                    }
                     records.push_back(core::tree::TreeFileRecord{
-                        relative.value(), size.value(), 0, generateTransferId(),
+                        relative.value(), size.value(), mtime.value(), generateTransferId(),
                         core::tree::TreeFileStatus::Pending, ""});
                 } else {
                     stack.push_back(candidate);
@@ -679,100 +1200,21 @@ common::Status runTreeDownloadClient(const config::TreeTransferOptions& options)
         }
     }
 
-    std::uint64_t completedThisRun = 0;
-    for (core::tree::TreeFileRecord& record : manifest.files) {
-        const std::filesystem::path localPath = std::filesystem::path(options.destDir) / record.relativePath;
-        const std::string remotePath = joinRemotePath(options.sourceDir, record.relativePath);
-        if (record.status == core::tree::TreeFileStatus::Completed) {
-            const common::Status status = validateCompletedDownloadFile(options.destDir, record);
-            if (!status.isOk()) {
-                record.status = core::tree::TreeFileStatus::Changed;
-                record.error = status.message();
-                (void)saveManifest(&manifest, manifestPath);
-                return status;
-            }
-            continue;
-        }
-        auto remoteSize = control.size(remotePath);
-        if (!remoteSize.isOk()) {
-            return remoteSize.status();
-        }
-        if (remoteSize.value() != record.size) {
-            record.status = core::tree::TreeFileStatus::Changed;
-            record.error = "remote file changed";
-            (void)saveManifest(&manifest, manifestPath);
-            return common::Status::invalidArgument("remote file changed: " + record.relativePath);
-        }
-        const common::Status parentStatus = createParentDirectory(localPath);
-        if (!parentStatus.isOk()) {
-            return parentStatus;
-        }
-        auto port = control.epsv();
-        if (!port.isOk()) {
-            return port.status();
-        }
-        const bool resumeFile = options.resume && record.status != core::tree::TreeFileStatus::Pending;
-        if (resumeFile) {
-            const common::Status restStatus = control.rest(record.transferId);
-            if (!restStatus.isOk()) {
-                return restStatus;
-            }
-        }
-        auto transferId = control.startTransfer("RETR", remotePath);
-        if (!transferId.isOk()) {
-            record.status = core::tree::TreeFileStatus::Failed;
-            record.error = transferId.status().message();
-            (void)saveManifest(&manifest, manifestPath);
-            return transferId.status();
-        }
-        if (!resumeFile) {
-            record.transferId = transferId.value();
-        }
-        record.status = core::tree::TreeFileStatus::Transferring;
-        record.error.clear();
-        const common::Status saveStatus = saveManifest(&manifest, manifestPath);
-        if (!saveStatus.isOk()) {
-            return saveStatus;
-        }
-
-        config::FileDownloadOptions fileOptions;
-        fileOptions.host = options.host;
-        fileOptions.port = port.value();
-        fileOptions.connections = options.connections;
-        fileOptions.bufferSize = options.bufferSize;
-        fileOptions.path = localPath.string();
-        fileOptions.transferId = record.transferId;
-        fileOptions.checksumAlgorithm = options.checksumAlgorithm;
-        fileOptions.checksumBackend = options.checksumBackend;
-        fileOptions.resume = resumeFile;
-
-        const common::Status transferStatus = runFileDownloadClient(fileOptions);
-        if (!transferStatus.isOk()) {
-            record.status = core::tree::TreeFileStatus::Failed;
-            record.error = transferStatus.message();
-            (void)saveManifest(&manifest, manifestPath);
-            return transferStatus;
-        }
-        const common::Status completeStatus = control.waitTransferComplete();
-        if (!completeStatus.isOk()) {
-            record.status = core::tree::TreeFileStatus::Failed;
-            record.error = completeStatus.message();
-            (void)saveManifest(&manifest, manifestPath);
-            return completeStatus;
-        }
-        record.status = core::tree::TreeFileStatus::Completed;
-        record.error.clear();
-        const common::Status doneStatus = saveManifest(&manifest, manifestPath);
-        if (!doneStatus.isOk()) {
-            return doneStatus;
-        }
-        ++completedThisRun;
-        if (options.maxFiles != 0 && completedThisRun >= options.maxFiles) {
-            return common::Status::runtimeError("tree download stopped after --max-files");
-        }
+    const common::Status preflightStatus =
+        preflightDownloadResume(options, &manifest, manifestPath);
+    if (!preflightStatus.isOk()) {
+        TreeRunStats stats;
+        printTreeSummary("tree_download_complete", "fail", manifest, stats, options.fileParallelism,
+                         startedAt);
+        return preflightStatus;
     }
-    std::cout << "tree_download_complete files=" << manifest.files.size() << '\n';
-    return common::Status::ok();
+
+    TreeRunStats stats;
+    const common::Status status =
+        runTreeScheduler(&manifest, manifestPath, options, processDownloadFile, &stats);
+    printTreeSummary("tree_download_complete", status.isOk() ? "pass" : "fail", manifest, stats,
+                     options.fileParallelism, startedAt);
+    return status;
 }
 
 }  // namespace gridflux::core::io

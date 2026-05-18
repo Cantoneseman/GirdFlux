@@ -325,6 +325,14 @@ if(GRIDFLUX_BUILD_TESTS)
         COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/test/run_gridftp_tree_resume_smoke.py --build-dir ${CMAKE_BINARY_DIR}
     )
     add_test(
+        NAME gridflux_tree_parallel_smoke
+        COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/test/run_gridftp_tree_parallel_smoke.py --build-dir ${CMAKE_BINARY_DIR}
+    )
+    add_test(
+        NAME gridflux_tree_changed_file_smoke
+        COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/test/run_gridftp_tree_changed_file_smoke.py --build-dir ${CMAKE_BINARY_DIR}
+    )
+    add_test(
         NAME gridflux_tree_manifest_corrupt_smoke
         COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/test/run_gridftp_tree_manifest_corrupt_smoke.py --build-dir ${CMAKE_BINARY_DIR}
     )

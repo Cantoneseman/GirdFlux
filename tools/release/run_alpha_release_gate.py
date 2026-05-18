@@ -319,6 +319,37 @@ def tree_test_tool_paths(root: Path) -> list[str]:
     )
 
 
+def tree_perf_tool_paths(root: Path) -> list[str]:
+    result: list[str] = []
+    for name in [
+        "run_gridftp_tree_private_matrix.py",
+        "analyze_phase5b.py",
+    ]:
+        path = root / "tools" / "perf" / name
+        if path.is_file():
+            result.append(path.relative_to(root).as_posix())
+    return sorted(result)
+
+
+def latest_by_mtime(paths: list[Path]) -> Path | None:
+    existing = [path for path in paths if path.is_file()]
+    if not existing:
+        return None
+    return max(existing, key=lambda path: path.stat().st_mtime)
+
+
+def latest_tree_matrix_artifacts(root: Path) -> list[str]:
+    results_dir = root / "tools" / "perf" / "results"
+    raw = latest_by_mtime(sorted(results_dir.glob("*_gridftp-tree-private-matrix.csv")))
+    summary = latest_by_mtime(sorted(results_dir.glob("*_gridftp-tree-private-matrix-summary.csv")))
+    result: set[str] = set()
+    for path in [raw, summary]:
+        if path is None:
+            continue
+        result.update(csv_referenced_artifacts(path.relative_to(root).as_posix(), root))
+    return sorted(result)
+
+
 def collect_alpha_artifact_paths(
     *,
     root: Path,
@@ -334,10 +365,13 @@ def collect_alpha_artifact_paths(
         "docs/ENGINEERING.md",
         "docs/DIRECTORY_TRANSFER.md",
         "docs/perf/README.md",
+        "docs/perf/PHASE5B_TREE_DATASET_MATRIX.md",
         relative_to_root(str(gate_json), root),
         *release_doc_paths(root),
         *release_tool_paths(root),
         *tree_test_tool_paths(root),
+        *tree_perf_tool_paths(root),
+        *latest_tree_matrix_artifacts(root),
     }
     if matrix_raw:
         paths.update(csv_referenced_artifacts(relative_to_root(matrix_raw, root), root))
@@ -568,6 +602,8 @@ def main() -> int:
         ("tree_upload_smoke", [sys.executable, "tools/test/run_gridftp_tree_upload_smoke.py", "--build-dir", args.build_dir]),
         ("tree_download_smoke", [sys.executable, "tools/test/run_gridftp_tree_download_smoke.py", "--build-dir", args.build_dir]),
         ("tree_resume_smoke", [sys.executable, "tools/test/run_gridftp_tree_resume_smoke.py", "--build-dir", args.build_dir]),
+        ("tree_parallel_smoke", [sys.executable, "tools/test/run_gridftp_tree_parallel_smoke.py", "--build-dir", args.build_dir]),
+        ("tree_changed_file_smoke", [sys.executable, "tools/test/run_gridftp_tree_changed_file_smoke.py", "--build-dir", args.build_dir]),
         ("tree_manifest_corrupt_smoke", [sys.executable, "tools/test/run_gridftp_tree_manifest_corrupt_smoke.py", "--build-dir", args.build_dir]),
     ]
     for name, command in command_specs:
@@ -575,6 +611,29 @@ def main() -> int:
         steps.append(step)
 
     if args.full:
+        tree_private_command = [
+            sys.executable,
+            "tools/test/run_gridftp_tree_private_once.py",
+            "--remote",
+            args.remote,
+            "--server-host",
+            args.server_host,
+            "--local-build-dir",
+            str((root / args.build_dir).resolve()),
+            "--remote-build-dir",
+            f"{args.remote_root.rstrip('/')}/{args.build_dir}",
+            "--connections",
+            "2",
+            "--checksum",
+            "crc32c",
+            "--checksum-backend",
+            "auto",
+            "--output-dir",
+            args.results_dir,
+        ]
+        tree_private_step = run_step("tree_private_smoke", tree_private_command, log_dir, cwd=root)
+        steps.append(tree_private_step)
+
         before = set(results_dir.glob("*_gridftp-private-matrix-*.csv"))
         matrix_command = [
             sys.executable,

@@ -115,13 +115,19 @@ def test_artifact_manifest_excludes_private_paths_and_includes_sidecars() -> Non
         write(root / "docs" / "ROADMAP.md", "roadmap\n")
         write(root / "docs" / "PROJECT_STATE.md", "state\n")
         write(root / "docs" / "perf" / "README.md", "perf\n")
+        write(root / "docs" / "perf" / "PHASE5B_TREE_DATASET_MATRIX.md", "tree matrix report\n")
         write(root / "docs" / "release" / "ALPHA_RELEASE_GATE.md", "gate\n")
         write(root / "tools" / "release" / "helper.py", "print('ok')\n")
+        write(root / "tools" / "perf" / "run_gridftp_tree_private_matrix.py", "print('matrix')\n")
+        write(root / "tools" / "perf" / "analyze_phase5b.py", "print('analyze')\n")
         write(root / "AGENTS.md", "password\n")
         write(root / "build-private" / "artifact.log", "private\n")
         csv_path = root / "tools" / "perf" / "results" / "matrix.csv"
+        tree_csv_path = root / "tools" / "perf" / "results" / "20260518T000000Z_gridftp-tree-private-matrix.csv"
+        tree_summary_path = root / "tools" / "perf" / "results" / "20260518T000000Z_gridftp-tree-private-matrix-summary.csv"
         write(root / "tools" / "perf" / "results" / "server.log", "server\n")
         write(root / "tools" / "perf" / "results" / "client_env_before.log", "env\n")
+        write(root / "tools" / "perf" / "results" / "tree_server.log", "tree server\n")
         csv_path.parent.mkdir(parents=True, exist_ok=True)
         with csv_path.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=["server_log", "client_env_before_log"])
@@ -132,6 +138,14 @@ def test_artifact_manifest_excludes_private_paths_and_includes_sidecars() -> Non
                     "client_env_before_log": "tools/perf/results/client_env_before.log",
                 }
             )
+        with tree_csv_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["server_log", "result"])
+            writer.writeheader()
+            writer.writerow({"server_log": "tools/perf/results/tree_server.log", "result": "pass"})
+        with tree_summary_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["dataset", "fail_count"])
+            writer.writeheader()
+            writer.writerow({"dataset": "mixed", "fail_count": "0"})
         gate_json = root / "tools" / "perf" / "results" / "gate.json"
         write(gate_json, "{}\n")
         paths = run_alpha_release_gate.collect_alpha_artifact_paths(
@@ -147,11 +161,17 @@ def test_artifact_manifest_excludes_private_paths_and_includes_sidecars() -> Non
             "docs/ROADMAP.md",
             "docs/PROJECT_STATE.md",
             "docs/perf/README.md",
+            "docs/perf/PHASE5B_TREE_DATASET_MATRIX.md",
             "docs/release/ALPHA_RELEASE_GATE.md",
             "tools/release/helper.py",
+            "tools/perf/run_gridftp_tree_private_matrix.py",
+            "tools/perf/analyze_phase5b.py",
             "tools/perf/results/matrix.csv",
             "tools/perf/results/server.log",
             "tools/perf/results/client_env_before.log",
+            "tools/perf/results/20260518T000000Z_gridftp-tree-private-matrix.csv",
+            "tools/perf/results/20260518T000000Z_gridftp-tree-private-matrix-summary.csv",
+            "tools/perf/results/tree_server.log",
         }:
             if expected not in paths:
                 raise AssertionError(f"missing expected artifact path {expected}: {paths}")

@@ -16,13 +16,13 @@
 
 ## 项目状态
 
-**当前阶段：** Phase 5A — 多文件/目录传输 alpha 能力（已完成）
+**当前阶段：** Phase 5B — 目录传输并发、changed-file 防护与数据集级性能验收（已完成）
 
 **技术栈：** C++20 · epoll 网络基线 · POSIX file IO 默认后端 · 可选 file-IO-only io_uring · CMake · Linux only
 
 **目标场景：** 专线 TB 级（主线）· 虚拟网络 · 广域网
 
-**下一步：** 基于 alpha 级目录传输继续评估数据集级发布体验：更完整的私网目录性能矩阵、目录错误恢复 UX、changed-file 策略细化，或进入生产认证/TLS/GSI 设计。默认仍保持 POSIX backend，不切换网络 epoll 或 checksum/manifest/resume/final verify 语义。
+**下一步：** 进入目录传输 alpha 后续加固：更细的目录 UX、changed-file 策略选项评审、目录级 release/性能报告收敛；生产认证/TLS/GSI 仍另起阶段设计。默认仍保持 POSIX backend，不切换网络 epoll 或 checksum/manifest/resume/final verify 语义。
 
 ## AI 协作
 

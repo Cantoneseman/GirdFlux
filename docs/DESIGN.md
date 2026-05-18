@@ -180,7 +180,7 @@ Phase 2C 起 manifest 默认每 16 个 verified chunk 批量 flush。失败、re
 
 下载方向在 Phase 3C 使用独立 download manifest。它记录 `source_path`、`target_path`、`temp_path`、`total_size`、`chunk_size`、checksum algorithm、`verified_chunks` 和 `manifest_body_crc32c`。resume 前 download client 读取 temp 中已 verified chunk 重新计算 checksum；损坏 chunk 会被移出 verified set 并作为 missing range 请求 sender 补传。server-side RETR sender 不保存下载状态，只根据接收端 `ResumeResponse` 中的 missing ranges 发送对应 chunk。
 
-Phase 5A 新增 tree manifest。tree manifest 记录目录传输 mode、logical root path、checksum policy 和每个 regular file 的 relative path、size、mtime、transfer_id、status/error。它是目录级 file orchestration 事实源，不替代每个文件内部的 upload/download manifest。目录 resume 遇到 size/mtime 或目标文件状态不一致时采用 fail-safe：标记 `changed` 并失败，不自动覆盖或删除已提交结果。
+Phase 5A 新增 tree manifest。tree manifest 记录目录传输 mode、logical root path、checksum policy 和每个 regular file 的 relative path、size、mtime、transfer_id、status/error。它是目录级 file orchestration 事实源，不替代每个文件内部的 upload/download manifest。目录 resume 遇到 size/mtime 或目标文件状态不一致时采用 fail-safe：标记 `changed` 并失败，不自动覆盖或删除已提交结果。Phase 5B 在该分层上增加 bounded file-level scheduler：`--file-parallelism` 只控制同时处理的文件数，每个文件内部仍走既有 STOR/RETR framed data path 和 per-file chunk manifest。
 
 ### 模块职责
 

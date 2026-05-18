@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**阶段：** Phase 5A — 多文件/目录传输 alpha 能力（已完成）
+**阶段：** Phase 5B — 目录传输并发、changed-file 防护与数据集级性能验收（已完成）
 
 **已完成：** 项目设计、技术选型、工程规范制定、CMake 工程骨架初始化、GoogleTest 工具链测试、本机与<redacted>二构建验证、GridFTP 源码学习经验整理入设计文档、Phase 1.0 多连接 TCP sink 与本机 loopback 验证、Phase 1.1 性能基线脚本与 loopback smoke matrix、Phase 1.2A offset-aware 单文件传输闭环、Phase 1.2B 文件传输健壮性、Phase 1.3A 文件性能基线自动化、Phase 2A manifest/range-based 断点续传核心、Phase 2B CRC32C chunk checksum 与损坏注入验证、Phase 2C CRC32C backend 自动选择、manifest 批量 flush、恢复统计与 checksum benchmark、Phase 3A GridFTP 风格控制面 STOR 上传与 REST/GFID resume 映射、Phase 3B GridFTP 风格控制面 framed RETR 完整下载、Phase 3C 下载端 manifest/verified_chunks 与 RETR REST/GFID resume、Phase 3D 控制面 SIZE/MDTM/CWD/CDUP/LIST/NLST 与测试工具收敛。
 
@@ -10,7 +10,7 @@
 
 **未开始：** 系统级文件传输调优、raw FTP stream STOR/RETR、GridFTP TLS/GSI、MLST/MLSD、网络 io_uring、生产级目录同步。
 
-**下一步：** 基于 Phase 5A 的目录 manifest + per-file STOR/RETR 编排，继续评估数据集级私网性能、目录错误恢复 UX、changed-file 策略细化，或进入生产认证/TLS/GSI 设计；不改网络 epoll，不默认启用 io_uring，不改变 checksum/manifest/resume 语义。
+**下一步：** 基于 Phase 5B 的目录并发和数据集矩阵结果，继续做目录传输 alpha UX/恢复策略加固或进入生产认证/TLS/GSI 设计；不改网络 epoll，不默认启用 io_uring，不改变 checksum/manifest/resume 语义。
 
 ---
 
@@ -299,6 +299,15 @@
 
 状态：已完成。本机与<redacted>二 Debug full CTest 均为 `160/160` passed；本机与<redacted>二 `build-io-uring-real` Release full CTest 均为 `160/160` passed，真实 io_uring smoke 为 `Passed`。新增 loopback tree upload/download/resume/corrupt-manifest smoke 均通过；私网目录 upload/download/upload resume/download resume helper 通过，4 个文件、1,179,670 bytes、tree hash 一致。默认传输策略保持不变：POSIX file IO、`final_verify_policy=full`、`manifest_flush_policy=every_n_chunks`、`preallocate=off`、`posix_write_strategy=auto`。
 
+**5B 目录传输并发、changed-file 防护与数据集级性能验收**
+
+- `gridflux-tree-upload-client` / `gridflux-tree-download-client` 的 `--file-parallelism` 变为真实 bounded file-level 并发；每个 file task 使用独立 control session，每个文件内部仍由既有 `--connections` 和 framed STOR/RETR 负责。
+- 目录 manifest 更新通过 mutex 串行化，每次状态变更原子保存；失败后停止派发新任务，保留已完成文件状态用于 resume。
+- `--resume` 增加目录级 changed-file preflight：upload 校验本地 source size/mtime，download 校验远端 source SIZE/MDTM 和已 completed 本地目标 size/mtime；不匹配时标记 `changed` 并 fail-safe。
+- 新增 tree parallel / changed-file loopback smoke、`tools/perf/run_gridftp_tree_private_matrix.py`、`tools/perf/analyze_phase5b.py` 和 `docs/perf/PHASE5B_TREE_DATASET_MATRIX.md`。
+
+状态：已完成。本机与<redacted>二 Debug full CTest 均为 `163/163` passed；本机与<redacted>二 `build-io-uring-real` Release full CTest 均为 `163/163` passed，真实 io_uring smoke 为 `Passed`。新增 tree parallel / changed-file loopback smoke 均通过；changed-file smoke 覆盖 upload source 改动、download remote source 改动和 completed local target 改动，均 fail-safe 且输出 changed path 与 manifest/current metadata。私网 tree smoke 通过，4 个文件、1,179,670 bytes、tree hash 一致。mixed dataset 私网矩阵 repeat=3 全部通过：36/36 pass，12 个 summary row `fail_count=0`、`tree_hash_mismatch_count=0`；file-level parallelism 从 1 提升到 4 时，mixed upload median 约从 `0.286 Gbps` 提升到 `1.074-1.088 Gbps`，download median 约从 `0.266-0.268 Gbps` 提升到 `0.830-0.834 Gbps`。Quick/full alpha release gate 均通过，artifact sync/verify status 为 `pass`。默认单文件传输策略保持不变。
+
 - TLS 1.3 / token 认证。
 - 容错容灾（自动重连、超时重试、死任务清理）。
 - 结构化日志 + Prometheus 指标。
@@ -381,6 +390,8 @@
 | 2026-05-18 | Phase 4N 以 alpha artifact manifest 作为远端同步事实源 | full gate 结束时必须 sync+verify manifest 中的 release docs、gate JSON、raw/summary CSV 和 sidecar logs，防止<redacted>二停留在非最终发布状态 |
 | 2026-05-18 | Phase 5A 目录传输使用 tree manifest 编排 per-file STOR/RETR | 借鉴 GridFTP restart marker/range 思想，但恢复事实源分层：目录级 manifest 只记录 file-level 状态，每个文件内部继续使用现有 manifest/verified_chunks |
 | 2026-05-18 | Phase 5A 目录传输保持 alpha 边界 | 支持多文件 upload/download/resume，但不保存权限、owner、xattr、ACL 或空目录，不实现 raw FTP recursive transfer、MLST/MLSD、TLS/GSI 或生产认证 |
+| 2026-05-18 | Phase 5B 目录并发只做 file-level bounded queue | `--file-parallelism` 不复制 chunk 级逻辑；每个文件仍复用现有 STOR/RETR framed data path、per-file manifest、CRC32C 和 final verify |
+| 2026-05-18 | Phase 5B changed-file 策略保持 fail-safe | Resume 前校验 size/mtime，发现变化即标记 `changed` 并失败；不自动覆盖、不删除、不重传 changed file |
 
 ---
 

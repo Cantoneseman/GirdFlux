@@ -46,9 +46,10 @@ struct TreeManifest {
 [[nodiscard]] std::string treeManifestPathForUpload(const std::string& sourceDir);
 [[nodiscard]] std::string treeManifestPathForDownload(const std::string& destDir);
 [[nodiscard]] const char* treeTransferModeName(TreeTransferMode mode) noexcept;
-[[nodiscard]] common::Result<TreeTransferMode> parseTreeTransferMode(const std::string& text);
 [[nodiscard]] const char* treeFileStatusName(TreeFileStatus status) noexcept;
+[[nodiscard]] common::Result<TreeTransferMode> parseTreeTransferMode(const std::string& text);
 [[nodiscard]] common::Result<TreeFileStatus> parseTreeFileStatus(const std::string& text);
+[[nodiscard]] bool isTreeTransferComplete(const TreeManifest& manifest);
 
 [[nodiscard]] common::Result<std::string> serializeTreeManifest(const TreeManifest& manifest);
 [[nodiscard]] common::Result<TreeManifest> parseTreeManifest(const std::string& text);

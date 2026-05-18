@@ -724,6 +724,44 @@ python3 tools/perf/analyze_phase4l.py \
 
 Phase 4L 结论记录在 `docs/perf/PHASE4L_STABILITY_AND_RETR_BREAKDOWN.md`：repeat=5 1GiB private matrix `240/240` pass，summary `21/48` rows 的 throughput spread 超过 `20%`。STOR 仍主要由 temp write/writeback 主导；RETR 的主要瓶颈会在 sender network send 与 receiver download temp write 之间切换。由于波动较大且方向不一致，默认继续保持 POSIX backend、`posix_write_strategy=auto`、`file_io_buffer_size=0`、full final verify 和 every_n_chunks manifest flush；暂无强 opt-in 推荐。
 
+Phase 5B tree private matrix:
+
+```bash
+GRIDFLUX_SSH_PASSWORD='***' python3 tools/perf/run_gridftp_tree_private_matrix.py \
+  --remote <remote> \
+  --server-host <server-host> \
+  --local-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --directions upload,download \
+  --datasets mixed \
+  --file-parallelisms 1,2,4 \
+  --connections 2 \
+  --checksums crc32c,none \
+  --repeat 3 \
+  --output-dir tools/perf/results
+```
+
+The tree matrix starts `gridflux-gridftp-server` locally and runs
+`gridflux-tree-upload-client` / `gridflux-tree-download-client` on the remote
+machine. It records raw and summary CSV. Summary rows include
+`throughput_gbps_min/median/max`, `repeat_count`, `fail_count`, and
+`tree_hash_mismatch_count`. Use:
+
+```bash
+python3 tools/perf/analyze_phase5b.py \
+  --matrix-summary-csv tools/perf/results/<timestamp>_gridftp-tree-private-matrix-summary.csv \
+  --output docs/perf/PHASE5B_TREE_DATASET_MATRIX.md
+```
+
+Tree matrix CSV fields:
+
+```text
+timestamp,dataset,direction,resume,repeat_index,file_count,total_bytes,file_parallelism,connections,checksum_algorithm,checksum_backend,elapsed_seconds,throughput_gbps,source_tree_hash,dest_tree_hash,result,server_log,client_log,control_port,data_port_base,local_root,remote_source,remote_dest,error
+```
+
+Directory transfer throughput is logical dataset bytes divided by elapsed time.
+Tree hash uses sorted relative paths, file size, and file content hashes.
+
 ## Public Release Hygiene
 
 本地 `AGENTS.md` 是私有协作上下文，不得公开发布。公开发布前使用 export gate：

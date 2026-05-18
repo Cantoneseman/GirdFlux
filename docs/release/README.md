@@ -20,12 +20,13 @@ python3 tools/release/run_alpha_release_gate.py \
 
 Quick mode runs local build, default CTest, io_uring CTest, public export
 hygiene, loopback STOR/RETR full and resume smoke, metadata/list smoke,
-directory upload/download/resume/corrupt-manifest smoke, and residual process
-checks.
+directory upload/download/resume/parallel/changed-file/corrupt-manifest smoke,
+and residual process checks.
 
 ## Full Gate
 
-Full mode adds a private 1GiB repeat=3 STOR/RETR baseline matrix:
+Full mode adds a lightweight private tree smoke plus a private 1GiB repeat=3
+STOR/RETR baseline matrix:
 
 ```bash
 GRIDFLUX_SSH_PASSWORD='***' python3 tools/release/run_alpha_release_gate.py \
