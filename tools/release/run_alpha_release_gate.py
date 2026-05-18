@@ -324,6 +324,42 @@ def tree_perf_tool_paths(root: Path) -> list[str]:
     return sorted(result)
 
 
+def demo_tool_paths(root: Path) -> list[str]:
+    demo_dir = root / "tools" / "demo"
+    if not demo_dir.is_dir():
+        return []
+    return sorted(path.relative_to(root).as_posix() for path in demo_dir.glob("*.py"))
+
+
+def latest_demo_artifacts(root: Path) -> list[str]:
+    results_dir = root / "tools" / "perf" / "results"
+    if not results_dir.is_dir():
+        return []
+    paths: set[str] = set()
+
+    def is_demo_result(path: Path) -> bool:
+        relative = path.relative_to(results_dir).as_posix()
+        if "/dataset/" in relative or "/work/" in relative:
+            return False
+        if ".gridflux." in relative or ".part." in relative:
+            return False
+        return path.suffix in {".json", ".log", ".csv", ".txt", ".md"}
+
+    for path in results_dir.glob("*_alpha-demo-*.json"):
+        if path.is_file():
+            paths.add(path.relative_to(root).as_posix())
+    for path in results_dir.glob("*_alpha-release-gate/alpha_demo*"):
+        if path.is_file() and is_demo_result(path):
+            paths.add(path.relative_to(root).as_posix())
+    for directory in results_dir.glob("*_alpha-demo-*"):
+        if not directory.is_dir():
+            continue
+        for path in directory.rglob("*"):
+            if path.is_file() and is_demo_result(path):
+                paths.add(path.relative_to(root).as_posix())
+    return sorted(paths)
+
+
 def latest_by_mtime(paths: list[Path]) -> Path | None:
     existing = [path for path in paths if path.is_file()]
     if not existing:
@@ -357,14 +393,18 @@ def collect_alpha_artifact_paths(
         "docs/DESIGN.md",
         "docs/ENGINEERING.md",
         "docs/DIRECTORY_TRANSFER.md",
+        "docs/DEMO.md",
         "docs/perf/README.md",
         "docs/perf/PHASE5B_TREE_DATASET_MATRIX.md",
         "docs/perf/PHASE5C_TREE_ALPHA_HARDENING.md",
+        "docs/release/PHASE5D_ALPHA_DEMO.md",
         relative_to_root(str(gate_json), root),
         *release_doc_paths(root),
         *release_tool_paths(root),
         *tree_test_tool_paths(root),
         *tree_perf_tool_paths(root),
+        *demo_tool_paths(root),
+        *latest_demo_artifacts(root),
         *latest_tree_matrix_artifacts(root),
     }
     if matrix_raw:
@@ -650,6 +690,23 @@ def main() -> int:
         ("tree_changed_file_smoke", [sys.executable, "tools/test/run_gridftp_tree_changed_file_smoke.py", "--build-dir", args.build_dir]),
         ("tree_edge_cases_smoke", [sys.executable, "tools/test/run_gridftp_tree_edge_cases_smoke.py", "--build-dir", args.build_dir]),
         ("tree_manifest_corrupt_smoke", [sys.executable, "tools/test/run_gridftp_tree_manifest_corrupt_smoke.py", "--build-dir", args.build_dir]),
+        (
+            "alpha_demo_local",
+            [
+                sys.executable,
+                "tools/demo/run_alpha_demo.py",
+                "--mode",
+                "local",
+                "--build-dir",
+                args.build_dir,
+                "--profile",
+                "tiny",
+                "--results-dir",
+                args.results_dir,
+                "--json-output",
+                str(log_dir / "alpha_demo_local.json"),
+            ],
+        ),
     ]
     for name, command in command_specs:
         step = run_step(name, command, log_dir, cwd=root)
@@ -678,6 +735,29 @@ def main() -> int:
         ]
         tree_private_step = run_step("tree_private_smoke", tree_private_command, log_dir, cwd=root)
         steps.append(tree_private_step)
+
+        alpha_private_command = [
+            sys.executable,
+            "tools/demo/run_alpha_demo.py",
+            "--mode",
+            "private",
+            "--build-dir",
+            args.build_dir,
+            "--remote",
+            args.remote,
+            "--remote-root",
+            args.remote_root,
+            "--server-host",
+            args.server_host,
+            "--profile",
+            "tiny",
+            "--results-dir",
+            args.results_dir,
+            "--json-output",
+            str(log_dir / "alpha_demo_private.json"),
+        ]
+        alpha_private_step = run_step("alpha_demo_private", alpha_private_command, log_dir, cwd=root)
+        steps.append(alpha_private_step)
 
         before = set(results_dir.glob("*_gridftp-private-matrix-*.csv"))
         matrix_command = [

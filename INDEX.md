@@ -11,18 +11,19 @@
 | [ROADMAP.md](docs/ROADMAP.md) | 分阶段路线图、当前状态、决策记录 |
 | [ENGINEERING.md](docs/ENGINEERING.md) | 工程规范、性能基准、验证方案、开发策略 |
 | [DIRECTORY_TRANSFER.md](docs/DIRECTORY_TRANSFER.md) | 多文件/目录传输 alpha 用法、manifest 与恢复边界 |
+| [DEMO.md](docs/DEMO.md) | Alpha demo 数据集、local/private demo runner 与 operator quickstart |
 
 新接手请按 DESIGN → ROADMAP → ENGINEERING 顺序阅读。
 
 ## 项目状态
 
-**当前阶段：** Phase 5C — 目录传输 alpha 硬化与 release 自一致性（已完成）
+**当前阶段：** Phase 5D — alpha demo / operator experience 收口（已完成）
 
 **技术栈：** C++20 · epoll 网络基线 · POSIX file IO 默认后端 · 可选 file-IO-only io_uring · CMake · Linux only
 
 **目标场景：** 专线 TB 级（主线）· 虚拟网络 · 广域网
 
-**下一步：** Phase 5D 可聚焦目录传输 alpha 发布后的 UX/运维打磨，或另起阶段设计生产认证/TLS/GSI。默认仍保持 POSIX backend，不切换网络 epoll 或 checksum/manifest/resume/final verify 语义。
+**下一步：** 基于 Phase 5D alpha demo 交付层，进入 operator feedback / beta readiness 评估；默认仍保持 POSIX backend，不切换网络 epoll 或 checksum/manifest/resume/final verify 语义。
 
 ## AI 协作
 

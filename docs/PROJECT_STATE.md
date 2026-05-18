@@ -3908,3 +3908,47 @@ python3 tools/release/run_alpha_release_gate.py --full --build-dir build --io-ur
 ### 默认策略
 
 Phase 5C 不改变默认传输策略：`file_io_backend=posix`、`final_verify_policy=full`、`manifest_flush_policy=every_n_chunks`、`preallocate=off`、`posix_write_strategy=auto`。
+
+## 2026-05-18 Phase 5D alpha demo / operator experience 收口
+
+### 实现范围
+
+- 新增 deterministic demo dataset generator：`tools/demo/make_demo_dataset.py`。
+- 新增 alpha demo runner：`tools/demo/run_alpha_demo.py`，支持 `--mode local|private` 和 `--json-output`。
+- Local demo 覆盖 single STOR、single RETR、STOR resume、RETR resume、tree upload、tree download、tree resume、changed-file fail-safe。
+- Private demo 复用现有私网 smoke helper，覆盖 private STOR/resume、private RETR/resume、private tree upload/download/resume。
+- 新增 operator quickstart：`docs/DEMO.md`。
+- 新增 Phase 5D demo report：`docs/release/PHASE5D_ALPHA_DEMO.md`。
+- `run_alpha_release_gate.py --quick` 增加 tiny local alpha demo；`--full` 增加 tiny private alpha demo。
+- Release artifact manifest now includes `tools/demo/*.py`、`docs/DEMO.md`、Phase 5D report and alpha demo JSON/log artifacts.
+
+### 已执行验证
+
+- 通过：`python3 -m py_compile tools/demo/make_demo_dataset.py tools/demo/run_alpha_demo.py tools/demo/test_alpha_demo.py tools/release/run_alpha_release_gate.py`。
+- 通过：`python3 tools/demo/test_alpha_demo.py`。
+- 通过：local tiny alpha demo，8/8 cases passed：
+  - single STOR/RETR；
+  - STOR/RETR resume；
+  - tree upload/download/resume；
+  - changed-file fail-safe（预期失败路径被正确识别为 demo pass）。
+- 通过：private tiny alpha demo，3/3 cases passed：
+  - private STOR/resume: 8 MiB；
+  - private RETR/resume: 8 MiB；
+  - private tree upload/download/resume: 4 files, 1,179,670 bytes。
+
+### 构建与 CTest 验证
+
+- 本机 Debug full CTest：`165/165` passed。
+- 本机 `build-io-uring-real` Release full CTest：`165/165` passed；`FileIoTest.IoUringContextReadWriteSmokeWhenAvailable` passed, not skipped。
+- <redacted>二 Debug full CTest after sync：`165/165` passed。
+- <redacted>二 `build-io-uring-real` Release full CTest after sync：`165/165` passed；real io_uring smoke passed。
+
+### Release gate
+
+- Quick/full alpha release gate are run after Phase 5D docs are written so the final artifact manifest records final required-artifact hashes.
+- Full gate still performs local manifest freshness check, artifact sync, and post-sync verify.
+- Public export strict hygiene remains required; local private `AGENTS.md`, passwords, tokens, and private topology are excluded from public export and artifact sync.
+
+### 默认策略
+
+Phase 5D 不改变默认传输策略：`file_io_backend=posix`、`final_verify_policy=full`、`manifest_flush_policy=every_n_chunks`、`preallocate=off`、`posix_write_strategy=auto`。STOR/RETR 文件数据仍只走 GridFlux framed data channel；demo runner 只编排已有能力，不复制 chunk 级传输逻辑。

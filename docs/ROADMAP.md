@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**阶段：** Phase 5C — 目录传输 alpha 硬化与 release 自一致性（已完成）
+**阶段：** Phase 5D — alpha demo / operator experience 收口（已完成）
 
 **已完成：** 项目设计、技术选型、工程规范制定、CMake 工程骨架初始化、GoogleTest 工具链测试、本机与<redacted>二构建验证、GridFTP 源码学习经验整理入设计文档、Phase 1.0 多连接 TCP sink 与本机 loopback 验证、Phase 1.1 性能基线脚本与 loopback smoke matrix、Phase 1.2A offset-aware 单文件传输闭环、Phase 1.2B 文件传输健壮性、Phase 1.3A 文件性能基线自动化、Phase 2A manifest/range-based 断点续传核心、Phase 2B CRC32C chunk checksum 与损坏注入验证、Phase 2C CRC32C backend 自动选择、manifest 批量 flush、恢复统计与 checksum benchmark、Phase 3A GridFTP 风格控制面 STOR 上传与 REST/GFID resume 映射、Phase 3B GridFTP 风格控制面 framed RETR 完整下载、Phase 3C 下载端 manifest/verified_chunks 与 RETR REST/GFID resume、Phase 3D 控制面 SIZE/MDTM/CWD/CDUP/LIST/NLST 与测试工具收敛。
 
@@ -10,7 +10,7 @@
 
 **未开始：** 系统级文件传输调优、raw FTP stream STOR/RETR、GridFTP TLS/GSI、MLST/MLSD、网络 io_uring、生产级目录同步。
 
-**下一步：** Phase 5D 可继续做目录传输 alpha 发布后的 UX/运维打磨，或另起阶段设计生产认证/TLS/GSI；不改网络 epoll，不默认启用 io_uring，不改变 checksum/manifest/resume 语义。
+**下一步：** 基于 Phase 5D alpha demo 交付层，进入 operator feedback / beta readiness 评估；不改网络 epoll，不默认启用 io_uring，不改变 checksum/manifest/resume 语义。
 
 ---
 
@@ -319,6 +319,17 @@
 
 状态：已完成。本机与<redacted>二 Debug full CTest 均为 `164/164` passed；本机与<redacted>二 `build-io-uring-real` Release full CTest 均为 `164/164` passed，真实 io_uring smoke 为 `Passed`。新增 JSON summary、edge-case smoke 和 manifest freshness regression 均通过。Phase 5C small+mixed tree private matrix repeat=3 覆盖 upload/download、checksum `crc32c|none`、file parallelism `1|2|4`，共 72/72 pass，24 个 summary row `fail_count=0`、`tree_hash_mismatch_count=0`。mixed dataset median：upload fp1 `0.286-0.290 Gbps`、fp2 `0.556-0.563 Gbps`、fp4 `1.089 Gbps`；download fp1 `0.265-0.266 Gbps`、fp2 `0.488-0.489 Gbps`、fp4 `0.826-0.844 Gbps`。Phase 5C 不改变默认传输策略或单文件 framed STOR/RETR、checksum、manifest、resume、final verify 语义。
 
+**5D Alpha demo / operator experience 收口**
+
+- 新增 deterministic demo dataset generator，输出 `single.bin`、`tree-small/`、`tree-mixed/`，覆盖单文件、混合目录、小文件、特殊字符路径和深层目录。
+- 新增 alpha demo runner，支持 `--mode local|private`，输出人类可读摘要和 JSON summary。
+- Local demo 覆盖 single STOR/RETR、STOR/RETR resume、tree upload/download/resume 和 changed-file fail-safe。
+- Private demo 复用既有私网 STOR/RETR/tree smoke helper，验证<redacted>一 server + <redacted>二 client 的小型端到端演示。
+- Quick alpha gate 加入 local demo smoke；full alpha gate 加入 private demo smoke；artifact manifest 收录 demo scripts/docs/JSON/logs。
+- 新增 `docs/DEMO.md` 与 `docs/release/PHASE5D_ALPHA_DEMO.md`。
+
+状态：已完成。本机与<redacted>二 Debug full CTest 均为 `165/165` passed；本机与<redacted>二 `build-io-uring-real` Release full CTest 均为 `165/165` passed，真实 io_uring smoke 为 `Passed`。Local tiny alpha demo 覆盖 8 个 case 并全部 passed；private tiny alpha demo 覆盖 STOR/resume、RETR/resume 和 tree upload/download/resume 并全部 passed。Quick/full alpha gate 在最终 docs 落盘后运行，并继续保持 artifact manifest freshness、remote artifact sync/verify 和 public export hygiene 闭环。Phase 5D 不改变默认传输策略或单文件 framed STOR/RETR、checksum、manifest、resume、final verify 语义。
+
 - TLS 1.3 / token 认证。
 - 容错容灾（自动重连、超时重试、死任务清理）。
 - 结构化日志 + Prometheus 指标。
@@ -405,6 +416,7 @@
 | 2026-05-18 | Phase 5B changed-file 策略保持 fail-safe | Resume 前校验 size/mtime，发现变化即标记 `changed` 并失败；不自动覆盖、不删除、不重传 changed file |
 | 2026-05-18 | Phase 5C artifact manifest 必须在最终报告落盘后生成并本地自检 | 防止 release report、PROJECT_STATE 或 gate JSON 在 manifest 生成后变化导致<redacted>二同步闭环拿到陈旧 hash |
 | 2026-05-18 | Phase 5C tree JSON summary 是 opt-in 可观测性，不改变 CLI 默认输出 | perf matrix 和 release gate 使用结构化摘要减少解析漂移；人工 key=value 输出继续保留 |
+| 2026-05-18 | Phase 5D demo runner 只编排现有 framed transfer 能力 | 让 operator 快速演示和排查，不复制 chunk 级传输逻辑，不改变默认 backend 或可靠性事实源 |
 
 ---
 

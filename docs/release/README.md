@@ -21,12 +21,12 @@ python3 tools/release/run_alpha_release_gate.py \
 Quick mode runs local build, default CTest, io_uring CTest, public export
 hygiene, loopback STOR/RETR full and resume smoke, metadata/list smoke,
 directory upload/download/resume/parallel/changed-file/corrupt-manifest smoke,
-and residual process checks.
+a tiny local alpha demo, and residual process checks.
 
 ## Full Gate
 
-Full mode adds a lightweight private tree smoke plus a private 1GiB repeat=3
-STOR/RETR baseline matrix:
+Full mode adds a lightweight private tree smoke, a tiny private alpha demo, and
+a private 1GiB repeat=3 STOR/RETR baseline matrix:
 
 ```bash
 GRIDFLUX_SSH_PASSWORD='***' python3 tools/release/run_alpha_release_gate.py \
@@ -41,7 +41,8 @@ GRIDFLUX_SSH_PASSWORD='***' python3 tools/release/run_alpha_release_gate.py \
 
 The full matrix keeps project defaults and only compares checksum
 `crc32c|none` plus final verify `full|verified_chunks`. The default baseline
-row is reported separately.
+row is reported separately. The demo step stays intentionally small; heavy tree
+dataset performance remains under `tools/perf/`.
 
 ## Outputs
 
@@ -52,9 +53,9 @@ row is reported separately.
 
 Full gate writes an artifact manifest and syncs only those required artifacts
 to the remote tree without deleting remote files. The manifest includes release
-docs, release helper scripts, gate JSON, private matrix raw/summary CSV, and
-CSV-referenced sidecar logs. `AGENTS.md`, build outputs, secrets, keys, tokens,
-and password-like paths are rejected.
+docs, release helper scripts, demo scripts, demo JSON/logs, gate JSON, private
+matrix raw/summary CSV, and CSV-referenced sidecar logs. `AGENTS.md`, build
+outputs, secrets, keys, tokens, and password-like paths are rejected.
 
 Phase 5C hardens manifest freshness: the gate writes final reports and JSON
 first, then writes the final artifact manifest, immediately checks every listed
