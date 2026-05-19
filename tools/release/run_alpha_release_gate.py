@@ -438,6 +438,7 @@ def collect_alpha_artifact_paths(
         "docs/ROADMAP.md",
         "docs/PROJECT_STATE.md",
         "docs/DESIGN.md",
+        "docs/ARCHITECTURE_ALPHA.md",
         "docs/ENGINEERING.md",
         "docs/DIRECTORY_TRANSFER.md",
         "docs/DEMO.md",

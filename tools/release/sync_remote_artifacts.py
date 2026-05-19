@@ -42,7 +42,19 @@ BLOCKED_SUFFIXES = {
     ".crt",
     ".cer",
 }
-SAFE_SUFFIXES = {".md", ".py", ".json", ".csv", ".log", ".txt", ".sh", ".cmake", ".clang-tidy", ".gitignore"}
+SAFE_SUFFIXES = {
+    ".md",
+    ".py",
+    ".json",
+    ".jsonl",
+    ".csv",
+    ".log",
+    ".txt",
+    ".sh",
+    ".cmake",
+    ".clang-tidy",
+    ".gitignore",
+}
 SENSITIVE_PARTS = {"AGENTS.md", ".env", ".env.local", ".envrc", "id_rsa", "id_dsa", "id_ed25519"}
 SENSITIVE_WORDS = {"password", "passwd", "secret", "token", "cookie", "credential"}
 
@@ -130,6 +142,8 @@ def artifact_type_for(path: str) -> str:
         return "artifact_manifest"
     if path.endswith("_alpha-release-gate.json"):
         return "gate_json"
+    if path.endswith(".jsonl"):
+        return "event_log"
     if path.startswith("docs/release/"):
         return "release_doc"
     if path.startswith("docs/"):

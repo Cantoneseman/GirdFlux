@@ -11,6 +11,7 @@ from pathlib import Path
 
 import check_remote_artifact_sync
 import remote_auth
+import run_alpha_release_candidate
 import run_alpha_release_gate
 import sync_remote_artifacts
 
@@ -187,6 +188,7 @@ def test_remote_artifact_sync_local_verify_and_sync() -> None:
         write(local / "docs" / "release" / "ALPHA_RELEASE_GATE.md", "gate-v1\n")
         write(local / "tools" / "perf" / "results" / "matrix.csv", "result,server_log\npass,tools/perf/results/server.log\n")
         write(local / "tools" / "perf" / "results" / "server.log", "server-v1\n")
+        write(local / "tools" / "perf" / "results" / "events.jsonl", "{\"event\":\"ok\"}\n")
         manifest_path = local / "tools" / "perf" / "results" / "alpha-artifacts.json"
         manifest = {
             "timestamp": "2026-05-18T00:00:00Z",
@@ -202,8 +204,13 @@ def test_remote_artifact_sync_local_verify_and_sync() -> None:
                 sync_remote_artifacts.manifest_entry_for(
                     local, "tools/perf/results/server.log", required=True
                 ).__dict__,
+                sync_remote_artifacts.manifest_entry_for(
+                    local, "tools/perf/results/events.jsonl", required=True
+                ).__dict__,
             ],
         }
+        if manifest["artifacts"][-1]["type"] != "event_log":
+            raise AssertionError(f"jsonl artifact was not classified as event log: {manifest['artifacts'][-1]}")
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -305,6 +312,43 @@ def test_remote_auth_reads_matching_private_agents_row() -> None:
             raise AssertionError("remote auth ignored username mismatch")
 
 
+def test_release_candidate_helpers_summarize_defaults_and_gate_paths() -> None:
+    defaults = run_alpha_release_candidate.default_strategy_summary()
+    expected = {
+        "auth_mode": "anonymous",
+        "tls_mode": "off",
+        "data_tls_mode": "off",
+        "file_io_backend": "posix",
+        "final_verify_policy": "full",
+        "manifest_flush_policy": "every_n_chunks",
+        "preallocate": "off",
+        "posix_write_strategy": "auto",
+    }
+    if defaults != expected:
+        raise AssertionError(f"unexpected default strategy summary: {defaults}")
+
+    paths = run_alpha_release_candidate.parse_gate_paths_from_log(
+        "\n".join(
+            [
+                "alpha_release_gate_report=/tmp/gate.md",
+                "alpha_release_gate_json=/tmp/gate.json",
+                "alpha_artifact_manifest=/tmp/artifacts.json",
+                "result=pass",
+            ]
+        )
+    )
+    if paths.get("alpha_release_gate_json") != "/tmp/gate.json":
+        raise AssertionError(f"failed to parse nested gate paths: {paths}")
+
+    steps = [
+        run_alpha_release_gate.StepResult("one", "pass", 0, "one.log", 0.1),
+        run_alpha_release_gate.StepResult("two", "fail", 1, "two.log", 0.2, "config_error"),
+    ]
+    summary = run_alpha_release_candidate.summarize_steps(steps)
+    if summary["passed"] or summary["failed_steps"] != 1:
+        raise AssertionError(f"unexpected step summary: {summary}")
+
+
 def main() -> int:
     test_source_tree_hash_excludes_private_and_build()
     test_csv_sidecar_extraction()
@@ -314,6 +358,7 @@ def main() -> int:
     test_artifact_path_rejects_traversal_and_sensitive_paths()
     test_artifact_manifest_freshness_detects_stale_required_doc()
     test_remote_auth_reads_matching_private_agents_row()
+    test_release_candidate_helpers_summarize_defaults_and_gate_paths()
     print("alpha release helper tests passed")
     return 0
 

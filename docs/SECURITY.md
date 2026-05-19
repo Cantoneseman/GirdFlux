@@ -197,11 +197,14 @@ token-like artifact paths.
 
 ## Non-Goals
 
-Phase 6A/6C does not provide:
+Phase 6A/6C/6D does not provide:
 
 - GSI/DCAU/PROT or production PKI integration;
 - production identity, account, or authorization management;
-- production-grade encrypted file data transport or LIST/NLST data encryption;
+- production-grade encrypted transport policy or LIST/NLST data encryption;
 - AUTH TLS explicit upgrade semantics;
 - raw FTP STOR/RETR compatibility;
 - changes to checksum, manifest, resume, or final verify semantics.
+
+The final alpha limitation list is maintained in
+`docs/release/ALPHA_LIMITATIONS.md`.

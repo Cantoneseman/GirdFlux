@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**阶段：** Phase 6D — STOR/RETR framed data-channel TLS alpha（进行中）
+**阶段：** Phase 6E — 完整 alpha 原型收口与长跑验收包（已完成）
 
 **已完成：** 项目设计、技术选型、工程规范制定、CMake 工程骨架初始化、GoogleTest 工具链测试、本机与<redacted>二构建验证、GridFTP 源码学习经验整理入设计文档、Phase 1.0 多连接 TCP sink 与本机 loopback 验证、Phase 1.1 性能基线脚本与 loopback smoke matrix、Phase 1.2A offset-aware 单文件传输闭环、Phase 1.2B 文件传输健壮性、Phase 1.3A 文件性能基线自动化、Phase 2A manifest/range-based 断点续传核心、Phase 2B CRC32C chunk checksum 与损坏注入验证、Phase 2C CRC32C backend 自动选择、manifest 批量 flush、恢复统计与 checksum benchmark、Phase 3A GridFTP 风格控制面 STOR 上传与 REST/GFID resume 映射、Phase 3B GridFTP 风格控制面 framed RETR 完整下载、Phase 3C 下载端 manifest/verified_chunks 与 RETR REST/GFID resume、Phase 3D 控制面 SIZE/MDTM/CWD/CDUP/LIST/NLST 与测试工具收敛。
 
@@ -10,7 +10,7 @@
 
 **未开始：** 系统级文件传输调优、raw FTP stream STOR/RETR、GridFTP GSI、MLST/MLSD、网络 io_uring、生产级目录同步。
 
-**下一步：** 完成 Phase 6D data TLS 本机/私网 smoke、release gate 与 artifact sync 收口；默认仍保持 anonymous、`tls-mode=off`、`data-tls-mode=off`、POSIX backend、full final verify 和现有 framed STOR/RETR 语义。
+**下一步：** 进入 alpha 后续评审：决定 beta readiness、长稳测试时长、生产化部署/安全边界和 100G 专项验证计划；默认仍保持 anonymous、`tls-mode=off`、`data-tls-mode=off`、POSIX backend、full final verify 和现有 framed STOR/RETR 语义。
 
 ---
 
@@ -368,11 +368,21 @@
 - LIST/NLST ASCII metadata passive data channel 不在 Phase 6D 保护范围，仍保持现有明文行为。
 - Event/error code 增加 `data_tls_required` / `data_tls_failed`，日志与 JSON 只记录模式和结果，不记录 token、password 或 private key 内容。
 
-状态：进行中。已完成本机 loopback data TLS smoke，覆盖 STOR/RETR framed data TLS、plaintext framed data client failure、tree upload/download data TLS 和 LIST/NLST 明文 metadata 回归；release gate 已接入 quick local data TLS smoke 和 full private data TLS smoke。
+状态：已完成。本机与<redacted>二 Debug full CTest 均为 `180/180` passed；本机与<redacted>二 `build-io-uring-real` Release full CTest 均为 `180/180` passed，真实 io_uring smoke 为 `Passed`。Quick/full alpha gate 均通过，full gate artifact sync/final verify `missing=0`、`mismatch=0`、`status=pass`。Phase 6D data TLS 只覆盖 STOR/RETR framed file data channel，LIST/NLST listing data 仍是明文 alpha 限制。
+
+**6E 完整 alpha 原型收口与长跑验收包**
+
+- 新增 alpha release candidate 总控脚本，编排 full gate、long soak、public hygiene、artifact manifest freshness 和 remote artifact sync/verify。
+- 扩展 soak smoke，支持 `--duration-seconds`、`--profile`、`--token`、`--tls`、`--data-tls`，默认短跑保持 CTest 友好。
+- 新增最终 alpha 限制清单和 alpha 架构文档，明确当前可交付能力与非生产边界。
+- RC 输出 Markdown、JSON、日志目录和 artifact manifest，最终报告包含默认策略摘要、失败步骤、日志路径、artifact 路径和 sync/verify 摘要。
+
+状态：已完成。本机与<redacted>二 Debug full CTest 均为 `181/181 passed`；本机与<redacted>二 `build-io-uring-real` Release full CTest 均为 `181/181 passed`，真实 io_uring smoke 为 `Passed`。Quick/full alpha gate 均通过。Alpha release candidate 通过，JSON 为 `tools/perf/results/20260519T030518Z_alpha-release-candidate.json`，artifact manifest 为 `tools/perf/results/20260519T030518Z_alpha-release-candidate-artifacts.json`；RC long soak `iterations=5`、`fail_count=0`，artifact freshness `checked=1080 stale=0 status=pass`，artifact sync/verify `missing=0`、`mismatch=0`、`status=pass`。默认策略和传输语义不变；本阶段只做交付包、长跑验收和文档收口。
 
 **后续候选**
 
 - TLS/GSI 后续设计：Phase 6D 只完成 STOR/RETR framed file data TLS alpha；LIST/NLST data TLS、AUTH TLS、GSI 和生产证书管理仍需设计。
+- Alpha RC 后续：评估 beta readiness、长稳测试时长、生产化配置/部署边界和 100G 专项验证计划。
 - 容错容灾（自动重连、超时重试、死任务清理）。
 - Prometheus 或指标导出（在 JSONL alpha 稳定后再评估）。
 - systemd 集成、优雅停机、配置热加载。
@@ -449,6 +459,7 @@
 | 2026-05-18 | Phase 6B JSONL event log 与稳定错误码保持 opt-in | 增强长期运行排障和 release gate 可读性，不改变默认传输策略，不记录 token/password，不引入 metrics server |
 | 2026-05-18 | Phase 6C TLS 为 opt-in control-plane-only alpha | 默认 `tls-mode=off`；`required` 只包控制连接，passive data channel 仍为现有 framed TCP；不实现 GSI/AUTH TLS/raw FTP TLS，不记录 cert/key/token 内容 |
 | 2026-05-19 | Phase 6D data TLS 只覆盖 STOR/RETR framed file data | 默认 `data-tls-mode=off`；required 仅在 control TLS required 下可用；LIST/NLST listing data 保持明文 alpha 限制，避免误称完整 FTP/TLS 或 GSI |
+| 2026-05-19 | Phase 6E 只收口 alpha 交付包，不扩核心功能 | 新增 RC 总控、long soak、限制/架构文档和 artifact sync 闭环；默认策略、framed STOR/RETR、checksum、manifest、resume、final verify 均保持不变 |
 
 ---
 

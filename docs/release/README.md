@@ -107,6 +107,31 @@ python3 tools/release/sync_remote_artifacts.py --manifest <manifest> --remote <r
 `check_remote_artifact_sync.py --manifest <manifest>` remains available as a
 verify-only checker for release reports and CI-style gates.
 
+## Alpha Release Candidate
+
+Phase 6E adds a full release-candidate wrapper. It runs the full gate, then adds
+a longer local soak with token auth, control TLS, and STOR/RETR data TLS enabled:
+
+```bash
+GRIDFLUX_SSH_PASSWORD='***' python3 tools/release/run_alpha_release_candidate.py \
+  --build-dir build \
+  --io-uring-build-dir build-io-uring-real \
+  --remote <remote> \
+  --remote-root /root/projects/GridFlux \
+  --server-host <server-host> \
+  --results-dir tools/perf/results
+```
+
+Outputs:
+
+- Markdown report: `docs/release/ALPHA_RELEASE_CANDIDATE.md`
+- JSON report: `tools/perf/results/<timestamp>_alpha-release-candidate.json`
+- Logs: `tools/perf/results/<timestamp>_alpha-release-candidate/`
+- Artifact manifest: `tools/perf/results/<timestamp>_alpha-release-candidate-artifacts.json`
+
+The RC is the recommended final alpha handoff command. It is not a production
+certification: see `docs/release/ALPHA_LIMITATIONS.md`.
+
 ## Public Hygiene
 
 `AGENTS.md` is private and must not enter public exports. Public publishing must

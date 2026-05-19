@@ -1,6 +1,43 @@
 # GridFlux 项目状态记录
 
-## 2026-05-19 Phase 6D 数据通道 TLS alpha（进行中）
+## 2026-05-19 Phase 6E 完整 alpha 原型收口与长跑验收包（已完成）
+
+### 实现目标
+
+- 新增 `tools/release/run_alpha_release_candidate.py`，一键编排 full alpha gate、long soak、public hygiene、artifact manifest freshness 和 remote artifact sync/verify。
+- 扩展 `tools/test/run_alpha_soak_smoke.py`，支持 `--duration-seconds`、`--profile tiny|small|mixed`、`--token`、`--tls` 和 `--data-tls`。
+- 新增最终 alpha 限制清单 `docs/release/ALPHA_LIMITATIONS.md` 和 alpha 架构说明 `docs/ARCHITECTURE_ALPHA.md`。
+- 新增 Phase 6E 报告入口 `docs/release/PHASE6E_ALPHA_RC.md`。
+
+### 默认值与边界
+
+- 默认仍为 `auth-mode=anonymous`、`tls-mode=off`、`data-tls-mode=off`、`file_io_backend=posix`、`final_verify_policy=full`、`manifest_flush_policy=every_n_chunks`、`preallocate=off`、`posix_write_strategy=auto`。
+- Phase 6E 不新增 GSI、AUTH TLS、raw FTP stream、raw FTP recursive transfer、生产认证、集中式监控或 100G 性能专项。
+- Token、证书私钥和私有凭据仍只作为 runtime 输入，不进入 public docs、artifact manifest 内容、JSON summary 或 event log。
+
+### 已执行验证
+
+- 脚本编译：`python3 -m py_compile tools/release/run_alpha_release_candidate.py tools/release/run_alpha_release_gate.py tools/release/test_alpha_release_helpers.py tools/test/run_alpha_soak_smoke.py tools/test/test_alpha_soak_smoke.py tools/demo/run_alpha_demo.py tools/release/check_public_hygiene.py tools/release/export_public_repo.py tools/release/sync_remote_artifacts.py tools/release/check_remote_artifact_sync.py` 通过。
+- Release/helper 测试：`python3 tools/release/test_alpha_release_helpers.py` 通过；`python3 tools/test/test_alpha_soak_smoke.py` 通过。
+- 本机 Debug full CTest：`181/181 passed`。
+- 本机 `build-io-uring-real` Release full CTest：`181/181 passed`，`FileIoTest.IoUringContextReadWriteSmokeWhenAvailable` 为 `Passed`。
+- <redacted>二 Debug full CTest：`181/181 passed`。
+- <redacted>二 `build-io-uring-real` Release full CTest：`181/181 passed`，`FileIoTest.IoUringContextReadWriteSmokeWhenAvailable` 为 `Passed`。
+- Public export strict hygiene：`pass`，`/tmp/gridflux-public` 检查通过。
+- Quick alpha gate：`pass`，JSON 为 `tools/perf/results/20260519T023443Z_alpha-release-gate.json`。
+- Full alpha gate：`pass`，JSON 为 `tools/perf/results/20260519T023747Z_alpha-release-gate.json`，artifact manifest 为 `tools/perf/results/20260519T023747Z_alpha-artifacts.json`；freshness `checked=872 stale=0 status=pass`，sync/verify `missing=0 mismatch=0 status=pass`。
+- Alpha release candidate：`pass`，报告为 `docs/release/ALPHA_RELEASE_CANDIDATE.md`，JSON 为 `tools/perf/results/20260519T030518Z_alpha-release-candidate.json`，artifact manifest 为 `tools/perf/results/20260519T030518Z_alpha-release-candidate-artifacts.json`。
+- RC long soak：`iterations=5`、`pass_count=5`、`fail_count=0`、`total_bytes=96584080`，event log 为 `tools/perf/results/20260519T030518Z_alpha-release-candidate/alpha_long_soak_events.jsonl`。
+- RC artifact freshness：`checked=1080 stale=0 status=pass`；artifact sync：`checked=1081 synced=123 missing=0 mismatch=0 status=pass`；artifact verify：`checked=1081 missing=0 mismatch=0 status=pass`。
+- 修复 RC 收口过程中暴露的 release artifact 规则：`.jsonl` event log 现在作为安全文本 artifact 被允许并分类为 `event_log`；RC 最终 manifest 生成后成功路径不再改写 RC JSON/Markdown，避免 manifest hash 再次陈旧。
+
+### 收口状态
+
+- Phase 6E 交付包已经具备一键 RC 验收入口、long soak、最终限制清单、alpha 架构文档、RC 报告、artifact freshness 和远端 sync/verify 闭环。
+- 默认传输策略未改变。
+- 仍不是 beta/production：限制见 `docs/release/ALPHA_LIMITATIONS.md`。
+
+## 2026-05-19 Phase 6D 数据通道 TLS alpha（已完成）
 
 ### 实现内容
 
@@ -20,12 +57,16 @@
 - 子集结果：35/35 passed。
 - 通过：`python3 tools/test/run_gridftp_data_tls_smoke.py --build-dir build --bytes 65536`
 
-### 待收口验证
+### 收口验证
 
-- 本机 Debug full CTest。
-- 本机 `build-io-uring-real` Release full CTest，确认 io_uring smoke 为 Passed。
-- <redacted>二同步后 Debug 与 Release/io_uring full CTest。
-- private data TLS smoke、quick/full alpha gate、manifest freshness、artifact sync/final verify、public export strict hygiene 和最终残留进程检查。
+- 本机 Debug full CTest：`180/180 passed`。
+- 本机 `build-io-uring-real` Release full CTest：`180/180 passed`，真实 io_uring smoke `Passed`。
+- <redacted>二 Debug full CTest：`180/180 passed`。
+- <redacted>二 `build-io-uring-real` Release full CTest：`180/180 passed`，真实 io_uring smoke `Passed`。
+- Quick alpha gate：`pass`。
+- Full alpha gate：`pass`，artifact sync/final verify `checked=819`、`missing=0`、`mismatch=0`、`status=pass`。
+- Public export strict hygiene：`pass`。
+- 最终残留进程检查：两台<redacted>无 `gridflux-gridftp-server` / `gridflux-file-*`。
 
 ### 默认值与边界
 

@@ -406,6 +406,10 @@ if(GRIDFLUX_BUILD_TESTS)
         COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/test/run_alpha_soak_smoke.py --build-dir ${CMAKE_BINARY_DIR} --iterations 1 --results-dir ${CMAKE_BINARY_DIR}/alpha-soak-smoke
     )
     add_test(
+        NAME gridflux_alpha_soak_helper_behavior
+        COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/test/test_alpha_soak_smoke.py
+    )
+    add_test(
         NAME gridflux_storage_bench_wrapper_behavior
         COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/benchmark/test_run_storage_bench.py --script ${PROJECT_SOURCE_DIR}/tools/benchmark/run_storage_bench.py
     )

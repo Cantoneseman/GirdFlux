@@ -89,13 +89,16 @@ Short local soak:
 python3 tools/test/run_alpha_soak_smoke.py \
   --build-dir build \
   --iterations 3 \
+  --profile tiny \
   --event-log tools/perf/results/alpha-soak-events.jsonl \
   --json-output tools/perf/results/alpha-soak.json
 ```
 
 The soak smoke repeatedly runs the tiny local alpha demo and reports
 `iterations`, `pass_count`, `fail_count`, `first_failure`, `total_bytes`,
-`elapsed_seconds`, and `error_code_counts`.
+`elapsed_seconds`, `error_code_counts`, and `event_log_path`. Phase 6E adds
+operator knobs for longer runs: `--duration-seconds`, `--profile tiny|small|mixed`,
+`--token`, `--tls`, and `--data-tls`.
 
 ## Credential Red Lines
 

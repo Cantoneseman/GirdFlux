@@ -278,3 +278,22 @@ files, leaving the tree manifest for resume.
 - Empty directories, permissions, owner, xattrs, and ACLs are not preserved.
 - STOR/RETR file contents still use the GridFlux framed data channel; stock FTP
   recursive/raw transfer is not supported.
+
+## Alpha Release Candidate
+
+For a complete alpha handoff run, use the Phase 6E release-candidate wrapper:
+
+```bash
+GRIDFLUX_SSH_PASSWORD='***' python3 tools/release/run_alpha_release_candidate.py \
+  --build-dir build \
+  --io-uring-build-dir build-io-uring-real \
+  --remote <remote> \
+  --remote-root /root/projects/GridFlux \
+  --server-host <server-host> \
+  --results-dir tools/perf/results
+```
+
+The RC wrapper runs the full release gate, then a longer local soak using token
+auth, control TLS, and STOR/RETR data TLS. It writes
+`docs/release/ALPHA_RELEASE_CANDIDATE.md` plus a machine-readable JSON report.
+See [ALPHA_LIMITATIONS.md](release/ALPHA_LIMITATIONS.md) for alpha boundaries.
