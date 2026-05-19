@@ -87,9 +87,10 @@ def paths_from_csv(csv_path: Path, local_root: Path) -> set[str]:
         for row in reader:
             for field, value in row.items():
                 if field in KNOWN_LOG_FIELDS or field.endswith(LOG_FIELD_SUFFIX):
-                    normalized = normalize_artifact_path(value.strip(), local_root)
-                    if normalized:
-                        result.add(normalized)
+                    for part in str(value).split(";"):
+                        normalized = normalize_artifact_path(part.strip(), local_root)
+                        if normalized:
+                            result.add(normalized)
     return result
 
 

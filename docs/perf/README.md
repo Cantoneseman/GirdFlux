@@ -951,3 +951,50 @@ python3 tools/test/run_gridftp_data_tls_private_once.py \
 The smoke verifies STOR/RETR data TLS, plaintext data-client failure, tree
 upload/download over data TLS, and LIST/NLST compatibility with the existing
 plaintext listing data channel.
+
+## Beta 1A 100G Readiness Diagnostics
+
+Beta 1A adds a private-readiness wrapper and analyzer. It does not change
+defaults and does not add protocol features; it only composes existing private
+matrix tools with host/link/storage baseline collection.
+
+Smoke:
+
+```bash
+python3 tools/perf/run_beta1a_private_readiness.py \
+  --smoke \
+  --remote <remote> \
+  --server-host <server-host> \
+  --local-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --output-dir tools/perf/results
+```
+
+Full diagnostic:
+
+```bash
+python3 tools/perf/run_beta1a_private_readiness.py \
+  --full \
+  --bytes 1073741824,4294967296 \
+  --repeat 3 \
+  --remote <remote> \
+  --server-host <server-host> \
+  --local-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --output-dir tools/perf/results
+```
+
+The wrapper writes:
+
+- `tools/perf/results/<timestamp>_beta1a-readiness.json`
+- single-file raw/summary CSV from `run_gridftp_private_matrix.py`
+- tree raw/summary CSV from `run_gridftp_tree_private_matrix.py`
+- per-case JSONL event logs under `<timestamp>_beta1a-readiness/events/`
+- `docs/perf/BETA1A_100G_READINESS.md`
+
+Single-file CSV now includes `tls_mode`, `data_tls_mode`, event log paths and
+`event_error_code_counts`. Summary CSV groups by TLS/data TLS and file IO
+backend. Tree matrix supports the same TLS/data TLS and `posix|io_uring`
+backend dimensions. `data-tls-mode required` remains scoped to STOR/RETR framed
+file data; LIST/NLST listing data is not part of the Beta 1A TLS performance
+claim.

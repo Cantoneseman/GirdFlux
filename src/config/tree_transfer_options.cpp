@@ -16,6 +16,8 @@ constexpr std::uint32_t kMaxConnections = 64;
 constexpr std::uint32_t kMaxFileParallelism = 16;
 constexpr std::uint32_t kMaxBufferSize = 16 * 1024 * 1024;
 constexpr std::uint64_t kMaxChunkSize = 1024ULL * 1024ULL * 1024ULL * 1024ULL;
+constexpr std::uint64_t kMaxFileIoBufferSize = 64ULL * 1024ULL * 1024ULL;
+constexpr std::uint64_t kMaxFileIoQueueDepth = 256;
 
 common::Result<std::uint64_t> parseUnsigned(std::string_view value, std::string_view name) {
     if (value.empty()) {
@@ -66,6 +68,8 @@ common::Result<TreeTransferOptions> parseTreeTransferOptions(int argc, const cha
     TreeTransferOptions options;
     bool hasSourceDir = false;
     bool hasDestDir = false;
+    bool hasFileIoQueueDepth = false;
+    bool hasFileIoBatchSize = false;
     int index = 1;
     while (index < argc) {
         const std::string_view option(argv[index]);
@@ -215,6 +219,56 @@ common::Result<TreeTransferOptions> parseTreeTransferOptions(int argc, const cha
                 return parsed.status();
             }
             options.dataTlsMode = parsed.value();
+        } else if (option == "--file-io-backend") {
+            auto parsed = storage::parseFileIoBackendKind(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.fileIo.backend = parsed.value();
+        } else if (option == "--file-io-buffer-size") {
+            auto parsed = parseUnsigned(value, "--file-io-buffer-size");
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            if (parsed.value() > kMaxFileIoBufferSize) {
+                return common::Status::invalidArgument(
+                    "--file-io-buffer-size must be in range 0..67108864");
+            }
+            options.fileIo.bufferSize = parsed.value();
+        } else if (option == "--file-io-queue-depth") {
+            auto parsed = parseUnsigned(value, "--file-io-queue-depth");
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            if (parsed.value() == 0 || parsed.value() > kMaxFileIoQueueDepth) {
+                return common::Status::invalidArgument(
+                    "--file-io-queue-depth must be in range 1..256");
+            }
+            options.fileIo.queueDepth = parsed.value();
+            hasFileIoQueueDepth = true;
+        } else if (option == "--file-io-batch-size") {
+            auto parsed = parseUnsigned(value, "--file-io-batch-size");
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            if (parsed.value() == 0 || parsed.value() > kMaxFileIoQueueDepth) {
+                return common::Status::invalidArgument(
+                    "--file-io-batch-size must be in range 1..256");
+            }
+            options.fileIo.batchSize = parsed.value();
+            hasFileIoBatchSize = true;
+        } else if (option == "--file-io-advice") {
+            auto parsed = storage::parseFileIoAdvice(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.fileIo.advice = parsed.value();
+        } else if (option == "--posix-write-strategy") {
+            auto parsed = storage::parsePosixWriteStrategy(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.fileIo.posixWriteStrategy = parsed.value();
         } else {
             return common::Status::invalidArgument("unknown option: " + std::string(option));
         }
@@ -274,6 +328,13 @@ common::Result<TreeTransferOptions> parseTreeTransferOptions(int argc, const cha
     if (!dataTlsStatus.isOk()) {
         return dataTlsStatus;
     }
+    if (hasFileIoQueueDepth && !hasFileIoBatchSize) {
+        options.fileIo.batchSize = options.fileIo.queueDepth;
+    }
+    const common::Status fileIoStatus = storage::validateFileIoConfig(options.fileIo);
+    if (!fileIoStatus.isOk()) {
+        return fileIoStatus;
+    }
     return options;
 }
 
@@ -289,7 +350,11 @@ std::string treeTransferUsage(const char* programName, TreeTransferRole role) {
            "[--auth-mode anonymous|token] [--auth-token-file <path>] "
            "[--user <name>] [--password <password>] [--json-summary <path>] "
            "[--event-log <path>] [--tls-mode off|required] [--tls-ca-file <path>] "
-           "[--data-tls-mode off|required]";
+           "[--data-tls-mode off|required] [--file-io-backend posix|io_uring] "
+           "[--file-io-buffer-size <bytes>] [--file-io-queue-depth <N>] "
+           "[--file-io-batch-size <N>] "
+           "[--file-io-advice off|sequential|noreuse|dontneed|sequential_dontneed] "
+           "[--posix-write-strategy auto|direct|coalesced]";
 }
 
 }  // namespace gridflux::config

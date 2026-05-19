@@ -6,6 +6,7 @@
 #include "gridflux/checksum/checksum.h"
 #include "gridflux/common/status.h"
 #include "gridflux/core/io/tls_socket.h"
+#include "gridflux/storage/file_io.h"
 
 namespace gridflux::config {
 
@@ -35,6 +36,7 @@ struct TreeTransferOptions {
     std::string eventLogPath;
     core::io::TlsConfig tls;
     core::io::DataTlsMode dataTlsMode = core::io::DataTlsMode::Off;
+    storage::FileIoConfig fileIo;
 };
 
 [[nodiscard]] common::Result<TreeTransferOptions> parseTreeTransferOptions(

@@ -42,13 +42,14 @@ def test_csv_sidecar_extraction() -> None:
         with csv_path.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(
                 handle,
-                fieldnames=["server_log", "client_env_before_log", "absolute_log", "result"],
+                fieldnames=["server_log", "client_env_before_log", "event_log", "absolute_log", "result"],
             )
             writer.writeheader()
             writer.writerow(
                 {
                     "server_log": "tools/perf/results/server.log",
                     "client_env_before_log": "tools/perf/results/client-env.log",
+                    "event_log": "tools/perf/results/server-events.jsonl;tools/perf/results/client-events.jsonl",
                     "absolute_log": str(root / "tools" / "perf" / "results" / "abs.log"),
                     "result": "pass",
                 }
@@ -58,6 +59,8 @@ def test_csv_sidecar_extraction() -> None:
             "tools/perf/results/matrix.csv",
             "tools/perf/results/server.log",
             "tools/perf/results/client-env.log",
+            "tools/perf/results/server-events.jsonl",
+            "tools/perf/results/client-events.jsonl",
             "tools/perf/results/abs.log",
         }
         if paths != expected:

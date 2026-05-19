@@ -323,14 +323,16 @@ def csv_referenced_artifacts(csv_text: str, root: Path) -> list[str]:
                 if field.endswith("_log") or field in {
                     "server_log",
                     "client_log",
+                    "event_log",
                     "server_env_before_log",
                     "server_env_after_log",
                     "client_env_before_log",
                     "client_env_after_log",
                 }:
-                    referenced = normalize_artifact_path(value.strip(), root)
-                    if referenced:
-                        result.add(referenced)
+                    for part in str(value).split(";"):
+                        referenced = normalize_artifact_path(part.strip(), root)
+                        if referenced:
+                            result.add(referenced)
     return sorted(result)
 
 

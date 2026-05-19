@@ -10,12 +10,14 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import json
 import os
 import re
 import shlex
 import shutil
 import signal
 import socket
+import ssl
 import statistics
 import subprocess
 import sys
@@ -143,6 +145,8 @@ CSV_FIELDS = [
     "file_io_advice",
     "posix_write_strategy",
     "posix_write_strategy_effective",
+    "tls_mode",
+    "data_tls_mode",
     "repeat_index",
     "elapsed",
     "throughput_gbps",
@@ -170,6 +174,12 @@ CSV_FIELDS = [
     "result",
     "server_log",
     "client_log",
+    "event_log",
+    "server_event_log",
+    "client_event_log",
+    "event_error_code_counts",
+    "env_snapshot_before",
+    "env_snapshot_after",
     "server_env_before_log",
     "server_env_after_log",
     "client_env_before_log",
@@ -214,6 +224,8 @@ class Case:
     file_io_batch_size: int
     file_io_advice: str
     posix_write_strategy: str
+    tls_mode: str
+    data_tls_mode: str
     repeat_index: int
 
 
@@ -232,8 +244,14 @@ class EnvironmentSnapshot:
 
 
 class ControlConnection:
-    def __init__(self, host: str, port: int) -> None:
-        self.sock = connect_control(host, port)
+    def __init__(self, host: str, port: int, *, tls_mode: str = "off", tls_ca_file: str = "") -> None:
+        raw_sock = connect_control(host, port)
+        if tls_mode == "required":
+            context = ssl.create_default_context(cafile=tls_ca_file or None)
+            context.check_hostname = False
+            self.sock = context.wrap_socket(raw_sock, server_hostname="localhost")
+        else:
+            self.sock = raw_sock
         self.buffer = bytearray()
         greeting = self.read_reply()
         if reply_code(greeting) != 220:
@@ -311,6 +329,21 @@ def run_remote(
     return completed
 
 
+def write_remote_text(remote: str, path: str, text: str) -> None:
+    parent = str(Path(path).parent)
+    command = f"umask 077 && mkdir -p {shlex.quote(parent)} && cat > {shlex.quote(path)}"
+    run_remote(remote, command, input_text=text, check=True, timeout=30)
+
+
+def fetch_remote_file(remote: str, remote_path: str, local_path: Path) -> bool:
+    completed = run_remote(remote, f"cat {shlex.quote(remote_path)}", check=False, timeout=30)
+    if completed.returncode != 0:
+        return False
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    local_path.write_text(completed.stdout, encoding="utf-8")
+    return True
+
+
 def read_line(sock: socket.socket, buffer: bytearray) -> str:
     while b"\n" not in buffer:
         chunk = sock.recv(4096)
@@ -339,6 +372,36 @@ def connect_control(host: str, port: int) -> socket.socket:
             last_error = error
             time.sleep(0.1)
     raise RuntimeError(f"failed to connect control server: {last_error}")
+
+
+def generate_self_signed_cert(cert: Path, key: Path) -> None:
+    openssl = shutil.which("openssl")
+    if not openssl:
+        raise RuntimeError("openssl CLI is required for TLS matrix cases")
+    cert.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            openssl,
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            str(key),
+            "-out",
+            str(cert),
+            "-sha256",
+            "-days",
+            "1",
+            "-nodes",
+            "-subj",
+            "/CN=localhost",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=True,
+    )
+    key.chmod(0o600)
 
 
 def parse_epsv_port(lines: list[str]) -> int:
@@ -520,7 +583,30 @@ def write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def start_control_server(args: argparse.Namespace, case: Case, root: Path, server_log: Path) -> subprocess.Popen[str]:
+def event_error_code_counts(*paths: Path) -> str:
+    counts: dict[str, int] = {}
+    for path in paths:
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            code = str(event.get("error_code", "") or "")
+            result = str(event.get("result", "") or "")
+            if code and code != "ok":
+                counts[code] = counts.get(code, 0) + 1
+            elif result == "fail":
+                counts["unknown_error"] = counts.get("unknown_error", 0) + 1
+    return json.dumps(counts, sort_keys=True, separators=(",", ":"))
+
+
+def start_control_server(
+    args: argparse.Namespace, case: Case, root: Path, server_log: Path, server_event_log: Path
+) -> subprocess.Popen[str]:
     server_bin = Path(args.local_build_dir) / "gridflux-gridftp-server"
     command = [
         str(server_bin),
@@ -564,7 +650,22 @@ def start_control_server(args: argparse.Namespace, case: Case, root: Path, serve
         case.file_io_advice,
         "--posix-write-strategy",
         case.posix_write_strategy,
+        "--event-log",
+        str(server_event_log),
     ]
+    if case.tls_mode == "required":
+        command.extend(
+            [
+                "--tls-mode",
+                "required",
+                "--tls-cert-file",
+                args._tls_cert_file,
+                "--tls-key-file",
+                args._tls_key_file,
+            ]
+        )
+    if case.data_tls_mode == "required":
+        command.extend(["--data-tls-mode", "required"])
     log_handle = server_log.open("w", encoding="utf-8")
     return subprocess.Popen(
         command,
@@ -600,7 +701,12 @@ def data_port_base(args: argparse.Namespace, case_index: int) -> int:
 
 
 def login_control(args: argparse.Namespace, case: Case) -> ControlConnection:
-    control = ControlConnection(args.server_host, control_port(args, case.index))
+    control = ControlConnection(
+        args.server_host,
+        control_port(args, case.index),
+        tls_mode=case.tls_mode,
+        tls_ca_file=getattr(args, "_tls_ca_file", ""),
+    )
     control.login_type_i()
     return control
 
@@ -618,6 +724,7 @@ def run_upload_client(
     source: str,
     data_port: int,
     transfer_id: str,
+    event_log: str,
     *,
     resume: bool,
     max_chunks: int | None,
@@ -655,7 +762,18 @@ def run_upload_client(
         shlex.quote(case.file_io_advice),
         "--posix-write-strategy",
         shlex.quote(case.posix_write_strategy),
+        "--event-log",
+        shlex.quote(event_log),
     ]
+    if case.data_tls_mode == "required":
+        pieces.extend(
+            [
+                "--data-tls-mode",
+                "required",
+                "--tls-ca-file",
+                shlex.quote(args._remote_tls_ca_file),
+            ]
+        )
     if resume:
         pieces.append("--resume")
     if max_chunks is not None:
@@ -669,6 +787,7 @@ def run_download_client(
     output: str,
     data_port: int,
     transfer_id: str,
+    event_log: str,
     *,
     resume: bool,
     max_chunks: int | None,
@@ -714,7 +833,18 @@ def run_download_client(
         shlex.quote(case.file_io_advice),
         "--posix-write-strategy",
         shlex.quote(case.posix_write_strategy),
+        "--event-log",
+        shlex.quote(event_log),
     ]
+    if case.data_tls_mode == "required":
+        pieces.extend(
+            [
+                "--data-tls-mode",
+                "required",
+                "--tls-ca-file",
+                shlex.quote(args._remote_tls_ca_file),
+            ]
+        )
     if resume:
         pieces.append("--resume")
     if max_chunks is not None:
@@ -722,7 +852,9 @@ def run_download_client(
     return run_remote(args.remote, " ".join(pieces), check=False, timeout=args.case_timeout)
 
 
-def run_stor_once(args: argparse.Namespace, case: Case, remote_source: str, output_name: str) -> tuple[str, str]:
+def run_stor_once(
+    args: argparse.Namespace, case: Case, remote_source: str, output_name: str, client_event_log: str
+) -> tuple[str, str]:
     control = login_control(args, case)
     try:
         data_port = open_epsv(control)
@@ -731,7 +863,14 @@ def run_stor_once(args: argparse.Namespace, case: Case, remote_source: str, outp
             raise RuntimeError(f"STOR failed: {stor!r}")
         transfer_id = parse_transfer_id(stor)
         client = run_upload_client(
-            args, case, remote_source, data_port, transfer_id, resume=False, max_chunks=None
+            args,
+            case,
+            remote_source,
+            data_port,
+            transfer_id,
+            client_event_log,
+            resume=False,
+            max_chunks=None,
         )
         if client.returncode != 0:
             raise RuntimeError(client.stdout + client.stderr)
@@ -744,7 +883,9 @@ def run_stor_once(args: argparse.Namespace, case: Case, remote_source: str, outp
         control.close()
 
 
-def run_stor_resume(args: argparse.Namespace, case: Case, remote_source: str, output_name: str) -> tuple[str, str]:
+def run_stor_resume(
+    args: argparse.Namespace, case: Case, remote_source: str, output_name: str, client_event_log: str
+) -> tuple[str, str]:
     client_text = ""
     control = login_control(args, case)
     try:
@@ -759,6 +900,7 @@ def run_stor_resume(args: argparse.Namespace, case: Case, remote_source: str, ou
             remote_source,
             data_port,
             transfer_id,
+            client_event_log,
             resume=False,
             max_chunks=args.max_chunks,
         )
@@ -781,7 +923,14 @@ def run_stor_resume(args: argparse.Namespace, case: Case, remote_source: str, ou
         if reply_code(stor) != 150 or parse_transfer_id(stor) != transfer_id:
             raise RuntimeError(f"resume STOR failed: {stor!r}")
         resumed = run_upload_client(
-            args, case, remote_source, data_port, transfer_id, resume=True, max_chunks=None
+            args,
+            case,
+            remote_source,
+            data_port,
+            transfer_id,
+            client_event_log,
+            resume=True,
+            max_chunks=None,
         )
         client_text += resumed.stdout + resumed.stderr
         if resumed.returncode != 0:
@@ -795,7 +944,9 @@ def run_stor_resume(args: argparse.Namespace, case: Case, remote_source: str, ou
         control.close()
 
 
-def run_retr_once(args: argparse.Namespace, case: Case, source_name: str, remote_output: str) -> tuple[str, str]:
+def run_retr_once(
+    args: argparse.Namespace, case: Case, source_name: str, remote_output: str, client_event_log: str
+) -> tuple[str, str]:
     control = login_control(args, case)
     try:
         data_port = open_epsv(control)
@@ -804,7 +955,14 @@ def run_retr_once(args: argparse.Namespace, case: Case, source_name: str, remote
             raise RuntimeError(f"RETR failed: {retr!r}")
         transfer_id = parse_transfer_id(retr)
         client = run_download_client(
-            args, case, remote_output, data_port, transfer_id, resume=False, max_chunks=None
+            args,
+            case,
+            remote_output,
+            data_port,
+            transfer_id,
+            client_event_log,
+            resume=False,
+            max_chunks=None,
         )
         if client.returncode != 0:
             raise RuntimeError(client.stdout + client.stderr)
@@ -817,7 +975,9 @@ def run_retr_once(args: argparse.Namespace, case: Case, source_name: str, remote
         control.close()
 
 
-def run_retr_resume(args: argparse.Namespace, case: Case, source_name: str, remote_output: str) -> tuple[str, str]:
+def run_retr_resume(
+    args: argparse.Namespace, case: Case, source_name: str, remote_output: str, client_event_log: str
+) -> tuple[str, str]:
     client_text = ""
     control = login_control(args, case)
     try:
@@ -832,6 +992,7 @@ def run_retr_resume(args: argparse.Namespace, case: Case, source_name: str, remo
             remote_output,
             data_port,
             transfer_id,
+            client_event_log,
             resume=False,
             max_chunks=args.max_chunks,
         )
@@ -854,7 +1015,14 @@ def run_retr_resume(args: argparse.Namespace, case: Case, source_name: str, remo
         if reply_code(retr) != 150 or parse_transfer_id(retr) != transfer_id:
             raise RuntimeError(f"resume RETR failed: {retr!r}")
         resumed = run_download_client(
-            args, case, remote_output, data_port, transfer_id, resume=True, max_chunks=None
+            args,
+            case,
+            remote_output,
+            data_port,
+            transfer_id,
+            client_event_log,
+            resume=True,
+            max_chunks=None,
         )
         client_text += resumed.stdout + resumed.stderr
         if resumed.returncode != 0:
@@ -912,6 +1080,8 @@ def initial_row(args: argparse.Namespace, case: Case, env: EnvironmentSnapshot, 
         "file_io_advice": case.file_io_advice,
         "posix_write_strategy": case.posix_write_strategy,
         "posix_write_strategy_effective": "",
+        "tls_mode": case.tls_mode,
+        "data_tls_mode": case.data_tls_mode,
         "repeat_index": str(case.repeat_index),
         "elapsed": "",
         "throughput_gbps": "",
@@ -931,6 +1101,12 @@ def initial_row(args: argparse.Namespace, case: Case, env: EnvironmentSnapshot, 
         "result": "fail",
         "server_log": str(server_log),
         "client_log": str(client_log),
+        "event_log": "",
+        "server_event_log": "",
+        "client_event_log": "",
+        "event_error_code_counts": "",
+        "env_snapshot_before": "",
+        "env_snapshot_after": "",
         "server_env_before_log": "",
         "server_env_after_log": "",
         "client_env_before_log": "",
@@ -1047,6 +1223,8 @@ SUMMARY_GROUP_FIELDS = [
     "file_io_advice",
     "posix_write_strategy",
     "posix_write_strategy_effective",
+    "tls_mode",
+    "data_tls_mode",
     "manifest_flush_policy",
     "manifest_flush_interval_chunks",
     "commit_sync_policy",
@@ -1138,6 +1316,8 @@ def summarize_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
             row["file_io_advice"],
             row["posix_write_strategy"],
             row["posix_write_strategy_effective"],
+            row["tls_mode"],
+            row["data_tls_mode"],
             row["manifest_flush_policy"],
             row["manifest_flush_interval_chunks"],
             row["commit_sync_policy"],
@@ -1272,16 +1452,25 @@ def run_case(args: argparse.Namespace, case: Case, run_root: Path, env: Environm
         f"mfp{case.manifest_flush_policy}_mfi{case.manifest_flush_interval_chunks}_"
         f"csp{case.commit_sync_policy}_"
         f"fiobuf{case.file_io_buffer_size}_fioqd{case.file_io_queue_depth}_"
-        f"fiobs{case.file_io_batch_size}_fioadv{case.file_io_advice}_pws{case.posix_write_strategy}"
+        f"fiobs{case.file_io_batch_size}_fioadv{case.file_io_advice}_pws{case.posix_write_strategy}_"
+        f"tls{case.tls_mode}_dtls{case.data_tls_mode}"
     )
     case_root = run_root / case_id
     server_root = case_root / "server-root"
     server_root.mkdir(parents=True)
     server_log = Path(args.output_dir) / f"{compact_timestamp()}_{case_id}_server.log"
     client_log = Path(args.output_dir) / f"{compact_timestamp()}_{case_id}_client.log"
+    event_dir = Path(args.event_log_dir) if args.event_log_dir else Path(args.output_dir)
+    event_dir.mkdir(parents=True, exist_ok=True)
+    server_event_log = event_dir / f"{compact_timestamp()}_{case_id}_server_events.jsonl"
+    client_event_log = event_dir / f"{compact_timestamp()}_{case_id}_client_events.jsonl"
+    remote_client_event_log = f"/tmp/{case_id}_client_events.jsonl"
     row = initial_row(args, case, env, server_log, client_log)
     row["repeat_index"] = str(case.repeat_index)
     row["temp_root"] = str(case_root)
+    row["server_event_log"] = str(server_event_log)
+    row["client_event_log"] = str(client_event_log)
+    row["event_log"] = f"{server_event_log};{client_event_log}"
 
     server: subprocess.Popen[str] | None = None
     remote_source = f"/tmp/gridflux_phase4a_{case_id}.src"
@@ -1292,8 +1481,8 @@ def run_case(args: argparse.Namespace, case: Case, run_root: Path, env: Environm
     env_client_path = remote_source if case.direction.startswith("stor") else str(Path(remote_output).parent)
 
     try:
-        cleanup_remote_paths(args, remote_source, remote_output)
-        server = start_control_server(args, case, server_root, server_log)
+        cleanup_remote_paths(args, remote_source, remote_output, remote_client_event_log)
+        server = start_control_server(args, case, server_root, server_log, server_event_log)
 
         if case.direction.startswith("stor"):
             make_remote_file(args.remote, remote_source, case.total_bytes)
@@ -1305,10 +1494,15 @@ def run_case(args: argparse.Namespace, case: Case, run_root: Path, env: Environm
             )
             row["server_env_before_log"] = str(before_server)
             row["client_env_before_log"] = str(before_client)
+            row["env_snapshot_before"] = f"{before_server};{before_client}"
             if case.direction == "stor":
-                transfer_id, client_text = run_stor_once(args, case, remote_source, output_name)
+                transfer_id, client_text = run_stor_once(
+                    args, case, remote_source, output_name, remote_client_event_log
+                )
             else:
-                transfer_id, client_text = run_stor_resume(args, case, remote_source, output_name)
+                transfer_id, client_text = run_stor_resume(
+                    args, case, remote_source, output_name, remote_client_event_log
+                )
             dest_sha = sha256_file(local_output)
         else:
             make_local_file(local_source, case.total_bytes)
@@ -1320,10 +1514,15 @@ def run_case(args: argparse.Namespace, case: Case, run_root: Path, env: Environm
             )
             row["server_env_before_log"] = str(before_server)
             row["client_env_before_log"] = str(before_client)
+            row["env_snapshot_before"] = f"{before_server};{before_client}"
             if case.direction == "retr":
-                transfer_id, client_text = run_retr_once(args, case, local_source.name, remote_output)
+                transfer_id, client_text = run_retr_once(
+                    args, case, local_source.name, remote_output, remote_client_event_log
+                )
             else:
-                transfer_id, client_text = run_retr_resume(args, case, local_source.name, remote_output)
+                transfer_id, client_text = run_retr_resume(
+                    args, case, local_source.name, remote_output, remote_client_event_log
+                )
             dest_sha = remote_sha256(args.remote, remote_output)
 
         after_server, after_client = capture_environment_sidecars(
@@ -1331,12 +1530,15 @@ def run_case(args: argparse.Namespace, case: Case, run_root: Path, env: Environm
         )
         row["server_env_after_log"] = str(after_server)
         row["client_env_after_log"] = str(after_client)
+        row["env_snapshot_after"] = f"{after_server};{after_client}"
+        fetch_remote_file(args.remote, remote_client_event_log, client_event_log)
         write_text(client_log, client_text)
         server_text = server_log.read_text(encoding="utf-8", errors="replace")
         row["transfer_id"] = transfer_id
         row["source_sha256"] = source_sha
         row["dest_sha256"] = dest_sha
         fill_metrics(row, case.direction, server_text, client_text)
+        row["event_error_code_counts"] = event_error_code_counts(server_event_log, client_event_log)
         if source_sha != dest_sha:
             raise RuntimeError(f"sha256 mismatch: {source_sha} != {dest_sha}")
         row["result"] = "pass"
@@ -1350,8 +1552,11 @@ def run_case(args: argparse.Namespace, case: Case, run_root: Path, env: Environm
                 )
                 row["server_env_after_log"] = str(after_server)
                 row["client_env_after_log"] = str(after_client)
+                row["env_snapshot_after"] = f"{after_server};{after_client}"
             except Exception as sidecar_error:  # noqa: BLE001
                 row["error"] = (row["error"] + f" env_sidecar_after={sidecar_error}").strip()[:1000]
+        fetch_remote_file(args.remote, remote_client_event_log, client_event_log)
+        row["event_error_code_counts"] = event_error_code_counts(server_event_log, client_event_log)
         if not client_log.exists():
             write_text(client_log, "")
         return row
@@ -1359,7 +1564,7 @@ def run_case(args: argparse.Namespace, case: Case, run_root: Path, env: Environm
         stop_process(server)
         if row["result"] == "pass" and not args.keep_files:
             shutil.rmtree(case_root, ignore_errors=True)
-            cleanup_remote_paths(args, remote_source, remote_output)
+            cleanup_remote_paths(args, remote_source, remote_output, remote_client_event_log)
 
 
 def generate_cases(args: argparse.Namespace) -> list[Case]:
@@ -1429,6 +1634,10 @@ def generate_cases(args: argparse.Namespace) -> list[Case]:
         {"full", "verified_chunks"},
         "final verify policy",
     )
+    tls_modes = parse_choice_list(args.tls_modes, {"off", "required"}, "TLS mode")
+    data_tls_modes = parse_choice_list(
+        args.data_tls_modes, {"off", "required"}, "data TLS mode"
+    )
 
     cases: list[Case] = []
     index = 0
@@ -1459,31 +1668,40 @@ def generate_cases(args: argparse.Namespace) -> list[Case]:
                                                             for file_io_batch_size in batch_sizes:
                                                                 for file_io_advice in file_io_advices:
                                                                     for final_verify_policy in final_verify_policies:
-                                                                        for repeat_index in range(args.repeat):
-                                                                            cases.append(
-                                                                                Case(
-                                                                                    index=index,
-                                                                                    direction=direction,
-                                                                                    total_bytes=total_bytes,
-                                                                                    connections=connection,
-                                                                                    chunk_size=chunk_size,
-                                                                                    buffer_size=buffer_size,
-                                                                                    checksum=checksum,
-                                                                                    preallocate=preallocate,
-                                                                                    manifest_flush_policy=manifest_flush_policy,
-                                                                                    manifest_flush_interval_chunks=manifest_flush_interval,
-                                                                                    commit_sync_policy=commit_sync_policy,
-                                                                                    final_verify_policy=final_verify_policy,
-                                                                                    file_io_backend=file_io_backend,
-                                                                                    file_io_buffer_size=file_io_buffer_size,
-                                                                                    file_io_queue_depth=file_io_queue_depth,
-                                                                                    file_io_batch_size=file_io_batch_size,
-                                                                                    file_io_advice=file_io_advice,
-                                                                                    posix_write_strategy=posix_write_strategy,
-                                                                                    repeat_index=repeat_index,
-                                                                                )
-                                                                            )
-                                                                            index += 1
+                                                                        for tls_mode in tls_modes:
+                                                                            for data_tls_mode in data_tls_modes:
+                                                                                if (
+                                                                                    tls_mode == "off"
+                                                                                    and data_tls_mode == "required"
+                                                                                ):
+                                                                                    continue
+                                                                                for repeat_index in range(args.repeat):
+                                                                                    cases.append(
+                                                                                        Case(
+                                                                                            index=index,
+                                                                                            direction=direction,
+                                                                                            total_bytes=total_bytes,
+                                                                                            connections=connection,
+                                                                                            chunk_size=chunk_size,
+                                                                                            buffer_size=buffer_size,
+                                                                                            checksum=checksum,
+                                                                                            preallocate=preallocate,
+                                                                                            manifest_flush_policy=manifest_flush_policy,
+                                                                                            manifest_flush_interval_chunks=manifest_flush_interval,
+                                                                                            commit_sync_policy=commit_sync_policy,
+                                                                                            final_verify_policy=final_verify_policy,
+                                                                                            file_io_backend=file_io_backend,
+                                                                                            file_io_buffer_size=file_io_buffer_size,
+                                                                                            file_io_queue_depth=file_io_queue_depth,
+                                                                                            file_io_batch_size=file_io_batch_size,
+                                                                                            file_io_advice=file_io_advice,
+                                                                                            posix_write_strategy=posix_write_strategy,
+                                                                                            tls_mode=tls_mode,
+                                                                                            data_tls_mode=data_tls_mode,
+                                                                                            repeat_index=repeat_index,
+                                                                                        )
+                                                                                    )
+                                                                                    index += 1
     return cases
 
 
@@ -1554,6 +1772,13 @@ def main() -> int:
         default="auto",
         help="comma list: auto,direct,coalesced",
     )
+    parser.add_argument("--tls-modes", default="off", help="comma list: off,required")
+    parser.add_argument("--data-tls-modes", default="off", help="comma list: off,required")
+    parser.add_argument(
+        "--event-log-dir",
+        default="",
+        help="directory for per-case JSONL event logs (default: output dir)",
+    )
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--host-baseline-csv", default="")
     parser.add_argument("--storage-bench-csv", default="")
@@ -1573,11 +1798,28 @@ def main() -> int:
     )
     run_root = Path(tempfile.mkdtemp(prefix=f"gridflux-phase4a-{run_id}."))
     remove_run_root = not args.keep_files
+    tls_tempdir: tempfile.TemporaryDirectory[str] | None = None
+    args._tls_cert_file = ""
+    args._tls_key_file = ""
+    args._tls_ca_file = ""
+    args._remote_tls_ca_file = ""
 
     try:
         cases = generate_cases(args)
         validate_ports(args, cases)
         check_binaries(args)
+        if any(case.tls_mode == "required" or case.data_tls_mode == "required" for case in cases):
+            tls_tempdir = tempfile.TemporaryDirectory(prefix=f"gridflux-beta1a-tls-{run_id}.")
+            tls_dir = Path(tls_tempdir.name)
+            cert = tls_dir / "cert.pem"
+            key = tls_dir / "key.pem"
+            generate_self_signed_cert(cert, key)
+            remote_ca = f"/tmp/gridflux_beta1a_{run_id}_ca.pem"
+            write_remote_text(args.remote, remote_ca, cert.read_text(encoding="utf-8"))
+            args._tls_cert_file = str(cert)
+            args._tls_key_file = str(key)
+            args._tls_ca_file = str(cert)
+            args._remote_tls_ca_file = remote_ca
         env = collect_environment(args.remote)
 
         rows: list[dict[str, str]] = []
@@ -1586,7 +1828,8 @@ def main() -> int:
                 f"[{case.index + 1}/{len(cases)}] {case.direction} bytes={case.total_bytes} "
                 f"connections={case.connections} chunk={case.chunk_size} buffer={case.buffer_size} "
                 f"checksum={case.checksum} manifest_flush={case.manifest_flush_policy}/"
-                f"{case.manifest_flush_interval_chunks} commit_sync={case.commit_sync_policy}",
+                f"{case.manifest_flush_interval_chunks} commit_sync={case.commit_sync_policy} "
+                f"tls={case.tls_mode}/{case.data_tls_mode}",
                 flush=True,
             )
             row = run_case(args, case, run_root, env)
@@ -1618,6 +1861,10 @@ def main() -> int:
         print(f"cases={len(rows)} failures={len(failures)}")
         return 1 if failures else 0
     finally:
+        if getattr(args, "_remote_tls_ca_file", ""):
+            run_remote(args.remote, f"rm -f {shlex.quote(args._remote_tls_ca_file)}", check=False, timeout=30)
+        if tls_tempdir is not None:
+            tls_tempdir.cleanup()
         if remove_run_root:
             shutil.rmtree(run_root, ignore_errors=True)
 

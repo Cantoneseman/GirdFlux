@@ -1,5 +1,67 @@
 # GridFlux 项目状态记录
 
+
+## 2026-05-19 Beta 1A-1 私网 readiness 执行
+
+- 同步：`tools/perf/sync_remote.sh --host <remote> --source /root/projects/GridFlux --target /root/projects/GridFlux` 通过。
+- 本机 Debug CTest：182/182 passed。
+- <redacted>二 Debug CTest：182/182 passed。
+- 本机 real io_uring Release CTest：182/182 passed，`FileIoTest.IoUringContextReadWriteSmokeWhenAvailable` Passed。
+- <redacted>二 real io_uring Release CTest：182/182 passed，`FileIoTest.IoUringContextReadWriteSmokeWhenAvailable` Passed。
+- Beta 1A smoke：通过，JSON `tools/perf/results/20260519T071223Z_beta1a-readiness.json`，single-file 72/72 pass，tree 72/72 pass，host baseline pass。
+- Resume 子矩阵：`tools/perf/results/20260519T080947Z_gridftp-private-matrix-full.csv`，64/64 pass，覆盖 STOR/RETR resume、crc32c/none、POSIX/io_uring、control TLS off/required、connections 1/2/4/8，data TLS off。
+- 已知 blocker：`STOR resume + tls=required + data_tls=required` 最小复现失败，`tools/perf/results/20260519T080840Z_gridftp-private-matrix-full.csv`，错误为 control connection closed；Beta 1A-1 不把 data-TLS resume 作为通过结论。
+- 关键 median：单文件 STOR 最佳 1.518 Gbps；单文件 RETR 最佳 4.217 Gbps；tree mixed upload 最佳 1.105 Gbps；tree mixed download 最佳 0.846 Gbps。
+- 100G readiness：当前环境未 ready；memory-sink baseline 19.117 Gbps，server disk baseline约 1 Gbps，CRC32C hardware约 76 Gbps。瓶颈优先指向私网/存储 writeback 和 RETR send/write 耦合，而不是 checksum。
+- 默认策略未改变：anonymous、TLS off、data TLS off、POSIX backend、full final verify、every_n_chunks manifest flush、preallocate off、posix_write_strategy auto。
+
+- Quick alpha gate：`tools/perf/results/20260519T082902Z_alpha-release-gate.json`，pass。
+- Full alpha gate：`tools/perf/results/20260519T083123Z_alpha-release-gate.json`，pass；artifact manifest `tools/perf/results/20260519T083123Z_alpha-artifacts.json`。
+- Alpha RC：`tools/perf/results/20260519T084858Z_alpha-release-candidate.json`，pass；artifact manifest `tools/perf/results/20260519T084858Z_alpha-release-candidate-artifacts.json`。
+- RC artifact verify：`tools/perf/results/20260519T084858Z_alpha-release-candidate-artifact-verify.json`，1442 artifacts checked，missing=0，mismatch=0，status=pass。
+- Public export strict hygiene：`/tmp/gridflux-public-beta1a1`，pass。
+
+## 2026-05-19 Beta 1A 性能专项与 100G readiness 诊断（工具已落地，等待私网重型采样）
+
+### 实现目标
+
+- 新增 `tools/perf/run_beta1a_private_readiness.py`，编排 host baseline、单文件私网矩阵、目录私网矩阵和 Beta 1A 分析报告。
+- 新增 `tools/perf/analyze_beta1a.py`，读取 host baseline、single-file summary 和 tree summary，生成 `docs/perf/BETA1A_100G_READINESS.md`。
+- 扩展 `tools/perf/run_gridftp_private_matrix.py`：
+  - 新增 `--tls-modes off,required`、`--data-tls-modes off,required`、`--event-log-dir`。
+  - raw CSV 增加 `tls_mode`、`data_tls_mode`、server/client event log 和 error_code count。
+  - summary CSV 将 TLS/data TLS 纳入分组，并继续保留 spread/p95 与 sender/receiver 阶段指标。
+- 扩展 `tools/perf/run_gridftp_tree_private_matrix.py`：
+  - 新增 TLS/data TLS、file IO backend、queue/batch 和 event log 维度。
+  - raw/summary CSV 纳入目录级 TLS/backend 性能对照。
+- 扩展 `gridflux-tree-upload-client` / `gridflux-tree-download-client` 参数解析和内部 per-file 调用，透传 `--file-io-backend`、`--file-io-buffer-size`、queue/batch、advice 和 POSIX write strategy 到现有单文件 STOR/RETR 客户端。
+
+### 默认值与边界
+
+- 默认仍为 `auth-mode=anonymous`、`tls-mode=off`、`data-tls-mode=off`、`file_io_backend=posix`、`final_verify_policy=full`、`manifest_flush_policy=every_n_chunks`、`preallocate=off`、`posix_write_strategy=auto`。
+- Beta 1A 不新增协议功能，不实现 raw FTP/GSI/生产认证，不改变 STOR/RETR framed data path、checksum、manifest、resume 或 final verify 语义。
+- TLS 性能维度只覆盖 control TLS 与 STOR/RETR framed file data TLS；LIST/NLST listing data channel 仍是 Phase 6D 记录的明文 alpha 限制。
+
+### 已执行验证
+
+- 通过：`python3 -m py_compile tools/perf/test_beta1a_helpers.py tools/perf/run_beta1a_private_readiness.py tools/perf/analyze_beta1a.py tools/perf/run_gridftp_private_matrix.py tools/perf/run_gridftp_tree_private_matrix.py`。
+- 通过：`python3 tools/perf/test_beta1a_helpers.py`。
+- 通过：`cmake --build build`。
+- 通过：`ctest --test-dir build -R "TreeTransferOptions|beta1a|gridflux_beta1a" --output-on-failure`，6/6 passed。
+- 通过：`ctest --test-dir build --output-on-failure`，182/182 passed。
+- 通过：`cmake --build build-io-uring-real`。
+- 通过：`ctest --test-dir build-io-uring-real --output-on-failure`，182/182 passed。
+- 通过：`ctest --test-dir build-io-uring-real -R FileIoTest.IoUringContextReadWriteSmokeWhenAvailable --output-on-failure`，1/1 passed，真实 io_uring smoke 为 Passed。
+- 通过：`python3 tools/release/export_public_repo.py --output /tmp/gridflux-public-beta1a --force && python3 tools/release/check_public_hygiene.py --path /tmp/gridflux-public-beta1a --strict`。
+- 通过：本机残留进程检查 `ps -eo pid=,args= | grep -E '[g]ridflux-(gridftp-server|file-)' || true`，无输出。
+
+### 待执行验收
+
+- 本机 Debug full CTest。
+- 本机 `build-io-uring-real` Release full CTest 和 io_uring smoke。
+- 同步<redacted>二后的 Debug / real io_uring Release full CTest。
+- Beta 1A private readiness smoke/full matrix、quick/full alpha gate、Alpha RC、public hygiene、artifact freshness/sync/verify 和最终残留进程检查。
+
 ## 2026-05-19 Phase 6E 完整 alpha 原型收口与长跑验收包（已完成）
 
 ### 实现目标

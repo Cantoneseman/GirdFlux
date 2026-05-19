@@ -14,9 +14,11 @@ import json
 import os
 import shlex
 import signal
+import shutil
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +36,11 @@ CSV_FIELDS = [
     "connections",
     "checksum_algorithm",
     "checksum_backend",
+    "tls_mode",
+    "data_tls_mode",
+    "file_io_backend",
+    "file_io_queue_depth",
+    "file_io_batch_size",
     "elapsed_seconds",
     "throughput_gbps",
     "json_summary",
@@ -50,6 +57,10 @@ CSV_FIELDS = [
     "result",
     "server_log",
     "client_log",
+    "event_log",
+    "server_event_log",
+    "client_event_log",
+    "event_error_code_counts",
     "control_port",
     "data_port_base",
     "local_root",
@@ -66,6 +77,11 @@ SUMMARY_GROUP_FIELDS = [
     "connections",
     "checksum_algorithm",
     "checksum_backend",
+    "tls_mode",
+    "data_tls_mode",
+    "file_io_backend",
+    "file_io_queue_depth",
+    "file_io_batch_size",
 ]
 
 SUMMARY_FIELDS = [
@@ -100,6 +116,11 @@ class Case:
     file_parallelism: int
     connections: int
     checksum: str
+    tls_mode: str
+    data_tls_mode: str
+    file_io_backend: str
+    file_io_queue_depth: int
+    file_io_batch_size: int
 
 
 def compact_timestamp() -> str:
@@ -116,12 +137,20 @@ def ssh_prefix(remote: str) -> list[str]:
     return ["ssh", "-o", "StrictHostKeyChecking=no", remote]
 
 
-def run_remote(remote: str, command: str, *, check: bool = True, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
+def run_remote(
+    remote: str,
+    command: str,
+    *,
+    input_text: str | None = None,
+    check: bool = True,
+    timeout: int | None = None,
+) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     if env.get("GRIDFLUX_SSH_PASSWORD") and not env.get("SSHPASS"):
         env["SSHPASS"] = env["GRIDFLUX_SSH_PASSWORD"]
     completed = subprocess.run(
         ssh_prefix(remote) + [command],
+        input=input_text,
         text=True,
         capture_output=True,
         check=False,
@@ -131,6 +160,12 @@ def run_remote(remote: str, command: str, *, check: bool = True, timeout: int | 
     if check and completed.returncode != 0:
         raise RuntimeError("$ " + command + "\n" + completed.stdout + completed.stderr)
     return completed
+
+
+def write_remote_text(remote: str, path: str, text: str) -> None:
+    parent = str(Path(path).parent)
+    command = f"umask 077 && mkdir -p {shlex.quote(parent)} && cat > {shlex.quote(path)}"
+    run_remote(remote, command, input_text=text, check=True, timeout=30)
 
 
 def parse_csv_list(text: str) -> list[str]:
@@ -276,7 +311,66 @@ def write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def start_server(args: argparse.Namespace, root: Path, control_port: int, data_port_base: int, log_path: Path, connections: int, checksum: str) -> subprocess.Popen[str]:
+def generate_self_signed_cert(cert: Path, key: Path) -> None:
+    openssl = shutil.which("openssl")
+    if not openssl:
+        raise RuntimeError("openssl CLI is required for TLS tree matrix cases")
+    cert.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            openssl,
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            str(key),
+            "-out",
+            str(cert),
+            "-sha256",
+            "-days",
+            "1",
+            "-nodes",
+            "-subj",
+            "/CN=localhost",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=True,
+    )
+    key.chmod(0o600)
+
+
+def event_error_code_counts(*paths: Path) -> str:
+    counts: dict[str, int] = {}
+    for path in paths:
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            code = str(event.get("error_code", "") or "")
+            result = str(event.get("result", "") or "")
+            if code and code != "ok":
+                counts[code] = counts.get(code, 0) + 1
+            elif result == "fail":
+                counts["unknown_error"] = counts.get("unknown_error", 0) + 1
+    return json.dumps(counts, sort_keys=True, separators=(",", ":"))
+
+
+def start_server(
+    args: argparse.Namespace,
+    case: Case,
+    root: Path,
+    control_port: int,
+    data_port_base: int,
+    log_path: Path,
+    event_log: Path,
+) -> subprocess.Popen[str]:
     root.mkdir(parents=True, exist_ok=True)
     command = [
         str(Path(args.local_build_dir) / "gridflux-gridftp-server"),
@@ -289,16 +383,37 @@ def start_server(args: argparse.Namespace, root: Path, control_port: int, data_p
         "--data-port-base",
         str(data_port_base),
         "--connections",
-        str(connections),
+        str(case.connections),
         "--chunk-size",
         str(args.chunk_size),
         "--buffer-size",
         str(args.buffer_size),
         "--checksum",
-        checksum,
+        case.checksum,
         "--checksum-backend",
         args.checksum_backend,
+        "--file-io-backend",
+        case.file_io_backend,
+        "--file-io-queue-depth",
+        str(case.file_io_queue_depth),
+        "--file-io-batch-size",
+        str(case.file_io_batch_size),
+        "--event-log",
+        str(event_log),
     ]
+    if case.tls_mode == "required":
+        command.extend(
+            [
+                "--tls-mode",
+                "required",
+                "--tls-cert-file",
+                args._tls_cert_file,
+                "--tls-key-file",
+                args._tls_key_file,
+            ]
+        )
+    if case.data_tls_mode == "required":
+        command.extend(["--data-tls-mode", "required"])
     handle = log_path.open("w", encoding="utf-8")
     process = subprocess.Popen(command, stdout=handle, stderr=subprocess.STDOUT, text=True)
     handle.close()
@@ -395,6 +510,11 @@ def build_cases(args: argparse.Namespace) -> list[Case]:
     file_parallelisms = parse_int_list(args.file_parallelisms)
     connections = parse_int_list(args.connections)
     checksums = parse_csv_list(args.checksums)
+    tls_modes = parse_csv_list(args.tls_modes)
+    data_tls_modes = parse_csv_list(args.data_tls_modes)
+    file_io_backends = parse_csv_list(args.file_io_backends)
+    queue_depths = parse_int_list(args.file_io_queue_depths)
+    batch_sizes = parse_int_list(args.file_io_batch_sizes) if args.file_io_batch_sizes else []
     resumes = [False, True] if args.resume else [False]
     cases: list[Case] = []
     index = 0
@@ -414,19 +534,62 @@ def build_cases(args: argparse.Namespace) -> list[Case]:
                         for checksum in checksums:
                             if checksum not in {"crc32c", "none"}:
                                 raise SystemExit(f"invalid checksum: {checksum}")
-                            for repeat_index in range(args.repeat):
-                                cases.append(Case(index, dataset, direction, resume, repeat_index, fp, connection, checksum))
-                                index += 1
+                            for tls_mode in tls_modes:
+                                if tls_mode not in {"off", "required"}:
+                                    raise SystemExit(f"invalid tls mode: {tls_mode}")
+                                for data_tls_mode in data_tls_modes:
+                                    if data_tls_mode not in {"off", "required"}:
+                                        raise SystemExit(f"invalid data TLS mode: {data_tls_mode}")
+                                    if tls_mode == "off" and data_tls_mode == "required":
+                                        continue
+                                    for file_io_backend in file_io_backends:
+                                        if file_io_backend not in {"posix", "io_uring"}:
+                                            raise SystemExit(f"invalid file IO backend: {file_io_backend}")
+                                        for queue_depth in queue_depths:
+                                            if queue_depth <= 0 or queue_depth > 256:
+                                                raise SystemExit("--file-io-queue-depths values must be in range 1..256")
+                                            selected_batch_sizes = batch_sizes or [queue_depth]
+                                            for batch_size in selected_batch_sizes:
+                                                if batch_size <= 0 or batch_size > 256:
+                                                    raise SystemExit("--file-io-batch-sizes values must be in range 1..256")
+                                                for repeat_index in range(args.repeat):
+                                                    cases.append(
+                                                        Case(
+                                                            index,
+                                                            dataset,
+                                                            direction,
+                                                            resume,
+                                                            repeat_index,
+                                                            fp,
+                                                            connection,
+                                                            checksum,
+                                                            tls_mode,
+                                                            data_tls_mode,
+                                                            file_io_backend,
+                                                            queue_depth,
+                                                            batch_size,
+                                                        )
+                                                    )
+                                                    index += 1
     return cases
 
 
 def run_case(args: argparse.Namespace, case: Case, run_id: str, output_dir: Path) -> dict[str, str]:
-    case_id = f"{run_id}_case{case.index:04d}_{case.direction}_{case.dataset}_fp{case.file_parallelism}_{case.checksum}_r{case.repeat_index}"
+    case_id = (
+        f"{run_id}_case{case.index:04d}_{case.direction}_{case.dataset}_fp{case.file_parallelism}_"
+        f"{case.checksum}_tls{case.tls_mode}_dtls{case.data_tls_mode}_fio{case.file_io_backend}_"
+        f"qd{case.file_io_queue_depth}_r{case.repeat_index}"
+    )
     local_root = Path(f"/tmp/gridflux-tree-matrix-root-{case_id}")
     remote_source = f"/tmp/gridflux-tree-matrix-source-{case_id}"
     remote_dest = f"/tmp/gridflux-tree-matrix-dest-{case_id}"
     server_log = output_dir / f"{case_id}_server.log"
     client_log = output_dir / f"{case_id}_client.log"
+    event_dir = Path(args.event_log_dir) if args.event_log_dir else output_dir
+    event_dir.mkdir(parents=True, exist_ok=True)
+    server_event_log = event_dir / f"{case_id}_server_events.jsonl"
+    client_event_log = event_dir / f"{case_id}_client_events.jsonl"
+    remote_event_log = f"/tmp/{case_id}_tree_events.jsonl"
     summary_json = output_dir / f"{case_id}_tree_summary.json"
     remote_summary_json = f"/tmp/{case_id}_tree_summary.json"
     row = {field: "" for field in CSV_FIELDS}
@@ -441,8 +604,16 @@ def run_case(args: argparse.Namespace, case: Case, run_id: str, output_dir: Path
             "connections": str(case.connections),
             "checksum_algorithm": case.checksum,
             "checksum_backend": args.checksum_backend,
+            "tls_mode": case.tls_mode,
+            "data_tls_mode": case.data_tls_mode,
+            "file_io_backend": case.file_io_backend,
+            "file_io_queue_depth": str(case.file_io_queue_depth),
+            "file_io_batch_size": str(case.file_io_batch_size),
             "server_log": str(server_log),
             "client_log": str(client_log),
+            "event_log": f"{server_event_log};{client_event_log}",
+            "server_event_log": str(server_event_log),
+            "client_event_log": str(client_event_log),
             "json_summary": str(summary_json),
             "control_port": str(control_port(args, case)),
             "data_port_base": str(data_port_base(args, case)),
@@ -453,11 +624,19 @@ def run_case(args: argparse.Namespace, case: Case, run_id: str, output_dir: Path
     )
     process: subprocess.Popen[str] | None = None
     try:
-        cleanup_remote(args.remote, remote_source, remote_dest, remote_summary_json)
+        cleanup_remote(args.remote, remote_source, remote_dest, remote_summary_json, remote_event_log)
         if local_root.exists():
             subprocess.run(["rm", "-rf", str(local_root)], check=False)
         local_root.mkdir(parents=True)
-        process = start_server(args, local_root, control_port(args, case), data_port_base(args, case), server_log, case.connections, case.checksum)
+        process = start_server(
+            args,
+            case,
+            local_root,
+            control_port(args, case),
+            data_port_base(args, case),
+            server_log,
+            server_event_log,
+        )
         start = time.monotonic()
         if case.direction == "upload":
             source_hash, file_count, total_bytes = make_remote_tree(args.remote, remote_source, case.dataset)
@@ -475,13 +654,29 @@ def run_case(args: argparse.Namespace, case: Case, run_id: str, output_dir: Path
                 str(case.connections),
                 "--file-parallelism",
                 str(case.file_parallelism),
+                "--chunk-size",
+                str(args.chunk_size),
+                "--buffer-size",
+                str(args.buffer_size),
                 "--checksum",
                 case.checksum,
                 "--checksum-backend",
                 args.checksum_backend,
+                "--file-io-backend",
+                case.file_io_backend,
+                "--file-io-queue-depth",
+                str(case.file_io_queue_depth),
+                "--file-io-batch-size",
+                str(case.file_io_batch_size),
+                "--event-log",
+                remote_event_log,
                 "--json-summary",
                 remote_summary_json,
             ]
+            if case.tls_mode == "required":
+                command.extend(["--tls-mode", "required", "--tls-ca-file", args._remote_tls_ca_file])
+            if case.data_tls_mode == "required":
+                command.extend(["--data-tls-mode", "required"])
             if case.resume:
                 partial = [*command, "--max-files", "1"]
                 run_tree_command(args.remote, partial, client_log, check=False, timeout=args.case_timeout)
@@ -506,13 +701,29 @@ def run_case(args: argparse.Namespace, case: Case, run_id: str, output_dir: Path
                 str(case.connections),
                 "--file-parallelism",
                 str(case.file_parallelism),
+                "--chunk-size",
+                str(args.chunk_size),
+                "--buffer-size",
+                str(args.buffer_size),
                 "--checksum",
                 case.checksum,
                 "--checksum-backend",
                 args.checksum_backend,
+                "--file-io-backend",
+                case.file_io_backend,
+                "--file-io-queue-depth",
+                str(case.file_io_queue_depth),
+                "--file-io-batch-size",
+                str(case.file_io_batch_size),
+                "--event-log",
+                remote_event_log,
                 "--json-summary",
                 remote_summary_json,
             ]
+            if case.tls_mode == "required":
+                command.extend(["--tls-mode", "required", "--tls-ca-file", args._remote_tls_ca_file])
+            if case.data_tls_mode == "required":
+                command.extend(["--data-tls-mode", "required"])
             if case.resume:
                 partial = [*command, "--max-files", "1"]
                 run_tree_command(args.remote, partial, client_log, check=False, timeout=args.case_timeout)
@@ -542,12 +753,16 @@ def run_case(args: argparse.Namespace, case: Case, run_id: str, output_dir: Path
                 "result": "pass" if source_hash == dest_hash else "fail",
             }
         )
+        fetch_remote_file(args.remote, remote_event_log, client_event_log)
+        row["event_error_code_counts"] = event_error_code_counts(server_event_log, client_event_log)
         if source_hash != dest_hash:
             row["error"] = "tree hash mismatch"
     except Exception as exc:  # noqa: BLE001
         row["result"] = "fail"
         row["error"] = str(exc).replace("\n", " ")[:1000]
         fetch_remote_file(args.remote, remote_summary_json, summary_json)
+        fetch_remote_file(args.remote, remote_event_log, client_event_log)
+        row["event_error_code_counts"] = event_error_code_counts(server_event_log, client_event_log)
         summary = load_json_summary(summary_json)
         if summary:
             row["error_message"] = summary.get("error_message", row["error"])
@@ -560,7 +775,7 @@ def run_case(args: argparse.Namespace, case: Case, run_id: str, output_dir: Path
             except Exception as exc:  # noqa: BLE001
                 row["result"] = "fail"
                 row["error"] = (row.get("error", "") + " stop_server=" + str(exc)).strip()
-        cleanup_remote(args.remote, remote_source, remote_dest, remote_summary_json)
+        cleanup_remote(args.remote, remote_source, remote_dest, remote_summary_json, remote_event_log)
     return row
 
 
@@ -638,6 +853,12 @@ def main() -> int:
     parser.add_argument("--connections", default="2")
     parser.add_argument("--checksums", default="crc32c")
     parser.add_argument("--checksum-backend", choices=["auto", "software", "hardware"], default="auto")
+    parser.add_argument("--tls-modes", default="off")
+    parser.add_argument("--data-tls-modes", default="off")
+    parser.add_argument("--file-io-backends", default="posix")
+    parser.add_argument("--file-io-queue-depths", default="1")
+    parser.add_argument("--file-io-batch-sizes", default="")
+    parser.add_argument("--event-log-dir", default="")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--chunk-size", type=int, default=1048576)
@@ -651,6 +872,21 @@ def main() -> int:
     raw_path = output_dir / f"{run_id}_gridftp-tree-private-matrix.csv"
     summary_path = output_dir / f"{run_id}_gridftp-tree-private-matrix-summary.csv"
     cases = build_cases(args)
+    tls_tempdir: tempfile.TemporaryDirectory[str] | None = None
+    args._tls_cert_file = ""
+    args._tls_key_file = ""
+    args._remote_tls_ca_file = ""
+    if any(case.tls_mode == "required" or case.data_tls_mode == "required" for case in cases):
+        tls_tempdir = tempfile.TemporaryDirectory(prefix=f"gridflux-beta1a-tree-tls-{run_id}.")
+        tls_dir = Path(tls_tempdir.name)
+        cert = tls_dir / "cert.pem"
+        key = tls_dir / "key.pem"
+        generate_self_signed_cert(cert, key)
+        remote_ca = f"/tmp/gridflux_beta1a_tree_{run_id}_ca.pem"
+        write_remote_text(args.remote, remote_ca, cert.read_text(encoding="utf-8"))
+        args._tls_cert_file = str(cert)
+        args._tls_key_file = str(key)
+        args._remote_tls_ca_file = remote_ca
     rows: list[dict[str, str]] = []
     try:
         for case in cases:
@@ -672,7 +908,10 @@ def main() -> int:
                 print("remote residual processes:\n" + remote_processes, file=sys.stderr)
             return 2
     finally:
-        pass
+        if getattr(args, "_remote_tls_ca_file", ""):
+            run_remote(args.remote, f"rm -f {shlex.quote(args._remote_tls_ca_file)}", check=False, timeout=30)
+        if tls_tempdir is not None:
+            tls_tempdir.cleanup()
     fail_count = sum(1 for row in rows if row.get("result") != "pass")
     print(f"raw_csv={raw_path}")
     print(f"summary_csv={summary_path}")

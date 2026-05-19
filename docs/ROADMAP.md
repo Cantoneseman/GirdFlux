@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**阶段：** Phase 6E — 完整 alpha 原型收口与长跑验收包（已完成）
+**阶段：** Beta 1A-1 — 私网 readiness matrix 已执行，进入 Beta 1B 方向选择
 
 **已完成：** 项目设计、技术选型、工程规范制定、CMake 工程骨架初始化、GoogleTest 工具链测试、本机与<redacted>二构建验证、GridFTP 源码学习经验整理入设计文档、Phase 1.0 多连接 TCP sink 与本机 loopback 验证、Phase 1.1 性能基线脚本与 loopback smoke matrix、Phase 1.2A offset-aware 单文件传输闭环、Phase 1.2B 文件传输健壮性、Phase 1.3A 文件性能基线自动化、Phase 2A manifest/range-based 断点续传核心、Phase 2B CRC32C chunk checksum 与损坏注入验证、Phase 2C CRC32C backend 自动选择、manifest 批量 flush、恢复统计与 checksum benchmark、Phase 3A GridFTP 风格控制面 STOR 上传与 REST/GFID resume 映射、Phase 3B GridFTP 风格控制面 framed RETR 完整下载、Phase 3C 下载端 manifest/verified_chunks 与 RETR REST/GFID resume、Phase 3D 控制面 SIZE/MDTM/CWD/CDUP/LIST/NLST 与测试工具收敛。
 
@@ -10,7 +10,7 @@
 
 **未开始：** 系统级文件传输调优、raw FTP stream STOR/RETR、GridFTP GSI、MLST/MLSD、网络 io_uring、生产级目录同步。
 
-**下一步：** 进入 alpha 后续评审：决定 beta readiness、长稳测试时长、生产化部署/安全边界和 100G 专项验证计划；默认仍保持 anonymous、`tls-mode=off`、`data-tls-mode=off`、POSIX backend、full final verify 和现有 framed STOR/RETR 语义。
+**下一步：** 用 Beta 1A 私网矩阵和 host/link/storage baseline 判断 100G readiness：单文件/目录、TLS off/on、checksum crc32c/none、POSIX/io_uring 的主要瓶颈分别在哪里；默认仍保持 anonymous、`tls-mode=off`、`data-tls-mode=off`、POSIX backend、full final verify 和现有 framed STOR/RETR 语义。
 
 ---
 
@@ -378,6 +378,15 @@
 - RC 输出 Markdown、JSON、日志目录和 artifact manifest，最终报告包含默认策略摘要、失败步骤、日志路径、artifact 路径和 sync/verify 摘要。
 
 状态：已完成。本机与<redacted>二 Debug full CTest 均为 `181/181 passed`；本机与<redacted>二 `build-io-uring-real` Release full CTest 均为 `181/181 passed`，真实 io_uring smoke 为 `Passed`。Quick/full alpha gate 均通过。Alpha release candidate 通过，JSON 为 `tools/perf/results/20260519T030518Z_alpha-release-candidate.json`，artifact manifest 为 `tools/perf/results/20260519T030518Z_alpha-release-candidate-artifacts.json`；RC long soak `iterations=5`、`fail_count=0`，artifact freshness `checked=1080 stale=0 status=pass`，artifact sync/verify `missing=0`、`mismatch=0`、`status=pass`。默认策略和传输语义不变；本阶段只做交付包、长跑验收和文档收口。
+
+**Beta 1A 性能专项与 100G readiness 诊断**
+
+- 新增 `tools/perf/run_beta1a_private_readiness.py`，编排 host baseline、单文件 GridFTP-like private matrix、tree private matrix 和 Beta 1A Markdown 分析报告。
+- 扩展单文件 private matrix：支持 `--tls-modes off|required`、`--data-tls-modes off|required`、`--event-log-dir`，raw/summary CSV 增加 TLS/data TLS/event log 维度；TLS 仅覆盖 STOR/RETR framed file data，LIST/NLST listing data 不纳入性能结论。
+- 扩展 tree private matrix：支持 TLS/data TLS、POSIX/io_uring backend 和 event log 维度；tree clients 新增 file IO 参数透传，但默认仍为 POSIX。
+- 新增 `tools/perf/analyze_beta1a.py` 和 `docs/perf/BETA1A_100G_READINESS.md`，以 median 口径输出 host/link/storage baseline、单文件/目录矩阵、TLS overhead、POSIX/io_uring delta、checksum/resume 指标和 100G readiness gate。
+
+状态：Beta 1A-1 已执行。两台<redacted> Debug full CTest 182/182 passed；两台<redacted> `build-io-uring-real` Release full CTest 182/182 passed，真实 io_uring smoke Passed。Readiness smoke 通过：single-file 72/72 pass，tree 72/72 pass，host baseline pass。Resume 子矩阵 64/64 pass。Full 4GiB/repeat=3 未执行，原因是耗时较高且先暴露了 `STOR resume + data TLS required` readiness blocker。Quick/full alpha gate、Alpha RC、public hygiene、artifact verify 均通过。
 
 **后续候选**
 

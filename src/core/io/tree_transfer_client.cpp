@@ -1196,6 +1196,7 @@ common::Status processUploadFile(SchedulerState* state, std::size_t index,
     fileOptions.transferId = effectiveTransferId;
     fileOptions.checksumAlgorithm = options.checksumAlgorithm;
     fileOptions.checksumBackend = options.checksumBackend;
+    fileOptions.fileIo = options.fileIo;
     fileOptions.dataTls = options.tls;
     fileOptions.dataTls.mode = options.dataTlsMode == core::io::DataTlsMode::Required
                                    ? core::io::TlsMode::Required
@@ -1328,6 +1329,7 @@ common::Status processDownloadFile(SchedulerState* state, std::size_t index,
     fileOptions.transferId = effectiveTransferId;
     fileOptions.checksumAlgorithm = options.checksumAlgorithm;
     fileOptions.checksumBackend = options.checksumBackend;
+    fileOptions.fileIo = options.fileIo;
     fileOptions.dataTls = options.tls;
     fileOptions.dataTls.mode = options.dataTlsMode == core::io::DataTlsMode::Required
                                    ? core::io::TlsMode::Required

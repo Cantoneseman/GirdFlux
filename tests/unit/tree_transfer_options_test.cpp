@@ -6,6 +6,7 @@
 #include <fstream>
 
 #include "gridflux/core/io/tls_socket.h"
+#include "gridflux/storage/file_io.h"
 
 TEST(TreeTransferOptionsTest, ParsesUploadOptions) {
     const std::filesystem::path root =
@@ -45,7 +46,17 @@ TEST(TreeTransferOptionsTest, ParsesUploadOptions) {
                           "--json-summary",
                           "/tmp/tree-summary.json",
                           "--event-log",
-                          "/tmp/tree-events.jsonl"};
+                          "/tmp/tree-events.jsonl",
+                          "--file-io-backend",
+                          "io_uring",
+                          "--file-io-buffer-size",
+                          "262144",
+                          "--file-io-queue-depth",
+                          "4",
+                          "--file-io-advice",
+                          "sequential",
+                          "--posix-write-strategy",
+                          "coalesced"};
     auto parsed = gridflux::config::parseTreeTransferOptions(
         static_cast<int>(std::size(argv)), argv, gridflux::config::TreeTransferRole::Upload);
     ASSERT_TRUE(parsed.isOk()) << parsed.status().message();
@@ -61,6 +72,13 @@ TEST(TreeTransferOptionsTest, ParsesUploadOptions) {
     EXPECT_EQ(parsed.value().user, "alice");
     EXPECT_EQ(parsed.value().jsonSummaryPath, "/tmp/tree-summary.json");
     EXPECT_EQ(parsed.value().eventLogPath, "/tmp/tree-events.jsonl");
+    EXPECT_EQ(parsed.value().fileIo.backend, gridflux::storage::FileIoBackendKind::IoUring);
+    EXPECT_EQ(parsed.value().fileIo.bufferSize, 262144U);
+    EXPECT_EQ(parsed.value().fileIo.queueDepth, 4U);
+    EXPECT_EQ(parsed.value().fileIo.batchSize, 4U);
+    EXPECT_EQ(parsed.value().fileIo.advice, gridflux::storage::FileIoAdvice::Sequential);
+    EXPECT_EQ(parsed.value().fileIo.posixWriteStrategy,
+              gridflux::storage::PosixWriteStrategy::Coalesced);
     std::filesystem::remove_all(root);
 }
 
@@ -206,5 +224,24 @@ TEST(TreeTransferOptionsTest, RejectsInvalidOptions) {
                                 "--dest-dir", "remote", "--data-tls-mode", "maybe"};
     EXPECT_FALSE(gridflux::config::parseTreeTransferOptions(
                      7, badDataTls, gridflux::config::TreeTransferRole::Upload)
+                     .isOk());
+
+    const char* badBackend[] = {"gridflux-tree-upload-client", "--source-dir", "/tmp",
+                                "--dest-dir", "remote", "--file-io-backend", "mmap"};
+    EXPECT_FALSE(gridflux::config::parseTreeTransferOptions(
+                     7, badBackend, gridflux::config::TreeTransferRole::Upload)
+                     .isOk());
+
+    const char* badQueueDepth[] = {"gridflux-tree-upload-client", "--source-dir", "/tmp",
+                                   "--dest-dir", "remote", "--file-io-queue-depth", "0"};
+    EXPECT_FALSE(gridflux::config::parseTreeTransferOptions(
+                     7, badQueueDepth, gridflux::config::TreeTransferRole::Upload)
+                     .isOk());
+
+    const char* badCoalesced[] = {"gridflux-tree-upload-client", "--source-dir", "/tmp",
+                                  "--dest-dir", "remote", "--posix-write-strategy",
+                                  "coalesced"};
+    EXPECT_FALSE(gridflux::config::parseTreeTransferOptions(
+                     7, badCoalesced, gridflux::config::TreeTransferRole::Upload)
                      .isOk());
 }

@@ -15,19 +15,20 @@
 | [ARCHITECTURE_ALPHA.md](docs/ARCHITECTURE_ALPHA.md) | 完整 alpha 原型架构：控制面、framed data、manifest、目录、安全和 release gate |
 | [SECURITY.md](docs/SECURITY.md) | Phase 6A token auth、Phase 6C control TLS 与 Phase 6D STOR/RETR data TLS alpha 安全边界 |
 | [OBSERVABILITY.md](docs/OBSERVABILITY.md) | Phase 6B/6C/6D JSONL event log、稳定错误码、demo/gate/soak 排障入口 |
+| [BETA1A_100G_READINESS.md](docs/perf/BETA1A_100G_READINESS.md) | Beta 1A 私网性能专项与 100G readiness 诊断报告 |
 | [ALPHA_LIMITATIONS.md](docs/release/ALPHA_LIMITATIONS.md) | 完整 alpha 限制清单与后续路线 |
 
 新接手请按 DESIGN → ROADMAP → ENGINEERING 顺序阅读。
 
 ## 项目状态
 
-**当前阶段：** Phase 6E — 完整 alpha 原型收口与长跑验收包（已完成）
+**当前阶段：** Beta 1A-1 — 私网 readiness matrix 已执行，进入 Beta 1B 方向选择
 
 **技术栈：** C++20 · epoll 网络基线 · POSIX file IO 默认后端 · 可选 file-IO-only io_uring · CMake · Linux only
 
 **目标场景：** 专线 TB 级（主线）· 虚拟网络 · 广域网
 
-**下一步：** 进入 alpha 后续评审：决定 beta readiness、长稳测试时长、生产化部署/安全边界和 100G 专项验证计划；默认仍保持 anonymous、`tls-mode=off`、`data-tls-mode=off`、POSIX backend、full final verify 和现有 framed STOR/RETR 语义。
+**下一步：** 基于 Beta 1A-1 数据选择 Beta 1B：优先修复 `STOR resume + data TLS required` blocker，并围绕 STOR temp write/writeback、RETR sender/receiver coupling、私网/磁盘基线继续做专项优化；默认仍保持 anonymous、`tls-mode=off`、`data-tls-mode=off`、POSIX backend、full final verify 和现有 framed STOR/RETR 语义。
 
 ## AI 协作
 
