@@ -54,6 +54,8 @@ Stable alpha error strings:
 | `auth_failed` | USER/PASS or token auth failed |
 | `tls_required` | Plain control connection attempted against TLS-required listener |
 | `tls_failed` | TLS handshake, certificate, key, or CA validation failed |
+| `data_tls_required` | STOR/RETR data TLS was required but not negotiated |
+| `data_tls_failed` | Framed file data TLS handshake or IO failed |
 | `path_rejected` | Path validation rejected the request |
 | `manifest_corrupt` | Manifest load/CRC/metadata validation failed |
 | `checksum_mismatch` | Chunk or file checksum validation failed |
@@ -103,7 +105,9 @@ must not contain token values, passwords, private keys, cookies, or local
 error codes. TLS events may record mode/result and `tls_required`/`tls_failed`,
 but never certificate private-key material or token contents.
 
-Phase 6B/6C observability remains alpha only. Phase 6C TLS events cover the
-control connection; data-channel encryption, GSI, Prometheus, a metrics server,
+Phase 6B/6C/6D observability remains alpha only. Phase 6C TLS events cover the
+control connection. Phase 6D data TLS events cover STOR/RETR framed file data
+sockets. LIST/NLST listing data remains plaintext and only its control command
+path is covered by control-plane TLS. GSI, Prometheus, a metrics server,
 production auth, raw FTP STOR/RETR, and 100G performance tuning remain out of
 scope.

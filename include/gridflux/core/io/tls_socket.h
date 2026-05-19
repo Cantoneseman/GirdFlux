@@ -17,6 +17,11 @@ enum class TlsMode {
     Required,
 };
 
+enum class DataTlsMode {
+    Off,
+    Required,
+};
+
 struct TlsConfig {
     TlsMode mode = TlsMode::Off;
     std::string certFile;
@@ -26,8 +31,15 @@ struct TlsConfig {
 
 [[nodiscard]] common::Result<TlsMode> parseTlsMode(std::string_view value);
 [[nodiscard]] const char* tlsModeName(TlsMode mode) noexcept;
+[[nodiscard]] common::Result<DataTlsMode> parseDataTlsMode(std::string_view value);
+[[nodiscard]] const char* dataTlsModeName(DataTlsMode mode) noexcept;
 [[nodiscard]] common::Status validateTlsServerConfig(const TlsConfig& config);
 [[nodiscard]] common::Status validateTlsClientConfig(const TlsConfig& config);
+[[nodiscard]] common::Status validateDataTlsServerConfig(TlsMode controlMode,
+                                                         DataTlsMode dataMode,
+                                                         const TlsConfig& tlsConfig);
+[[nodiscard]] common::Status validateDataTlsClientConfig(DataTlsMode dataMode,
+                                                         const TlsConfig& tlsConfig);
 [[nodiscard]] bool tlsSupportAvailable() noexcept;
 
 class TlsConnection {

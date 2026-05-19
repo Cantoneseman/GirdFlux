@@ -209,6 +209,12 @@ common::Result<TreeTransferOptions> parseTreeTransferOptions(int argc, const cha
                 return common::Status::invalidArgument("--tls-ca-file must not be empty");
             }
             options.tls.caFile = std::string(value);
+        } else if (option == "--data-tls-mode") {
+            auto parsed = core::io::parseDataTlsMode(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.dataTlsMode = parsed.value();
         } else {
             return common::Status::invalidArgument("unknown option: " + std::string(option));
         }
@@ -263,6 +269,11 @@ common::Result<TreeTransferOptions> parseTreeTransferOptions(int argc, const cha
     if (!tlsStatus.isOk()) {
         return tlsStatus;
     }
+    const common::Status dataTlsStatus =
+        core::io::validateDataTlsClientConfig(options.dataTlsMode, options.tls);
+    if (!dataTlsStatus.isOk()) {
+        return dataTlsStatus;
+    }
     return options;
 }
 
@@ -277,7 +288,8 @@ std::string treeTransferUsage(const char* programName, TreeTransferRole role) {
            "[--checksum-backend <auto|software|hardware>] [--resume] [--max-files <N>] "
            "[--auth-mode anonymous|token] [--auth-token-file <path>] "
            "[--user <name>] [--password <password>] [--json-summary <path>] "
-           "[--event-log <path>] [--tls-mode off|required] [--tls-ca-file <path>]";
+           "[--event-log <path>] [--tls-mode off|required] [--tls-ca-file <path>] "
+           "[--data-tls-mode off|required]";
 }
 
 }  // namespace gridflux::config

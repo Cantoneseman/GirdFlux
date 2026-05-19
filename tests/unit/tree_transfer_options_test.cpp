@@ -57,6 +57,7 @@ TEST(TreeTransferOptionsTest, ParsesUploadOptions) {
     EXPECT_EQ(parsed.value().checksumAlgorithm, gridflux::checksum::ChecksumAlgorithm::None);
     EXPECT_EQ(parsed.value().authMode, "anonymous");
     EXPECT_EQ(parsed.value().tls.mode, gridflux::core::io::TlsMode::Off);
+    EXPECT_EQ(parsed.value().dataTlsMode, gridflux::core::io::DataTlsMode::Off);
     EXPECT_EQ(parsed.value().user, "alice");
     EXPECT_EQ(parsed.value().jsonSummaryPath, "/tmp/tree-summary.json");
     EXPECT_EQ(parsed.value().eventLogPath, "/tmp/tree-events.jsonl");
@@ -78,13 +79,14 @@ TEST(TreeTransferOptionsTest, ParsesTlsClientOptions) {
     const std::string caText = ca.string();
     const char* argv[] = {"gridflux-tree-upload-client", "--source-dir", rootText.c_str(),
                           "--dest-dir", "remote", "--tls-mode", "required",
-                          "--tls-ca-file", caText.c_str()};
+                          "--tls-ca-file", caText.c_str(), "--data-tls-mode", "required"};
     auto parsed = gridflux::config::parseTreeTransferOptions(
         static_cast<int>(std::size(argv)), argv, gridflux::config::TreeTransferRole::Upload);
     if (gridflux::core::io::tlsSupportAvailable()) {
         ASSERT_TRUE(parsed.isOk()) << parsed.status().message();
         EXPECT_EQ(parsed.value().tls.mode, gridflux::core::io::TlsMode::Required);
         EXPECT_EQ(parsed.value().tls.caFile, caText);
+        EXPECT_EQ(parsed.value().dataTlsMode, gridflux::core::io::DataTlsMode::Required);
     } else {
         EXPECT_FALSE(parsed.isOk());
     }
@@ -198,5 +200,11 @@ TEST(TreeTransferOptionsTest, RejectsInvalidOptions) {
                              "--dest-dir", "remote", "--auth-mode", "oauth"};
     EXPECT_FALSE(gridflux::config::parseTreeTransferOptions(
                      7, badAuth, gridflux::config::TreeTransferRole::Upload)
+                     .isOk());
+
+    const char* badDataTls[] = {"gridflux-tree-upload-client", "--source-dir", "/tmp",
+                                "--dest-dir", "remote", "--data-tls-mode", "maybe"};
+    EXPECT_FALSE(gridflux::config::parseTreeTransferOptions(
+                     7, badDataTls, gridflux::config::TreeTransferRole::Upload)
                      .isOk());
 }

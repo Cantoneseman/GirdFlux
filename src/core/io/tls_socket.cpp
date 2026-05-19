@@ -103,6 +103,26 @@ const char* tlsModeName(TlsMode mode) noexcept {
     return "off";
 }
 
+common::Result<DataTlsMode> parseDataTlsMode(std::string_view value) {
+    if (value == "off") {
+        return DataTlsMode::Off;
+    }
+    if (value == "required") {
+        return DataTlsMode::Required;
+    }
+    return common::Status::invalidArgument("--data-tls-mode must be off or required");
+}
+
+const char* dataTlsModeName(DataTlsMode mode) noexcept {
+    switch (mode) {
+        case DataTlsMode::Off:
+            return "off";
+        case DataTlsMode::Required:
+            return "required";
+    }
+    return "off";
+}
+
 bool tlsSupportAvailable() noexcept { return true; }
 
 common::Status validateTlsServerConfig(const TlsConfig& config) {
@@ -146,6 +166,29 @@ common::Status validateTlsClientConfig(const TlsConfig& config) {
         return requireRegularReadableFile(config.caFile, "TLS CA");
     }
     return common::Status::ok();
+}
+
+common::Status validateDataTlsServerConfig(TlsMode controlMode, DataTlsMode dataMode,
+                                           const TlsConfig& tlsConfig) {
+    if (dataMode == DataTlsMode::Off) {
+        return common::Status::ok();
+    }
+    if (controlMode != TlsMode::Required) {
+        return common::Status::invalidArgument(
+            "--data-tls-mode required requires --tls-mode required");
+    }
+    return validateTlsServerConfig(tlsConfig);
+}
+
+common::Status validateDataTlsClientConfig(DataTlsMode dataMode, const TlsConfig& tlsConfig) {
+    if (dataMode == DataTlsMode::Off) {
+        return common::Status::ok();
+    }
+    TlsConfig clientConfig = tlsConfig;
+    clientConfig.mode = TlsMode::Required;
+    clientConfig.certFile.clear();
+    clientConfig.keyFile.clear();
+    return validateTlsClientConfig(clientConfig);
 }
 
 struct TlsConnection::Impl {

@@ -2,7 +2,11 @@
 
 #include <gtest/gtest.h>
 
+#include <filesystem>
+#include <fstream>
+
 #include "gridflux/checksum/checksum.h"
+#include "gridflux/core/io/tls_socket.h"
 #include "gridflux/core/session/commit_sync_policy.h"
 #include "gridflux/core/session/final_verify_policy.h"
 #include "gridflux/core/session/manifest_flush_policy.h"
@@ -48,6 +52,7 @@ TEST(FileTransferOptionsTest, AppliesServerDefaults) {
     EXPECT_EQ(result.value().fileIo.posixWriteStrategy,
               gridflux::storage::PosixWriteStrategy::Auto);
     EXPECT_TRUE(result.value().eventLogPath.empty());
+    EXPECT_EQ(result.value().dataTlsMode, gridflux::core::io::DataTlsMode::Off);
 }
 
 TEST(FileTransferOptionsTest, AppliesClientDefaults) {
@@ -71,6 +76,13 @@ TEST(FileTransferOptionsTest, AppliesClientDefaults) {
 }
 
 TEST(FileTransferOptionsTest, ParsesClientOptions) {
+    const std::filesystem::path ca =
+        std::filesystem::temp_directory_path() / "gridflux-file-client-ca.pem";
+    {
+        std::ofstream output(ca);
+        output << "not-a-real-ca\n";
+    }
+    const std::string caText = ca.string();
     const auto result = parse({"gridflux-file-client",
                                "--host",
                                "<redacted>",
@@ -104,12 +116,21 @@ TEST(FileTransferOptionsTest, ParsesClientOptions) {
                                "direct",
                                "--event-log",
                                "/tmp/gridflux-file-client-events.jsonl",
+                               "--data-tls-mode",
+                               "required",
+                               "--tls-ca-file",
+                               caText.c_str(),
                                "--corrupt-chunk",
                                "0",
-                               "--duplicate-corrupt-chunk",
-                               "3"},
-                              gridflux::config::FileTransferRole::Client);
+                              "--duplicate-corrupt-chunk",
+                              "3"},
+                             gridflux::config::FileTransferRole::Client);
 
+    if (!gridflux::core::io::tlsSupportAvailable()) {
+        EXPECT_FALSE(result.isOk());
+        std::filesystem::remove(ca);
+        return;
+    }
     ASSERT_TRUE(result.isOk()) << result.status().message();
     EXPECT_EQ(result.value().host, "<redacted>");
     EXPECT_EQ(result.value().port, 19310);
@@ -132,6 +153,9 @@ TEST(FileTransferOptionsTest, ParsesClientOptions) {
     EXPECT_EQ(result.value().fileIo.posixWriteStrategy,
               gridflux::storage::PosixWriteStrategy::Direct);
     EXPECT_EQ(result.value().eventLogPath, "/tmp/gridflux-file-client-events.jsonl");
+    EXPECT_EQ(result.value().dataTlsMode, gridflux::core::io::DataTlsMode::Required);
+    EXPECT_EQ(result.value().dataTls.caFile, caText);
+    std::filesystem::remove(ca);
 }
 
 TEST(FileTransferOptionsTest, ParsesServerFlags) {
@@ -305,6 +329,17 @@ TEST(FileTransferOptionsTest, RejectsInvalidNumericOptions) {
                      .isOk());
     EXPECT_FALSE(parse({"gridflux-file-server", "--output", "/tmp/out", "--posix-write-strategy",
                         "coalesced"},
+                       gridflux::config::FileTransferRole::Server)
+                     .isOk());
+    EXPECT_FALSE(parse({"gridflux-file-client", "--input", "/tmp/in", "--data-tls-mode",
+                        "sometimes"},
+                       gridflux::config::FileTransferRole::Client)
+                     .isOk());
+    EXPECT_FALSE(parse({"gridflux-file-client", "--input", "/tmp/in", "--data-tls-mode"},
+                       gridflux::config::FileTransferRole::Client)
+                     .isOk());
+    EXPECT_FALSE(parse({"gridflux-file-server", "--output", "/tmp/out", "--data-tls-mode",
+                        "required"},
                        gridflux::config::FileTransferRole::Server)
                      .isOk());
 }

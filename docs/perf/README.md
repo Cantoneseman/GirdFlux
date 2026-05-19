@@ -924,3 +924,30 @@ timestamp,side,operation,bytes,iterations,buffer_size,preallocate,file_io_backen
 ```
 
 Storage bench wrapper 同时生成 `*-summary.csv`，按 side/operation/bytes/buffer/preallocate/file_io_backend/file_io_queue_depth/file_io_batch_size/file_io_advice 分组统计 throughput/elapsed 的 min、median、max。Phase 4I 起 summary 还聚合 io_uring submit/wait/completion/SQE/partial/retry/avg bytes per SQE 的 min、median、max。
+
+## Phase 6D Data TLS Smoke
+
+Phase 6D data TLS is a security smoke path, not a performance matrix. It wraps
+only STOR/RETR framed file data sockets; LIST/NLST listing data remains
+plaintext metadata.
+
+Loopback:
+
+```bash
+python3 tools/test/run_gridftp_data_tls_smoke.py --build-dir build
+```
+
+Private:
+
+```bash
+python3 tools/test/run_gridftp_data_tls_private_once.py \
+  --remote <remote> \
+  --server-host <server-host> \
+  --local-build-dir /root/projects/GridFlux/build \
+  --remote-build-dir <remote-root>/build \
+  --output-dir tools/perf/results
+```
+
+The smoke verifies STOR/RETR data TLS, plaintext data-client failure, tree
+upload/download over data TLS, and LIST/NLST compatibility with the existing
+plaintext listing data channel.

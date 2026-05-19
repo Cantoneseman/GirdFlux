@@ -4,6 +4,7 @@
 #include <limits>
 #include <string_view>
 
+#include "gridflux/core/io/tls_socket.h"
 #include "gridflux/core/metrics/event_log.h"
 
 namespace gridflux::config {
@@ -303,6 +304,28 @@ common::Result<FileTransferOptions> parseFileTransferOptions(int argc, const cha
             continue;
         }
 
+        if (option == "--data-tls-mode") {
+            auto parsed = core::io::parseDataTlsMode(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.dataTlsMode = parsed.value();
+            options.dataTls.mode = parsed.value() == core::io::DataTlsMode::Required
+                                       ? core::io::TlsMode::Required
+                                       : core::io::TlsMode::Off;
+            index += 2;
+            continue;
+        }
+
+        if (option == "--tls-ca-file") {
+            if (value.empty()) {
+                return common::Status::invalidArgument("--tls-ca-file must not be empty");
+            }
+            options.dataTls.caFile = std::string(value);
+            index += 2;
+            continue;
+        }
+
         if (option == "--chunk-size") {
             if (role != FileTransferRole::Client) {
                 return common::Status::invalidArgument("--chunk-size is client-only");
@@ -424,6 +447,16 @@ common::Result<FileTransferOptions> parseFileTransferOptions(int argc, const cha
     if (!eventLogStatus.isOk()) {
         return eventLogStatus;
     }
+    if (role == FileTransferRole::Server &&
+        options.dataTlsMode == core::io::DataTlsMode::Required) {
+        return common::Status::invalidArgument(
+            "--data-tls-mode required on receive side is provided by gridflux-gridftp-server");
+    }
+    const common::Status dataTlsStatus =
+        core::io::validateDataTlsClientConfig(options.dataTlsMode, options.dataTls);
+    if (!dataTlsStatus.isOk()) {
+        return dataTlsStatus;
+    }
 
     return options;
 }
@@ -443,7 +476,7 @@ std::string fileTransferUsage(const char* programName, FileTransferRole role) {
                "[--file-io-queue-depth <N>] [--file-io-batch-size <N>] "
                "[--file-io-advice <off|sequential|noreuse|dontneed|sequential_dontneed>] "
                "[--posix-write-strategy <auto|direct|coalesced>] "
-               "[--event-log <path>] "
+               "[--event-log <path>] [--data-tls-mode off|required] [--tls-ca-file <path>] "
                "[--overwrite] "
                "[--keep-partial] [--resume]";
     }
@@ -456,7 +489,7 @@ std::string fileTransferUsage(const char* programName, FileTransferRole role) {
            "[--file-io-queue-depth <N>] [--file-io-batch-size <N>] "
            "[--file-io-advice <off|sequential|noreuse|dontneed|sequential_dontneed>] "
            "[--posix-write-strategy <auto|direct|coalesced>] "
-           "[--event-log <path>] "
+           "[--event-log <path>] [--data-tls-mode off|required] [--tls-ca-file <path>] "
            "[--transfer-id <id>] [--resume] [--max-chunks <N>] "
            "[--corrupt-chunk <chunk-id>] [--duplicate-corrupt-chunk <chunk-id>]";
 }

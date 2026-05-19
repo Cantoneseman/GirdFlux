@@ -2,6 +2,10 @@
 
 #include <gtest/gtest.h>
 
+#include <filesystem>
+#include <fstream>
+
+#include "gridflux/core/io/tls_socket.h"
 #include "gridflux/storage/file_io.h"
 
 namespace {
@@ -37,12 +41,20 @@ TEST(FileDownloadOptionsTest, ParsesRequiredAndDefaults) {
     EXPECT_EQ(parsed.value().fileIo.posixWriteStrategy,
               gridflux::storage::PosixWriteStrategy::Auto);
     EXPECT_TRUE(parsed.value().eventLogPath.empty());
+    EXPECT_EQ(parsed.value().dataTlsMode, gridflux::core::io::DataTlsMode::Off);
     EXPECT_FALSE(parsed.value().overwrite);
     EXPECT_FALSE(parsed.value().resume);
     EXPECT_EQ(parsed.value().maxChunks, 0U);
 }
 
 TEST(FileDownloadOptionsTest, ParsesExplicitOptions) {
+    const std::filesystem::path ca =
+        std::filesystem::temp_directory_path() / "gridflux-download-ca.pem";
+    {
+        std::ofstream output(ca);
+        output << "not-a-real-ca\n";
+    }
+    const std::string caText = ca.string();
     const char* argv[] = {"gridflux-file-download-client",
                           "--host",
                           "<redacted>",
@@ -82,6 +94,10 @@ TEST(FileDownloadOptionsTest, ParsesExplicitOptions) {
                           "coalesced",
                           "--event-log",
                           "/tmp/gridflux-download-events.jsonl",
+                          "--data-tls-mode",
+                          "required",
+                          "--tls-ca-file",
+                          caText.c_str(),
                           "--transfer-id",
                           "download-token",
                           "--resume",
@@ -89,6 +105,11 @@ TEST(FileDownloadOptionsTest, ParsesExplicitOptions) {
                           "3",
                           "--overwrite"};
     auto parsed = parseFileDownloadOptions(static_cast<int>(std::size(argv)), argv);
+    if (!gridflux::core::io::tlsSupportAvailable()) {
+        EXPECT_FALSE(parsed.isOk());
+        std::filesystem::remove(ca);
+        return;
+    }
     ASSERT_TRUE(parsed.isOk()) << parsed.status().message();
     EXPECT_EQ(parsed.value().host, "<redacted>");
     EXPECT_EQ(parsed.value().port, 20300);
@@ -109,9 +130,12 @@ TEST(FileDownloadOptionsTest, ParsesExplicitOptions) {
     EXPECT_EQ(parsed.value().fileIo.posixWriteStrategy,
               gridflux::storage::PosixWriteStrategy::Coalesced);
     EXPECT_EQ(parsed.value().eventLogPath, "/tmp/gridflux-download-events.jsonl");
+    EXPECT_EQ(parsed.value().dataTlsMode, gridflux::core::io::DataTlsMode::Required);
+    EXPECT_EQ(parsed.value().dataTls.caFile, caText);
     EXPECT_TRUE(parsed.value().overwrite);
     EXPECT_TRUE(parsed.value().resume);
     EXPECT_EQ(parsed.value().maxChunks, 3U);
+    std::filesystem::remove(ca);
 }
 
 TEST(FileDownloadOptionsTest, RejectsInvalidOptions) {
@@ -250,6 +274,15 @@ TEST(FileDownloadOptionsTest, RejectsInvalidOptions) {
                                                "--posix-write-strategy",
                                                "coalesced"};
     EXPECT_FALSE(parseFileDownloadOptions(7, badCoalescedWithoutBuffer).isOk());
+
+    const char* badDataTls[] = {"gridflux-file-download-client",
+                                "--output",
+                                "/tmp/out",
+                                "--transfer-id",
+                                "id",
+                                "--data-tls-mode",
+                                "sometimes"};
+    EXPECT_FALSE(parseFileDownloadOptions(7, badDataTls).isOk());
 }
 
 }  // namespace

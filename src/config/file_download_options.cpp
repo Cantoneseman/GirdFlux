@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include "gridflux/checkpoint/transfer_manifest.h"
+#include "gridflux/core/io/tls_socket.h"
 #include "gridflux/core/metrics/event_log.h"
 
 namespace gridflux::config {
@@ -200,6 +201,20 @@ common::Result<FileDownloadOptions> parseFileDownloadOptions(int argc, const cha
                 return common::Status::invalidArgument("--event-log must not be empty");
             }
             options.eventLogPath = std::string(value);
+        } else if (option == "--data-tls-mode") {
+            auto parsed = core::io::parseDataTlsMode(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.dataTlsMode = parsed.value();
+            options.dataTls.mode = parsed.value() == core::io::DataTlsMode::Required
+                                       ? core::io::TlsMode::Required
+                                       : core::io::TlsMode::Off;
+        } else if (option == "--tls-ca-file") {
+            if (value.empty()) {
+                return common::Status::invalidArgument("--tls-ca-file must not be empty");
+            }
+            options.dataTls.caFile = std::string(value);
         } else if (option == "--transfer-id") {
             if (value.empty()) {
                 return common::Status::invalidArgument("--transfer-id must not be empty");
@@ -251,6 +266,11 @@ common::Result<FileDownloadOptions> parseFileDownloadOptions(int argc, const cha
     if (!eventLogStatus.isOk()) {
         return eventLogStatus;
     }
+    const common::Status dataTlsStatus =
+        core::io::validateDataTlsClientConfig(options.dataTlsMode, options.dataTls);
+    if (!dataTlsStatus.isOk()) {
+        return dataTlsStatus;
+    }
     return options;
 }
 
@@ -268,7 +288,7 @@ std::string fileDownloadUsage(const char* programName) {
            "[--file-io-queue-depth <N>] [--file-io-batch-size <N>] "
            "[--file-io-advice <off|sequential|noreuse|dontneed|sequential_dontneed>] "
            "[--posix-write-strategy <auto|direct|coalesced>] "
-           "[--event-log <path>] "
+           "[--event-log <path>] [--data-tls-mode <off|required>] [--tls-ca-file <path>] "
            "[--overwrite] [--resume] "
            "[--max-chunks <N>]";
 }

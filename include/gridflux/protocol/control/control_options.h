@@ -38,6 +38,7 @@ struct ControlServerOptions {
     std::string password = "gridflux";
     std::string eventLogPath;
     core::io::TlsConfig tls;
+    core::io::DataTlsMode dataTlsMode = core::io::DataTlsMode::Off;
 };
 
 enum class ControlPathKind {

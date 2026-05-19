@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**阶段：** Phase 6C — TLS 安全通道 alpha 原型（完成）
+**阶段：** Phase 6D — STOR/RETR framed data-channel TLS alpha（进行中）
 
 **已完成：** 项目设计、技术选型、工程规范制定、CMake 工程骨架初始化、GoogleTest 工具链测试、本机与<redacted>二构建验证、GridFTP 源码学习经验整理入设计文档、Phase 1.0 多连接 TCP sink 与本机 loopback 验证、Phase 1.1 性能基线脚本与 loopback smoke matrix、Phase 1.2A offset-aware 单文件传输闭环、Phase 1.2B 文件传输健壮性、Phase 1.3A 文件性能基线自动化、Phase 2A manifest/range-based 断点续传核心、Phase 2B CRC32C chunk checksum 与损坏注入验证、Phase 2C CRC32C backend 自动选择、manifest 批量 flush、恢复统计与 checksum benchmark、Phase 3A GridFTP 风格控制面 STOR 上传与 REST/GFID resume 映射、Phase 3B GridFTP 风格控制面 framed RETR 完整下载、Phase 3C 下载端 manifest/verified_chunks 与 RETR REST/GFID resume、Phase 3D 控制面 SIZE/MDTM/CWD/CDUP/LIST/NLST 与测试工具收敛。
 
@@ -10,7 +10,7 @@
 
 **未开始：** 系统级文件传输调优、raw FTP stream STOR/RETR、GridFTP GSI、MLST/MLSD、网络 io_uring、生产级目录同步。
 
-**下一步：** Phase 6D 候选方向为更长时间 TLS/token private soak、data-channel encryption 设计评审或继续 operator UX 收口；默认仍保持 anonymous、`tls-mode=off`、POSIX backend、full final verify 和现有 framed STOR/RETR 语义。
+**下一步：** 完成 Phase 6D data TLS 本机/私网 smoke、release gate 与 artifact sync 收口；默认仍保持 anonymous、`tls-mode=off`、`data-tls-mode=off`、POSIX backend、full final verify 和现有 framed STOR/RETR 语义。
 
 ---
 
@@ -359,9 +359,20 @@
 
 状态：已完成。本地 TLS required smoke、<redacted>二发起的 private TLS metadata smoke、quick/full alpha gate、artifact freshness/sync 和 public hygiene 均通过；默认 `tls-mode=off`，不实现 GSI 或 data-channel encryption。
 
+**6D 数据通道 TLS 与安全边界硬化**
+
+- 新增 opt-in `--data-tls-mode off|required`。
+- `gridflux-gridftp-server --data-tls-mode required` 只能与 `--tls-mode required` 同用，并复用 control TLS cert/key。
+- STOR upload 与 RETR download 的 framed file data socket 可逐连接 TLS handshake；frame、checksum、manifest、resume、final verify 语义不变。
+- `gridflux-file-client`、`gridflux-file-download-client` 和 tree clients 支持 `--data-tls-mode required --tls-ca-file <path>`。
+- LIST/NLST ASCII metadata passive data channel 不在 Phase 6D 保护范围，仍保持现有明文行为。
+- Event/error code 增加 `data_tls_required` / `data_tls_failed`，日志与 JSON 只记录模式和结果，不记录 token、password 或 private key 内容。
+
+状态：进行中。已完成本机 loopback data TLS smoke，覆盖 STOR/RETR framed data TLS、plaintext framed data client failure、tree upload/download data TLS 和 LIST/NLST 明文 metadata 回归；release gate 已接入 quick local data TLS smoke 和 full private data TLS smoke。
+
 **后续候选**
 
-- TLS/GSI 后续设计：Phase 6C 仅完成 control-plane TLS alpha，data-channel encryption/GSI 仍需设计。
+- TLS/GSI 后续设计：Phase 6D 只完成 STOR/RETR framed file data TLS alpha；LIST/NLST data TLS、AUTH TLS、GSI 和生产证书管理仍需设计。
 - 容错容灾（自动重连、超时重试、死任务清理）。
 - Prometheus 或指标导出（在 JSONL alpha 稳定后再评估）。
 - systemd 集成、优雅停机、配置热加载。
@@ -437,6 +448,7 @@
 | 2026-05-18 | Phase 6A token auth 只保护控制面且默认关闭 | 保留 anonymous/demo 兼容；token 只从权限受限文件读取，不进入 CLI 参数、日志、artifact manifest 或 public export；TLS/GSI 留到后续设计 |
 | 2026-05-18 | Phase 6B JSONL event log 与稳定错误码保持 opt-in | 增强长期运行排障和 release gate 可读性，不改变默认传输策略，不记录 token/password，不引入 metrics server |
 | 2026-05-18 | Phase 6C TLS 为 opt-in control-plane-only alpha | 默认 `tls-mode=off`；`required` 只包控制连接，passive data channel 仍为现有 framed TCP；不实现 GSI/AUTH TLS/raw FTP TLS，不记录 cert/key/token 内容 |
+| 2026-05-19 | Phase 6D data TLS 只覆盖 STOR/RETR framed file data | 默认 `data-tls-mode=off`；required 仅在 control TLS required 下可用；LIST/NLST listing data 保持明文 alpha 限制，避免误称完整 FTP/TLS 或 GSI |
 
 ---
 

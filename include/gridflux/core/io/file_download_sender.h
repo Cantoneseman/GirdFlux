@@ -6,6 +6,7 @@
 #include "gridflux/checksum/checksum.h"
 #include "gridflux/common/status.h"
 #include "gridflux/core/io/socket_utils.h"
+#include "gridflux/core/io/tls_socket.h"
 #include "gridflux/storage/file_io.h"
 
 namespace gridflux::core::io {
@@ -19,6 +20,8 @@ struct FileDownloadSenderOptions {
     checksum::ChecksumAlgorithm checksumAlgorithm = checksum::ChecksumAlgorithm::Crc32c;
     checksum::ChecksumBackend checksumBackend = checksum::ChecksumBackend::Auto;
     storage::FileIoConfig fileIo;
+    TlsConfig dataTls;
+    DataTlsMode dataTlsMode = DataTlsMode::Off;
     bool resume = false;
     std::string sourcePath;
 };

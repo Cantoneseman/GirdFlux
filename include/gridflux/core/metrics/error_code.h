@@ -12,6 +12,8 @@ enum class ErrorCode {
     AuthFailed,
     TlsRequired,
     TlsFailed,
+    DataTlsRequired,
+    DataTlsFailed,
     PathRejected,
     ManifestCorrupt,
     ChecksumMismatch,

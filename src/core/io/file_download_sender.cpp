@@ -17,6 +17,7 @@
 #include "gridflux/checkpoint/transfer_manifest.h"
 #include "gridflux/common/throughput_counter.h"
 #include "gridflux/core/chunk/chunk_planner.h"
+#include "gridflux/core/io/framed_data_socket.h"
 #include "gridflux/core/metrics/transfer_phase_stats.h"
 #include "gridflux/core/protocol/frame.h"
 #include "gridflux/storage/file_io.h"
@@ -47,66 +48,38 @@ common::Status setReceiveTimeout(int fd) {
     return common::Status::ok();
 }
 
-common::Status sendAll(int fd, const std::uint8_t* data, std::size_t length,
+common::Status sendAll(FramedDataSocket* socket, const std::uint8_t* data, std::size_t length,
                        metrics::TransferPhaseStats* phaseStats = nullptr) {
     metrics::ScopedPhaseTimer timer(phaseStats, metrics::TransferPhase::Send, length);
-    std::size_t completed = 0;
-    while (completed < length) {
-        const ssize_t sent = ::send(fd, data + completed, length - completed, MSG_NOSIGNAL);
-        if (sent > 0) {
-            completed += static_cast<std::size_t>(sent);
-            continue;
-        }
-        if (sent < 0 && errno == EINTR) {
-            continue;
-        }
-        if (sent < 0) {
-            return systemStatus("send", errno);
-        }
-        return common::Status::runtimeError("send returned zero bytes");
-    }
-    return common::Status::ok();
+    return socket->writeAll(data, length);
 }
 
-common::Status recvAll(int fd, std::uint8_t* data, std::size_t length,
+common::Status recvAll(FramedDataSocket* socket, std::uint8_t* data, std::size_t length,
                        metrics::TransferPhaseStats* phaseStats = nullptr) {
     metrics::ScopedPhaseTimer timer(phaseStats, metrics::TransferPhase::Recv, length);
-    std::size_t completed = 0;
-    while (completed < length) {
-        const ssize_t received = ::recv(fd, data + completed, length - completed, 0);
-        if (received > 0) {
-            completed += static_cast<std::size_t>(received);
-            continue;
-        }
-        if (received == 0) {
-            return common::Status::runtimeError("receiver closed connection");
-        }
-        if (errno == EINTR) {
-            continue;
-        }
-        return systemStatus("recv", errno);
-    }
-    return common::Status::ok();
+    return socket->readAll(data, length);
 }
 
-common::Status sendFrame(int fd, const protocol::FrameHeader& header,
+common::Status sendFrame(FramedDataSocket* socket, const protocol::FrameHeader& header,
                          const std::vector<std::uint8_t>& payload,
                          metrics::TransferPhaseStats* phaseStats = nullptr) {
     const protocol::EncodedFrameHeader encoded = protocol::encodeFrameHeader(header);
-    const common::Status headerStatus = sendAll(fd, encoded.data(), encoded.size(), phaseStats);
+    const common::Status headerStatus = sendAll(socket, encoded.data(), encoded.size(), phaseStats);
     if (!headerStatus.isOk()) {
         return headerStatus;
     }
     if (!payload.empty()) {
-        return sendAll(fd, payload.data(), payload.size(), phaseStats);
+        return sendAll(socket, payload.data(), payload.size(), phaseStats);
     }
     return common::Status::ok();
 }
 
-common::Result<protocol::FrameHeader> recvHeader(int fd, std::uint32_t maxPayloadSize,
+common::Result<protocol::FrameHeader> recvHeader(FramedDataSocket* socket,
+                                                 std::uint32_t maxPayloadSize,
                                                  metrics::TransferPhaseStats* phaseStats) {
     protocol::EncodedFrameHeader encoded{};
-    const common::Status recvStatus = recvAll(fd, encoded.data(), encoded.size(), phaseStats);
+    const common::Status recvStatus =
+        recvAll(socket, encoded.data(), encoded.size(), phaseStats);
     if (!recvStatus.isOk()) {
         return recvStatus;
     }
@@ -122,11 +95,11 @@ common::Result<protocol::FrameHeader> recvHeader(int fd, std::uint32_t maxPayloa
     return decoded.value();
 }
 
-common::Result<std::vector<chunk::CompletedRange>> waitForResumeResponse(int fd,
+common::Result<std::vector<chunk::CompletedRange>> waitForResumeResponse(FramedDataSocket* socket,
                                                                          std::uint32_t bufferSize,
                                                                          metrics::TransferPhaseStats*
                                                                              phaseStats) {
-    auto header = recvHeader(fd, bufferSize, phaseStats);
+    auto header = recvHeader(socket, bufferSize, phaseStats);
     if (!header.isOk()) {
         return header.status();
     }
@@ -137,7 +110,7 @@ common::Result<std::vector<chunk::CompletedRange>> waitForResumeResponse(int fd,
         return common::Status::runtimeError("receiver returned unexpected session response");
     }
     std::vector<std::uint8_t> payload(header.value().payloadSize);
-    const common::Status recvStatus = recvAll(fd, payload.data(), payload.size(), phaseStats);
+    const common::Status recvStatus = recvAll(socket, payload.data(), payload.size(), phaseStats);
     if (!recvStatus.isOk()) {
         return recvStatus;
     }
@@ -151,9 +124,9 @@ common::Result<std::vector<chunk::CompletedRange>> waitForResumeResponse(int fd,
     return decoded.value().missingRanges;
 }
 
-common::Status waitForFinalStatus(int fd, std::uint32_t bufferSize,
+common::Status waitForFinalStatus(FramedDataSocket* socket, std::uint32_t bufferSize,
                                   metrics::TransferPhaseStats* phaseStats) {
-    auto header = recvHeader(fd, bufferSize, phaseStats);
+    auto header = recvHeader(socket, bufferSize, phaseStats);
     if (!header.isOk()) {
         return header.status();
     }
@@ -167,7 +140,7 @@ common::Status waitForFinalStatus(int fd, std::uint32_t bufferSize,
     return common::Status::runtimeError("receiver returned unexpected final status");
 }
 
-common::Status sendSessionInit(int fd, const FileDownloadSenderOptions& options,
+common::Status sendSessionInit(FramedDataSocket* socket, const FileDownloadSenderOptions& options,
                                std::uint32_t streamId, std::uint64_t totalSize,
                                metrics::TransferPhaseStats* phaseStats) {
     protocol::SessionInitPayload init;
@@ -190,7 +163,7 @@ common::Status sendSessionInit(int fd, const FileDownloadSenderOptions& options,
     header.streamId = streamId;
     header.payloadSize = static_cast<std::uint32_t>(payload.value().size());
     header.totalSize = totalSize;
-    return sendFrame(fd, header, payload.value(), phaseStats);
+    return sendFrame(socket, header, payload.value(), phaseStats);
 }
 
 bool rangesIntersect(std::uint64_t leftBegin, std::uint64_t leftEnd, std::uint64_t rightBegin,
@@ -207,7 +180,7 @@ bool shouldSendChunk(const chunk::ChunkRange& chunk,
         });
 }
 
-common::Status sendChunk(int fd, const FileDownloadSenderOptions& options,
+common::Status sendChunk(FramedDataSocket* socket, const FileDownloadSenderOptions& options,
                          const storage::PosixFile& inputFile, const chunk::ChunkRange& chunk,
                          checksum::ChecksumBackend checksumBackend, std::uint64_t totalSize,
                          std::vector<std::uint8_t>& buffer,
@@ -244,11 +217,11 @@ common::Status sendChunk(int fd, const FileDownloadSenderOptions& options,
         header.offset = completed;
         header.payloadSize = payloadSize;
         header.totalSize = totalSize;
-        const common::Status headerStatus = sendFrame(fd, header, {}, phaseStats);
+        const common::Status headerStatus = sendFrame(socket, header, {}, phaseStats);
         if (!headerStatus.isOk()) {
             return headerStatus;
         }
-        const common::Status payloadStatus = sendAll(fd, buffer.data(), payloadSize, phaseStats);
+        const common::Status payloadStatus = sendAll(socket, buffer.data(), payloadSize, phaseStats);
         if (!payloadStatus.isOk()) {
             return payloadStatus;
         }
@@ -275,10 +248,10 @@ common::Status sendChunk(int fd, const FileDownloadSenderOptions& options,
     header.offset = chunk.offset;
     header.payloadSize = static_cast<std::uint32_t>(payload.value().size());
     header.totalSize = totalSize;
-    return sendFrame(fd, header, payload.value(), phaseStats);
+    return sendFrame(socket, header, payload.value(), phaseStats);
 }
 
-common::Status sendStream(UniqueFd connection, const FileDownloadSenderOptions& options,
+common::Status sendStream(FramedDataSocket connection, const FileDownloadSenderOptions& options,
                           const storage::PosixFile& inputFile,
                           const std::vector<chunk::ChunkRange>& chunks,
                           checksum::ChecksumBackend checksumBackend, std::uint32_t streamId,
@@ -286,16 +259,16 @@ common::Status sendStream(UniqueFd connection, const FileDownloadSenderOptions& 
                           metrics::TransferPhaseStats* phaseStats,
                           const storage::FileIoContext& fileIoContext,
                           storage::FileIoStats* fileIoStats) {
-    const common::Status timeoutStatus = setReceiveTimeout(connection.get());
+    const common::Status timeoutStatus = setReceiveTimeout(connection.fd());
     if (!timeoutStatus.isOk()) {
         return timeoutStatus;
     }
     const common::Status initStatus =
-        sendSessionInit(connection.get(), options, streamId, totalSize, phaseStats);
+        sendSessionInit(&connection, options, streamId, totalSize, phaseStats);
     if (!initStatus.isOk()) {
         return initStatus;
     }
-    auto response = waitForResumeResponse(connection.get(), options.bufferSize, phaseStats);
+    auto response = waitForResumeResponse(&connection, options.bufferSize, phaseStats);
     if (!response.isOk()) {
         return response.status();
     }
@@ -310,7 +283,7 @@ common::Status sendStream(UniqueFd connection, const FileDownloadSenderOptions& 
             stats->skippedBytes += chunk.length;
             continue;
         }
-        const common::Status sendStatus = sendChunk(connection.get(), options, inputFile, chunk,
+        const common::Status sendStatus = sendChunk(&connection, options, inputFile, chunk,
                                                     checksumBackend, totalSize, buffer,
                                                     phaseStats, fileIoContext, fileIoStats);
         if (!sendStatus.isOk()) {
@@ -325,11 +298,11 @@ common::Status sendStream(UniqueFd connection, const FileDownloadSenderOptions& 
     fin.type = protocol::FrameType::Fin;
     fin.streamId = streamId;
     fin.totalSize = totalSize;
-    const common::Status finStatus = sendFrame(connection.get(), fin, {}, phaseStats);
+    const common::Status finStatus = sendFrame(&connection, fin, {}, phaseStats);
     if (!finStatus.isOk()) {
         return finStatus;
     }
-    return waitForFinalStatus(connection.get(), options.bufferSize, phaseStats);
+    return waitForFinalStatus(&connection, options.bufferSize, phaseStats);
 }
 
 }  // namespace
@@ -365,7 +338,7 @@ common::Status runFramedFileSenderOnListener(const FileDownloadSenderOptions& op
         return resolvedBackend.status();
     }
 
-    std::vector<UniqueFd> accepted;
+    std::vector<FramedDataSocket> accepted;
     accepted.reserve(options.connections);
     while (accepted.size() < options.connections) {
         pollfd pollFd{};
@@ -388,7 +361,11 @@ common::Status runFramedFileSenderOnListener(const FileDownloadSenderOptions& op
             }
             return systemStatus("accept4", errno);
         }
-        accepted.emplace_back(fd);
+        auto socket = acceptFramedDataSocket(UniqueFd(fd), options.dataTlsMode, options.dataTls);
+        if (!socket.isOk()) {
+            return socket.status();
+        }
+        accepted.emplace_back(std::move(socket.value()));
     }
     listener.reset();
 
@@ -457,7 +434,8 @@ common::Status runFramedFileSenderOnListener(const FileDownloadSenderOptions& op
               << storage::posixWriteStrategyName(options.fileIo.posixWriteStrategy)
               << " posix_write_strategy_effective="
               << storage::posixWriteStrategyName(
-                     storage::effectivePosixWriteStrategy(options.fileIo));
+                     storage::effectivePosixWriteStrategy(options.fileIo))
+              << " data_tls_mode=" << dataTlsModeName(options.dataTlsMode);
     metrics::appendPhaseStats(std::cout, phaseStats);
     metrics::appendRetrSenderAliases(std::cout, phaseStats);
     storage::appendFileIoStats(std::cout, fileIoStats);

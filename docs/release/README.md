@@ -21,15 +21,17 @@ python3 tools/release/run_alpha_release_gate.py \
 Quick mode runs local build, default CTest, io_uring CTest, public export
 hygiene, loopback STOR/RETR full and resume smoke, metadata/list smoke,
 directory upload/download/resume/parallel/changed-file/corrupt-manifest smoke,
-a token-auth loopback smoke, a TLS-required control-plane loopback smoke, an
-event-log loopback smoke through CTest, a tiny local alpha demo with JSONL
-events, and residual process checks.
+a token-auth loopback smoke, a TLS-required control-plane loopback smoke, a
+Phase 6D STOR/RETR framed data TLS loopback smoke, an event-log loopback smoke
+through CTest, a tiny local alpha demo with JSONL events, and residual process
+checks.
 
 ## Full Gate
 
-Full mode adds a lightweight private tree smoke, private token-auth and
-TLS-required control-plane metadata smokes, a tiny private alpha demo, a short
-local soak smoke, and a private 1GiB repeat=3 STOR/RETR baseline matrix:
+Full mode adds a lightweight private tree smoke, private token-auth,
+TLS-required control-plane metadata, framed data TLS private STOR/RETR smokes,
+a tiny private alpha demo, a short local soak smoke, and a private 1GiB repeat=3
+STOR/RETR baseline matrix:
 
 ```bash
 GRIDFLUX_SSH_PASSWORD='***' python3 tools/release/run_alpha_release_gate.py \
@@ -63,7 +65,9 @@ Token files created by token-auth smoke tests are temporary runtime inputs and
 are not valid release artifacts.
 TLS smoke certificates and private keys are also temporary runtime inputs. They
 must not be included in artifact manifests or public exports; strict hygiene
-rejects private-key PEM markers.
+rejects private-key PEM markers. Phase 6D data TLS protects only STOR/RETR
+framed file data sockets; LIST/NLST passive listing data remains plaintext
+metadata and is not a release-gate failure.
 
 Phase 6B gate JSON/Markdown includes per-step `error_code`, total/passed/failed
 step counts, first failed step, event/demo summaries where available, and the

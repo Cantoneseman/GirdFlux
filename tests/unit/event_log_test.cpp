@@ -61,6 +61,9 @@ TEST(EventLogTest, ClassifiesCommonErrors) {
     EXPECT_EQ(classifyMessage("Login incorrect"), ErrorCode::AuthFailed);
     EXPECT_EQ(classifyMessage("TLS required before control command"), ErrorCode::TlsRequired);
     EXPECT_EQ(classifyMessage("TLS handshake failed"), ErrorCode::TlsFailed);
+    EXPECT_EQ(classifyMessage("data TLS required for framed socket"),
+              ErrorCode::DataTlsRequired);
+    EXPECT_EQ(classifyMessage("data TLS handshake failed"), ErrorCode::DataTlsFailed);
     EXPECT_EQ(classifyMessage("path rejected outside root"), ErrorCode::PathRejected);
     EXPECT_EQ(classifyMessage("manifest corrupt body checksum"), ErrorCode::ManifestCorrupt);
     EXPECT_EQ(classifyMessage("checksum mismatch"), ErrorCode::ChecksumMismatch);

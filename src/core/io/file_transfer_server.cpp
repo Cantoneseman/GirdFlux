@@ -19,6 +19,7 @@
 #include "gridflux/checksum/checksum.h"
 #include "gridflux/common/throughput_counter.h"
 #include "gridflux/core/io/connection_context.h"
+#include "gridflux/core/io/framed_data_socket.h"
 #include "gridflux/core/io/socket_utils.h"
 #include "gridflux/core/metrics/transfer_phase_stats.h"
 #include "gridflux/core/protocol/frame.h"
@@ -40,6 +41,7 @@ enum class ReadState {
 
 struct FileServerConnection {
     UniqueFd fd;
+    FramedDataSocket socket;
     ConnectionContext context;
     ReadState readState = ReadState::Header;
     protocol::EncodedFrameHeader encodedHeader{};
@@ -153,6 +155,37 @@ common::Status sendFrame(int fd, const protocol::FrameHeader& header,
     return common::Status::ok();
 }
 
+common::Status sendAll(FramedDataSocket* socket, const std::uint8_t* data, std::size_t length,
+                       metrics::TransferPhaseStats* phaseStats = nullptr) {
+    metrics::ScopedPhaseTimer timer(phaseStats, metrics::TransferPhase::Send, length);
+    return socket->writeAll(data, length);
+}
+
+common::Status sendFrame(FramedDataSocket* socket, const protocol::FrameHeader& header,
+                         const std::vector<std::uint8_t>& payload,
+                         metrics::TransferPhaseStats* phaseStats = nullptr) {
+    const protocol::EncodedFrameHeader encoded = protocol::encodeFrameHeader(header);
+    const common::Status headerStatus = sendAll(socket, encoded.data(), encoded.size(), phaseStats);
+    if (!headerStatus.isOk()) {
+        return headerStatus;
+    }
+    if (!payload.empty()) {
+        return sendAll(socket, payload.data(), payload.size(), phaseStats);
+    }
+    return common::Status::ok();
+}
+
+common::Status sendStatusFrame(FramedDataSocket* socket, protocol::FrameType type,
+                               protocol::FrameStatusCode statusCode, std::uint64_t totalSize,
+                               metrics::TransferPhaseStats* phaseStats = nullptr) {
+    protocol::FrameHeader header;
+    header.type = type;
+    header.statusCode = statusCode;
+    header.payloadSize = 0;
+    header.totalSize = totalSize;
+    return sendFrame(socket, header, {}, phaseStats);
+}
+
 common::Status sendStatusFrame(int fd, protocol::FrameType type,
                                protocol::FrameStatusCode statusCode, std::uint64_t totalSize,
                                metrics::TransferPhaseStats* phaseStats = nullptr) {
@@ -184,8 +217,11 @@ common::Status sendResumeResponse(FileServerConnection& connection, TransferStat
     header.streamId = connection.streamId;
     header.payloadSize = static_cast<std::uint32_t>(encodedPayload.value().size());
     header.totalSize = transfer.totalSize;
-    return sendFrame(connection.context.fd(), header, encodedPayload.value(),
-                     &transfer.phaseStats);
+    if (connection.socket.valid()) {
+        return sendFrame(&connection.socket, header, encodedPayload.value(),
+                         &transfer.phaseStats);
+    }
+    return sendFrame(connection.context.fd(), header, encodedPayload.value(), &transfer.phaseStats);
 }
 
 common::Status sendStatusToConnections(std::vector<FileServerConnection>& connections,
@@ -194,10 +230,13 @@ common::Status sendStatusToConnections(std::vector<FileServerConnection>& connec
                                        std::uint64_t totalSize, bool bestEffort) {
     common::Status firstError = common::Status::ok();
     for (FileServerConnection& connection : connections) {
-        if (!connection.fd.isValid()) {
+        if (!connection.fd.isValid() && !connection.socket.valid()) {
             continue;
         }
-        common::Status status = sendStatusFrame(connection.fd.get(), type, statusCode, totalSize);
+        common::Status status =
+            connection.socket.valid()
+                ? sendStatusFrame(&connection.socket, type, statusCode, totalSize)
+                : sendStatusFrame(connection.fd.get(), type, statusCode, totalSize);
         if (!status.isOk() && firstError.isOk()) {
             firstError = status;
         }
@@ -727,6 +766,58 @@ common::Status readFromConnection(FileServerConnection& connection, TransferStat
     return common::Status::ok();
 }
 
+common::Status readAllBlocking(FramedDataSocket* socket, std::uint8_t* data, std::size_t length,
+                               metrics::TransferPhaseStats* phaseStats) {
+    metrics::ScopedPhaseTimer timer(phaseStats, metrics::TransferPhase::Recv, length);
+    return socket->readAll(data, length);
+}
+
+common::Status readFromTlsConnection(FileServerConnection& connection, TransferState& transfer,
+                                     const config::FileTransferOptions& options) {
+    while (connection.readState != ReadState::Done) {
+        if (connection.readState == ReadState::Header) {
+            const std::size_t remaining =
+                connection.encodedHeader.size() - connection.headerBytesRead;
+            const common::Status readStatus =
+                readAllBlocking(&connection.socket,
+                                connection.encodedHeader.data() + connection.headerBytesRead,
+                                remaining, &transfer.phaseStats);
+            if (!readStatus.isOk()) {
+                transfer.errorCode = protocol::FrameStatusCode::InternalError;
+                return readStatus;
+            }
+            connection.headerBytesRead = connection.encodedHeader.size();
+            const common::Status status = processCompletedHeader(connection, transfer, options);
+            if (!status.isOk()) {
+                return status;
+            }
+            continue;
+        }
+
+        const std::size_t remaining =
+            static_cast<std::size_t>(connection.currentHeader.payloadSize) -
+            connection.payloadBytesRead;
+        const common::Status readStatus =
+            readAllBlocking(&connection.socket,
+                            connection.payloadBuffer.data() + connection.payloadBytesRead,
+                            remaining, &transfer.phaseStats);
+        if (!readStatus.isOk()) {
+            transfer.errorCode = protocol::FrameStatusCode::InternalError;
+            return readStatus;
+        }
+        connection.payloadBytesRead = connection.currentHeader.payloadSize;
+        const common::Status status = processCompletedPayload(connection, transfer, options);
+        if (!status.isOk()) {
+            return status;
+        }
+        if (connection.writer == nullptr && transfer.outputOpen) {
+            connection.writer = std::make_unique<storage::BufferedFileWriter>(
+                transfer.outputFile, options.fileIo, &transfer.fileIoStats);
+        }
+    }
+    return common::Status::ok();
+}
+
 bool transferComplete(const TransferState& transfer, std::uint32_t expectedConnections) noexcept {
     return transfer.hasSession && transfer.finConnections == expectedConnections;
 }
@@ -760,10 +851,222 @@ common::Status validateServerOutputState(const config::FileTransferOptions& opti
     return common::Status::ok();
 }
 
+common::Status runFileTransferServerOnListenerTls(const config::FileTransferOptions& options,
+                                                  UniqueFd listener) {
+    const common::Status outputStatus = validateServerOutputState(options);
+    if (!outputStatus.isOk()) {
+        return outputStatus;
+    }
+    const storage::FileIoContext fileIoContext(options.fileIo);
+    const common::Status fileIoStatus = fileIoContext.validateAvailable();
+    if (!fileIoStatus.isOk()) {
+        return fileIoStatus;
+    }
+
+    std::vector<FileServerConnection> connections;
+    connections.reserve(options.connections);
+    while (connections.size() < options.connections) {
+        pollfd pollFd{};
+        pollFd.fd = listener.get();
+        pollFd.events = POLLIN;
+        const int ready = ::poll(&pollFd, 1, 60000);
+        if (ready == 0) {
+            return common::Status::runtimeError("timed out waiting for data TLS connections");
+        }
+        if (ready < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return systemStatus("poll data TLS listener", errno);
+        }
+        const int acceptedFd = ::accept4(listener.get(), nullptr, nullptr, SOCK_CLOEXEC);
+        if (acceptedFd < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return systemStatus("accept4 data TLS", errno);
+        }
+        auto socket =
+            acceptFramedDataSocket(UniqueFd(acceptedFd), options.dataTlsMode, options.dataTls);
+        if (!socket.isOk()) {
+            return socket.status();
+        }
+        FileServerConnection connection;
+        connection.socket = std::move(socket.value());
+        connection.context.setFd(connection.socket.fd());
+        connection.context.markConnected();
+        connection.payloadBuffer.resize(options.bufferSize);
+        connections.push_back(std::move(connection));
+    }
+    listener.reset();
+
+    TransferState transfer;
+    metrics::ScopedPhaseTimer overallTimer(&transfer.phaseStats, metrics::TransferPhase::Overall);
+    transfer.streamsSeen.resize(options.connections, false);
+
+    while (!transferComplete(transfer, options.connections)) {
+        for (FileServerConnection& connection : connections) {
+            if (connection.readState == ReadState::Done) {
+                continue;
+            }
+            if (!transfer.outputOpen && transfer.hasSession) {
+                return common::Status::runtimeError("transfer output not ready");
+            }
+            if (connection.writer == nullptr && transfer.outputOpen) {
+                connection.writer = std::make_unique<storage::BufferedFileWriter>(
+                    transfer.outputFile, options.fileIo, &transfer.fileIoStats);
+            }
+            const common::Status readStatus =
+                readFromTlsConnection(connection, transfer, options);
+            if (!readStatus.isOk()) {
+                (void)sendStatusToConnections(connections, protocol::FrameType::Error,
+                                              transfer.errorCode, transfer.totalSize, true);
+                markFailedBestEffort(transfer);
+                return readStatus;
+            }
+            if (connection.writer == nullptr && transfer.outputOpen) {
+                connection.writer = std::make_unique<storage::BufferedFileWriter>(
+                    transfer.outputFile, options.fileIo, &transfer.fileIoStats);
+            }
+        }
+    }
+
+    if (!transfer.session.missingRanges().empty()) {
+        (void)sendStatusToConnections(connections, protocol::FrameType::Error,
+                                      protocol::FrameStatusCode::MissingRange, transfer.totalSize,
+                                      true);
+        markFailedBestEffort(transfer);
+        return common::Status::runtimeError("transfer has missing ranges");
+    }
+
+    std::string finalVerifyPolicyEffective = "full";
+    if (session::canUseVerifiedChunksFinalVerify(
+            options.finalVerifyPolicy, transfer.checksumAlgorithm, transfer.totalSize,
+            transfer.session.bytesCompleted(), false)) {
+        const common::Status flushBeforeSkipStatus = transfer.session.flushManifest();
+        if (!flushBeforeSkipStatus.isOk()) {
+            markFailedBestEffort(transfer);
+            return flushBeforeSkipStatus;
+        }
+        finalVerifyPolicyEffective = "verified_chunks";
+    } else {
+        metrics::ScopedPhaseTimer timer(&transfer.phaseStats,
+                                        metrics::TransferPhase::FinalVerify, transfer.totalSize);
+        const common::Status finalVerifyStatus =
+            transfer.session.verifyTempChunks(transfer.outputFile);
+        timer.stop();
+        if (!finalVerifyStatus.isOk()) {
+            markFailedBestEffort(transfer);
+            return finalVerifyStatus;
+        }
+        if (!transfer.session.missingRanges().empty()) {
+            markFailedBestEffort(transfer);
+            return common::Status::runtimeError("final verify found missing ranges");
+        }
+    }
+
+    const common::Status flushStatus = transfer.session.flushManifest();
+    if (!flushStatus.isOk()) {
+        markFailedBestEffort(transfer);
+        return flushStatus;
+    }
+
+    auto outputExists = storage::PosixFile::pathExists(options.path);
+    if (!outputExists.isOk()) {
+        markFailedBestEffort(transfer);
+        return outputExists.status();
+    }
+    if (outputExists.value() && !options.overwrite) {
+        markFailedBestEffort(transfer);
+        return common::Status::invalidArgument("output file already exists; use --overwrite");
+    }
+
+    {
+        metrics::ScopedPhaseTimer timer(&transfer.phaseStats,
+                                        metrics::TransferPhase::RenameCommit);
+        const common::Status renameStatus =
+            storage::PosixFile::renamePath(transfer.session.manifest().tempPath, options.path);
+        if (!renameStatus.isOk()) {
+            markFailedBestEffort(transfer);
+            return renameStatus;
+        }
+        const common::Status syncStatus =
+            applyCommitSyncPolicy(options.path, options.commitSyncPolicy);
+        if (!syncStatus.isOk()) {
+            markFailedBestEffort(transfer);
+            return syncStatus;
+        }
+        const common::Status committedStatus = transfer.session.markCommitted();
+        if (!committedStatus.isOk()) {
+            return committedStatus;
+        }
+    }
+
+    const common::Status completeStatus =
+        sendStatusToConnections(connections, protocol::FrameType::Complete,
+                                protocol::FrameStatusCode::Ok, transfer.totalSize, false);
+    if (!completeStatus.isOk()) {
+        return completeStatus;
+    }
+
+    const auto end = common::ThroughputCounter::Clock::now();
+    if (!transfer.counterStarted) {
+        transfer.counter.start(end);
+    }
+    transfer.counter.stop(end);
+    overallTimer.stop();
+
+    const session::TransferSessionStats& stats = transfer.session.stats();
+    const char* backendName = transfer.checksumAlgorithm == checksum::ChecksumAlgorithm::None
+                                  ? "none"
+                                  : checksum::checksumBackendName(transfer.checksumBackend);
+    std::cout << "file_server received_bytes=" << transfer.bytesWritten
+              << " elapsed_seconds=" << transfer.counter.elapsedSeconds(end)
+              << " throughput_gbps=" << transfer.counter.gigabitsPerSecond(end)
+              << " transfer_id=" << transfer.transferId << " checksum_backend=" << backendName
+              << " skipped_bytes=" << transfer.initialVerifiedBytes
+              << " resent_bytes=" << transfer.counter.bytes()
+              << " verified_bytes=" << transfer.session.bytesCompleted()
+              << " loaded_verified_chunks=" << stats.loadedVerifiedChunks
+              << " removed_corrupt_chunks=" << stats.removedCorruptChunks
+              << " missing_chunks=" << stats.missingChunks
+              << " manifest_flush_policy="
+              << session::manifestFlushPolicyName(transfer.session.manifestFlushPolicy())
+              << " manifest_flush_interval_chunks="
+              << transfer.session.manifestFlushIntervalChunks()
+              << " legacy_manifest_flush_policy=every_"
+              << transfer.session.manifestFlushIntervalChunks() << "_chunks"
+              << " manifest_flush_count=" << stats.manifestFlushCount
+              << " final_verify_policy="
+              << session::finalVerifyPolicyName(options.finalVerifyPolicy)
+              << " final_verify_policy_effective=" << finalVerifyPolicyEffective
+              << " commit_sync_policy=" << session::commitSyncPolicyName(options.commitSyncPolicy)
+              << " preallocate=" << storage::preallocateModeName(options.preallocateMode)
+              << " file_io_backend=" << storage::fileIoBackendName(options.fileIo.backend)
+              << " file_io_buffer_size=" << options.fileIo.bufferSize
+              << " file_io_queue_depth=" << options.fileIo.queueDepth
+              << " file_io_batch_size=" << options.fileIo.batchSize
+              << " file_io_advice=" << storage::fileIoAdviceName(options.fileIo.advice)
+              << " posix_write_strategy="
+              << storage::posixWriteStrategyName(options.fileIo.posixWriteStrategy)
+              << " posix_write_strategy_effective="
+              << storage::posixWriteStrategyName(
+                     storage::effectivePosixWriteStrategy(options.fileIo))
+              << " data_tls_mode=" << dataTlsModeName(options.dataTlsMode);
+    metrics::appendPhaseStats(std::cout, transfer.phaseStats);
+    metrics::appendStorReceiverAliases(std::cout, transfer.phaseStats);
+    storage::appendFileIoStats(std::cout, transfer.fileIoStats);
+    std::cout << '\n' << std::flush;
+    return common::Status::ok();
+}
+
 }  // namespace
 
 common::Status runFileTransferServerOnListener(const config::FileTransferOptions& options,
                                                UniqueFd listener) {
+    if (options.dataTlsMode == DataTlsMode::Required) {
+        return runFileTransferServerOnListenerTls(options, std::move(listener));
+    }
     const common::Status outputStatus = validateServerOutputState(options);
     if (!outputStatus.isOk()) {
         return outputStatus;
@@ -1031,7 +1334,8 @@ common::Status runFileTransferServerOnListener(const config::FileTransferOptions
               << storage::posixWriteStrategyName(options.fileIo.posixWriteStrategy)
               << " posix_write_strategy_effective="
               << storage::posixWriteStrategyName(
-                     storage::effectivePosixWriteStrategy(options.fileIo));
+                     storage::effectivePosixWriteStrategy(options.fileIo))
+              << " data_tls_mode=" << dataTlsModeName(options.dataTlsMode);
     metrics::appendPhaseStats(std::cout, transfer.phaseStats);
     metrics::appendStorReceiverAliases(std::cout, transfer.phaseStats);
     storage::appendFileIoStats(std::cout, transfer.fileIoStats);

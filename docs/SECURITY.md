@@ -1,10 +1,11 @@
 # GridFlux Security Alpha
 
 Phase 6A adds opt-in control-plane token authentication. Phase 6C adds
-opt-in control-plane TLS. These are alpha operator features, not production
-security. STOR/RETR file data still uses the existing GridFlux framed data
-channel; Phase 6C TLS protects the GridFTP-like control connection only.
-GSI/DCAU/PROT and raw FTP TLS compatibility are not implemented.
+opt-in control-plane TLS. Phase 6D adds opt-in TLS for the STOR/RETR framed
+file data channel. These are alpha operator features, not production security.
+LIST/NLST passive ASCII listing data remains plaintext in Phase 6D. GSI/DCAU/
+PROT, AUTH TLS, production CA management, and raw FTP TLS compatibility are not
+implemented.
 
 ## Modes
 
@@ -107,10 +108,58 @@ Tree clients can connect to a TLS-required control server with:
 Token auth and TLS can be combined: TLS is established first, then the existing
 `USER token` / `PASS <token-value>` control login is performed.
 
-Important Phase 6C limit: passive data connections are not wrapped in TLS.
-STOR/RETR file data still uses GridFlux framed TCP, and LIST/NLST still use the
-ASCII metadata data connection. TLS support here is not a GSI replacement and
-is not production transport security.
+## STOR/RETR Data-Channel TLS Alpha
+
+Phase 6D can wrap framed STOR/RETR file data sockets in TLS:
+
+```bash
+./build/gridflux-gridftp-server \
+  --root /tmp/gridflux-root \
+  --host 127.0.0.1 \
+  --port 2121 \
+  --tls-mode required \
+  --tls-cert-file /tmp/gridflux-control-cert.pem \
+  --tls-key-file /tmp/gridflux-control-key.pem \
+  --data-tls-mode required
+```
+
+Clients opt in per framed data connection:
+
+```bash
+./build/gridflux-file-client \
+  --host 127.0.0.1 \
+  --port <epsv-data-port> \
+  --input /tmp/source.bin \
+  --transfer-id <transfer-id> \
+  --data-tls-mode required \
+  --tls-ca-file /tmp/gridflux-control-cert.pem
+```
+
+`--data-tls-mode required` is valid on `gridflux-gridftp-server` only when
+`--tls-mode required` is also enabled. It reuses the control-plane certificate
+and key for the passive STOR/RETR data sockets. The TLS wrapper is socket-only:
+GridFlux frame layout, CRC32C checksums, manifest/verified_chunks, resume, and
+final verify semantics are unchanged.
+
+Directory upload/download clients pass the same setting through to each
+per-file STOR/RETR operation:
+
+```bash
+./build/gridflux-tree-upload-client \
+  --host 127.0.0.1 \
+  --port 2121 \
+  --source-dir /tmp/demo-tree \
+  --dest-dir demo-tree \
+  --tls-mode required \
+  --tls-ca-file /tmp/gridflux-control-cert.pem \
+  --data-tls-mode required
+```
+
+Important Phase 6D limit: `LIST` and `NLST` are not data-TLS protected. The
+commands themselves can be protected by control-plane TLS, but the passive ASCII
+listing data connection remains the existing plaintext metadata channel.
+Phase 6D data TLS does not provide raw FTP TLS compatibility and is not a GSI
+replacement.
 
 ## Tree Clients
 
@@ -136,11 +185,12 @@ included in artifact manifests, copied to public export, or written to demo/perf
 logs. Public docs should use placeholders such as `<token-value>` rather than
 real token contents.
 
-Phase 6B/6C event logging follows the same rule: auth/TLS events may record
-`auth_required`, `auth_failed`, `tls_required`, `tls_failed`, component names,
-and result, but never token contents, passwords, `PASS <value>` strings,
-certificate private keys, or file contents. Token, certificate, and key files
-remain local runtime inputs and are not release artifacts.
+Phase 6B/6C/6D event logging follows the same rule: auth/TLS events may record
+`auth_required`, `auth_failed`, `tls_required`, `tls_failed`,
+`data_tls_required`, `data_tls_failed`, component names, modes, and result, but
+never token contents, passwords, `PASS <value>` strings, certificate private
+keys, or file contents. Token, certificate, and key files remain local runtime
+inputs and are not release artifacts.
 
 `tools/release/check_public_hygiene.py --strict` rejects obvious token leaks and
 token-like artifact paths.
@@ -151,7 +201,7 @@ Phase 6A/6C does not provide:
 
 - GSI/DCAU/PROT or production PKI integration;
 - production identity, account, or authorization management;
-- encrypted file data transport;
+- production-grade encrypted file data transport or LIST/NLST data encryption;
 - AUTH TLS explicit upgrade semantics;
 - raw FTP STOR/RETR compatibility;
 - changes to checksum, manifest, resume, or final verify semantics.

@@ -9,6 +9,7 @@
 #include "gridflux/core/session/final_verify_policy.h"
 #include "gridflux/core/session/manifest_flush_policy.h"
 #include "gridflux/core/session/transfer_session_config.h"
+#include "gridflux/core/io/tls_socket.h"
 #include "gridflux/storage/file_io.h"
 #include "gridflux/storage/preallocate_mode.h"
 
@@ -31,6 +32,8 @@ struct FileDownloadOptions {
     core::session::CommitSyncPolicy commitSyncPolicy = core::session::CommitSyncPolicy::None;
     storage::PreallocateMode preallocateMode = storage::PreallocateMode::Off;
     storage::FileIoConfig fileIo;
+    core::io::TlsConfig dataTls;
+    core::io::DataTlsMode dataTlsMode = core::io::DataTlsMode::Off;
     std::string eventLogPath;
     bool overwrite = false;
     bool resume = false;

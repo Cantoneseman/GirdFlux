@@ -94,6 +94,7 @@ add_library(gridflux_core STATIC
     src/core/io/file_download_sender.cpp
     src/core/io/file_transfer_client.cpp
     src/core/io/file_transfer_server.cpp
+    src/core/io/framed_data_socket.cpp
     src/core/io/socket_utils.cpp
     src/core/io/tcp_sink_client.cpp
     src/core/io/tcp_sink_server.cpp
@@ -347,6 +348,10 @@ if(GRIDFLUX_BUILD_TESTS)
     add_test(
         NAME gridflux_gridftp_control_tls_smoke
         COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/test/run_gridftp_control_tls_smoke.py --build-dir ${CMAKE_BINARY_DIR}
+    )
+    add_test(
+        NAME gridflux_gridftp_data_tls_smoke
+        COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/test/run_gridftp_data_tls_smoke.py --build-dir ${CMAKE_BINARY_DIR}
     )
     add_test(
         NAME gridflux_event_log_smoke

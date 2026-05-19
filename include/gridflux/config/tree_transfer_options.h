@@ -34,6 +34,7 @@ struct TreeTransferOptions {
     std::string jsonSummaryPath;
     std::string eventLogPath;
     core::io::TlsConfig tls;
+    core::io::DataTlsMode dataTlsMode = core::io::DataTlsMode::Off;
 };
 
 [[nodiscard]] common::Result<TreeTransferOptions> parseTreeTransferOptions(

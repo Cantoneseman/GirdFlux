@@ -155,6 +155,7 @@ def start_server(
     tls_cert_file: str = "",
     tls_key_file: str = "",
     tls_ca_file: str = "",
+    data_tls_mode: str = "off",
 ) -> subprocess.Popen:
     command = [
         str(build_dir / "gridflux-gridftp-server"),
@@ -185,6 +186,8 @@ def start_server(
         command.extend(["--tls-mode", "required", "--tls-cert-file", tls_cert_file, "--tls-key-file", tls_key_file])
         if tls_ca_file:
             command.extend(["--tls-ca-file", tls_ca_file])
+    if data_tls_mode == "required":
+        command.extend(["--data-tls-mode", "required"])
     handle = log_path.open("w", encoding="utf-8")
     process = subprocess.Popen(command, stdout=handle, stderr=subprocess.STDOUT)
     handle.close()
@@ -244,6 +247,10 @@ def classify_error_text(text: object) -> str:
         return "manifest_corrupt"
     if "checksum" in lowered and "mismatch" in lowered:
         return "checksum_mismatch"
+    if "data tls" in lowered and "required" in lowered:
+        return "data_tls_required"
+    if "data tls" in lowered:
+        return "data_tls_failed"
     if "tls required" in lowered:
         return "tls_required"
     if any(word in lowered for word in ["tls", "ssl", "certificate", "private key"]):
@@ -324,6 +331,7 @@ class LocalDemo:
         tls_cert_file: str = "",
         tls_key_file: str = "",
         tls_ca_file: str = "",
+        data_tls_mode: str = "off",
     ):
         self.build_dir = build_dir
         self.dataset_dir = dataset_dir
@@ -334,6 +342,7 @@ class LocalDemo:
         self.auth_token_file = auth_token_file
         self.tls_mode = tls_mode
         self.tls_ca_file = tls_ca_file
+        self.data_tls_mode = data_tls_mode
         self.server_root = work_dir / "server-root"
         self.server_root.mkdir(parents=True, exist_ok=True)
         self.control_port = free_port()
@@ -352,6 +361,7 @@ class LocalDemo:
             tls_cert_file=tls_cert_file,
             tls_key_file=tls_key_file,
             tls_ca_file=tls_ca_file,
+            data_tls_mode=data_tls_mode,
         )
 
     def close(self) -> None:
@@ -366,6 +376,14 @@ class LocalDemo:
         if self.tls_mode != "required":
             return []
         args = ["--tls-mode", "required"]
+        if self.tls_ca_file:
+            args.extend(["--tls-ca-file", self.tls_ca_file])
+        return args
+
+    def data_tls_args(self) -> list[str]:
+        if self.data_tls_mode != "required":
+            return []
+        args = ["--data-tls-mode", "required"]
         if self.tls_ca_file:
             args.extend(["--tls-ca-file", self.tls_ca_file])
         return args
@@ -417,6 +435,7 @@ class LocalDemo:
                 command.append("--resume")
             if self.event_log:
                 command.extend(["--event-log", self.event_log])
+            command += self.data_tls_args()
             if max_chunks is not None:
                 command.extend(["--max-chunks", str(max_chunks)])
             log_path = self.results_dir / f"alpha_demo_stor_{target.replace('/', '_')}.log"
@@ -481,6 +500,7 @@ class LocalDemo:
                 command.append("--resume")
             if self.event_log:
                 command.extend(["--event-log", self.event_log])
+            command += self.data_tls_args()
             if max_chunks is not None:
                 command.extend(["--max-chunks", str(max_chunks)])
             log_path = self.results_dir / f"alpha_demo_retr_{source.replace('/', '_')}.log"
@@ -508,6 +528,8 @@ class LocalDemo:
             full_command += self.auth_args()
         if "--tls-mode" not in full_command:
             full_command += self.tls_args()
+        if "--data-tls-mode" not in full_command:
+            full_command += self.data_tls_args()
         full_command += ["--json-summary", str(summary_path)]
         if self.event_log and "--event-log" not in full_command:
             full_command.extend(["--event-log", self.event_log])
@@ -574,6 +596,7 @@ def run_local_demo(args: argparse.Namespace, output_json: Path, timestamp: str) 
         tls_cert_file=tls_cert_file,
         tls_key_file=tls_key_file,
         tls_ca_file=tls_ca_file,
+        data_tls_mode=args.data_tls_mode,
     )
     cases: list[dict[str, object]] = []
 
@@ -713,7 +736,7 @@ def run_local_demo(args: argparse.Namespace, output_json: Path, timestamp: str) 
                 "2",
                 "--file-parallelism",
                 "2",
-            ] + demo.auth_args() + demo.tls_args()
+            ] + demo.auth_args() + demo.tls_args() + demo.data_tls_args()
             partial_upload = run_command(
                 upload_base + (["--event-log", event_log] if event_log else []) + ["--max-files", "1"],
                 results_dir / "alpha_demo_tree_resume_partial_upload.log",
@@ -736,7 +759,7 @@ def run_local_demo(args: argparse.Namespace, output_json: Path, timestamp: str) 
                 "2",
                 "--file-parallelism",
                 "2",
-            ] + demo.auth_args() + demo.tls_args()
+            ] + demo.auth_args() + demo.tls_args() + demo.data_tls_args()
             partial_download = run_command(
                 download_base + (["--event-log", event_log] if event_log else []) + ["--max-files", "1"],
                 results_dir / "alpha_demo_tree_resume_partial_download.log",
@@ -768,7 +791,7 @@ def run_local_demo(args: argparse.Namespace, output_json: Path, timestamp: str) 
                 "2",
                 "--file-parallelism",
                 "2",
-            ] + demo.auth_args() + demo.tls_args()
+            ] + demo.auth_args() + demo.tls_args() + demo.data_tls_args()
             partial = run_command(
                 base + (["--event-log", event_log] if event_log else []) + ["--max-files", "1"],
                 results_dir / "alpha_demo_changed_partial.log",
@@ -807,6 +830,7 @@ def run_local_demo(args: argparse.Namespace, output_json: Path, timestamp: str) 
         "mode": "local",
         "profile": args.profile,
         "tls_mode": args.tls_mode,
+        "data_tls_mode": args.data_tls_mode,
         "dataset_dir": str(dataset_dir),
         "work_dir": str(work_dir) if args.keep_workdir else "",
         "cases": cases,
@@ -1001,6 +1025,7 @@ def run_private_demo(args: argparse.Namespace, output_json: Path, timestamp: str
         "mode": "private",
         "profile": args.profile,
         "tls_mode": args.tls_mode,
+        "data_tls_mode": args.data_tls_mode,
         "cases": cases,
         "event_log": args.event_log,
         "event_summary": event_summary,
@@ -1030,10 +1055,13 @@ def main() -> int:
     parser.add_argument("--tls-cert-file", default="")
     parser.add_argument("--tls-key-file", default="")
     parser.add_argument("--tls-ca-file", default="")
+    parser.add_argument("--data-tls-mode", choices=["off", "required"], default="off")
     parser.add_argument("--event-log", default="")
     parser.add_argument("--json-output", default="")
     parser.add_argument("--keep-workdir", action="store_true")
     args = parser.parse_args()
+    if args.data_tls_mode == "required" and args.tls_mode != "required":
+        parser.error("--data-tls-mode required requires --tls-mode required")
 
     timestamp = compact_timestamp()
     output_json = Path(args.json_output) if args.json_output else Path(args.results_dir) / f"{timestamp}_alpha-demo-{args.mode}.json"

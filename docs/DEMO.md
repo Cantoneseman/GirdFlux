@@ -3,8 +3,9 @@
 This guide is for the alpha operator demo. It uses the GridFTP-like control
 server and the GridFlux framed data channel. It does not enable raw FTP
 STOR/RETR, GSI, production auth, or any non-default transfer backend. Phase 6C
-can optionally wrap the control connection with TLS for alpha demos; the file
-data channel remains the existing framed TCP path.
+can optionally wrap the control connection with TLS for alpha demos. Phase 6D
+can also wrap STOR/RETR framed file data sockets with opt-in data TLS. LIST/NLST
+listing data remains plaintext metadata in Phase 6D.
 
 ## Build
 
@@ -92,7 +93,23 @@ python3 tools/demo/run_alpha_demo.py \
 ```
 
 The generated certificate and key live in a temporary work directory and are
-not written to release artifacts. TLS is control-plane only in Phase 6C.
+not written to release artifacts.
+
+To additionally wrap STOR/RETR framed file data sockets in TLS:
+
+```bash
+python3 tools/demo/run_alpha_demo.py \
+  --mode local \
+  --build-dir build \
+  --profile tiny \
+  --tls-mode required \
+  --data-tls-mode required \
+  --event-log tools/perf/results/alpha-demo-data-tls-events.jsonl \
+  --json-output tools/perf/results/alpha-demo-local-data-tls.json
+```
+
+`--data-tls-mode required` requires `--tls-mode required`. It does not protect
+LIST/NLST passive listing data.
 
 ## Run The Private Demo
 
@@ -135,13 +152,24 @@ the exact alpha auth boundary.
 
 Private TLS smoke is available through the release gate and the dedicated
 helper. It verifies that a remote client can connect to a TLS-required control
-server; it does not encrypt passive data sockets:
+server:
 
 ```bash
 python3 tools/test/run_gridftp_control_tls_private_once.py \
   --remote <remote> \
   --server-host <server-host> \
   --local-build-dir /root/projects/GridFlux/build \
+  --output-dir tools/perf/results
+```
+
+Private framed data TLS smoke verifies remote STOR/RETR data clients over TLS:
+
+```bash
+python3 tools/test/run_gridftp_data_tls_private_once.py \
+  --remote <remote> \
+  --server-host <server-host> \
+  --local-build-dir /root/projects/GridFlux/build \
+  --remote-build-dir <remote-root>/build \
   --output-dir tools/perf/results
 ```
 

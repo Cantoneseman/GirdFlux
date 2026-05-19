@@ -155,6 +155,10 @@ def classify_error_text(text: str) -> str:
         return "manifest_corrupt"
     if "checksum" in lowered and ("mismatch" in lowered or "failed" in lowered):
         return "checksum_mismatch"
+    if "data tls" in lowered and "required" in lowered:
+        return "data_tls_required"
+    if "data tls" in lowered:
+        return "data_tls_failed"
     if "tls required" in lowered:
         return "tls_required"
     if any(word in lowered for word in ["tls", "ssl", "certificate", "private key"]):
@@ -345,6 +349,15 @@ def tree_test_tool_paths(root: Path) -> list[str]:
     )
 
 
+def security_test_tool_paths(root: Path) -> list[str]:
+    result: list[str] = []
+    for pattern in ("*tls*.py", "*token*.py", "*event_log*.py", "*soak*.py"):
+        for path in (root / "tools" / "test").glob(pattern):
+            if path.is_file():
+                result.append(path.relative_to(root).as_posix())
+    return sorted(set(result))
+
+
 def tree_perf_tool_paths(root: Path) -> list[str]:
     result: list[str] = []
     for name in [
@@ -438,6 +451,7 @@ def collect_alpha_artifact_paths(
         *release_doc_paths(root),
         *release_tool_paths(root),
         *tree_test_tool_paths(root),
+        *security_test_tool_paths(root),
         *tree_perf_tool_paths(root),
         *demo_tool_paths(root),
         *latest_demo_artifacts(root),
@@ -736,6 +750,7 @@ def main() -> int:
         ("list_smoke", [sys.executable, "tools/test/run_gridftp_control_list_smoke.py", "--build-dir", args.build_dir]),
         ("token_auth_smoke", [sys.executable, "tools/test/run_gridftp_control_token_smoke.py", "--build-dir", args.build_dir]),
         ("tls_control_smoke", [sys.executable, "tools/test/run_gridftp_control_tls_smoke.py", "--build-dir", args.build_dir]),
+        ("data_tls_smoke", [sys.executable, "tools/test/run_gridftp_data_tls_smoke.py", "--build-dir", args.build_dir]),
         ("tree_upload_smoke", [sys.executable, "tools/test/run_gridftp_tree_upload_smoke.py", "--build-dir", args.build_dir]),
         ("tree_download_smoke", [sys.executable, "tools/test/run_gridftp_tree_download_smoke.py", "--build-dir", args.build_dir]),
         ("tree_resume_smoke", [sys.executable, "tools/test/run_gridftp_tree_resume_smoke.py", "--build-dir", args.build_dir]),
@@ -853,6 +868,31 @@ def main() -> int:
         ]
         private_tls_step = run_step("private_tls_control_smoke", private_tls_command, log_dir, cwd=root)
         steps.append(private_tls_step)
+
+        private_data_tls_command = [
+            sys.executable,
+            "tools/test/run_gridftp_data_tls_private_once.py",
+            "--remote",
+            args.remote,
+            "--server-host",
+            args.server_host,
+            "--local-build-dir",
+            str((root / args.build_dir).resolve()),
+            "--remote-build-dir",
+            f"{args.remote_root.rstrip('/')}/{args.build_dir}",
+            "--control-port",
+            str(29000 + (os.getpid() % 1000)),
+            "--data-port-base",
+            str(30000 + (os.getpid() % 1000)),
+            "--output-dir",
+            args.results_dir,
+            "--bytes",
+            "1048576",
+        ]
+        private_data_tls_step = run_step(
+            "private_data_tls_smoke", private_data_tls_command, log_dir, cwd=root
+        )
+        steps.append(private_data_tls_step)
 
         soak_step = run_step(
             "alpha_soak_smoke",

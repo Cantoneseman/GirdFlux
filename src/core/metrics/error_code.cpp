@@ -31,6 +31,10 @@ const char* errorCodeName(ErrorCode code) noexcept {
             return "tls_required";
         case ErrorCode::TlsFailed:
             return "tls_failed";
+        case ErrorCode::DataTlsRequired:
+            return "data_tls_required";
+        case ErrorCode::DataTlsFailed:
+            return "data_tls_failed";
         case ErrorCode::PathRejected:
             return "path_rejected";
         case ErrorCode::ManifestCorrupt:
@@ -67,7 +71,13 @@ ErrorCode classifyMessage(const std::string& message) {
         return ErrorCode::AuthFailed;
     }
     if (contains(text, "tls") && contains(text, "required")) {
+        if (contains(text, "data")) {
+            return ErrorCode::DataTlsRequired;
+        }
         return ErrorCode::TlsRequired;
+    }
+    if (contains(text, "data") && (contains(text, "tls") || contains(text, "ssl"))) {
+        return ErrorCode::DataTlsFailed;
     }
     if (contains(text, "tls") || contains(text, "ssl") || contains(text, "certificate") ||
         contains(text, "private key")) {

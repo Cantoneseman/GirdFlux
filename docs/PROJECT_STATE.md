@@ -1,5 +1,37 @@
 # GridFlux 项目状态记录
 
+## 2026-05-19 Phase 6D 数据通道 TLS alpha（进行中）
+
+### 实现内容
+
+- 新增 `--data-tls-mode off|required`，默认 `off`。
+- `gridflux-gridftp-server --data-tls-mode required` 必须与 `--tls-mode required` 同用，复用 control TLS cert/key。
+- `gridflux-file-client`、`gridflux-file-download-client` 和 tree upload/download clients 可通过 `--data-tls-mode required --tls-ca-file <path>` 对 STOR/RETR framed file data socket 做 TLS handshake。
+- STOR/RETR frame、CRC32C、manifest、resume、verified_chunks 和 final verify 语义未改变。
+- LIST/NLST ASCII listing data channel 明确不在 Phase 6D 保护范围内，仍保持现有明文 metadata data 行为。
+- 新增 `data_tls_required` / `data_tls_failed` 错误码分类和 release/demo summary 分类。
+- 新增本机 `gridflux_gridftp_data_tls_smoke`，覆盖 STOR/RETR data TLS、明文 data client 失败、tree upload/download data TLS 以及 LIST/NLST 明文 listing 回归。
+- Release gate quick 接入 local data TLS smoke，full 接入 private STOR/RETR data TLS smoke。
+
+### 已执行验证
+
+- 通过：`cmake --build build -j2`
+- 通过：`ctest --test-dir build -R "DataTls|data_tls|tls|ControlOptions|FileTransferOptions|FileDownloadOptions|TreeTransferOptions|EventLog" --output-on-failure`
+- 子集结果：35/35 passed。
+- 通过：`python3 tools/test/run_gridftp_data_tls_smoke.py --build-dir build --bytes 65536`
+
+### 待收口验证
+
+- 本机 Debug full CTest。
+- 本机 `build-io-uring-real` Release full CTest，确认 io_uring smoke 为 Passed。
+- <redacted>二同步后 Debug 与 Release/io_uring full CTest。
+- private data TLS smoke、quick/full alpha gate、manifest freshness、artifact sync/final verify、public export strict hygiene 和最终残留进程检查。
+
+### 默认值与边界
+
+- 默认仍为 `auth-mode=anonymous`、`tls-mode=off`、`data-tls-mode=off`、`file_io_backend=posix`、`final_verify_policy=full`、`manifest_flush_policy=every_n_chunks`、`preallocate=off`、`posix_write_strategy=auto`。
+- 不实现 GSI、AUTH TLS、raw FTP TLS compatibility、生产证书管理、raw FTP STOR/RETR 或 LIST/NLST data TLS。
+
 ## 2026-05-15 Phase 0 初始化
 
 ### 已阅读文档

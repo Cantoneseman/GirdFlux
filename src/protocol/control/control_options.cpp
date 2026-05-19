@@ -305,6 +305,12 @@ common::Result<ControlServerOptions> parseControlServerOptions(int argc, const c
                 return common::Status::invalidArgument("--tls-ca-file must not be empty");
             }
             options.tls.caFile = std::string(value);
+        } else if (option == "--data-tls-mode") {
+            auto parsed = core::io::parseDataTlsMode(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.dataTlsMode = parsed.value();
         } else if (option == "--user") {
             if (value.empty()) {
                 return common::Status::invalidArgument("--user must not be empty");
@@ -355,6 +361,11 @@ common::Result<ControlServerOptions> parseControlServerOptions(int argc, const c
     if (!tlsStatus.isOk()) {
         return tlsStatus;
     }
+    const common::Status dataTlsStatus =
+        core::io::validateDataTlsServerConfig(options.tls.mode, options.dataTlsMode, options.tls);
+    if (!dataTlsStatus.isOk()) {
+        return dataTlsStatus;
+    }
     return options;
 }
 
@@ -377,7 +388,8 @@ std::string controlServerUsage(const char* programName) {
               "[--auth-mode anonymous|token] [--auth-token-file <path>] "
               "[--user <name>] [--password <password>] [--event-log <path>] "
               "[--tls-mode off|explicit|required] [--tls-cert-file <path>] "
-              "[--tls-key-file <path>] [--tls-ca-file <path>]";
+              "[--tls-key-file <path>] [--tls-ca-file <path>] "
+              "[--data-tls-mode off|required]";
     return output.str();
 }
 

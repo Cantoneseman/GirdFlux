@@ -1196,6 +1196,11 @@ common::Status processUploadFile(SchedulerState* state, std::size_t index,
     fileOptions.transferId = effectiveTransferId;
     fileOptions.checksumAlgorithm = options.checksumAlgorithm;
     fileOptions.checksumBackend = options.checksumBackend;
+    fileOptions.dataTls = options.tls;
+    fileOptions.dataTls.mode = options.dataTlsMode == core::io::DataTlsMode::Required
+                                   ? core::io::TlsMode::Required
+                                   : core::io::TlsMode::Off;
+    fileOptions.dataTlsMode = options.dataTlsMode;
     fileOptions.resume = resumeFile;
 
     const common::Status transferStatus = runFileTransferClient(fileOptions);
@@ -1323,6 +1328,11 @@ common::Status processDownloadFile(SchedulerState* state, std::size_t index,
     fileOptions.transferId = effectiveTransferId;
     fileOptions.checksumAlgorithm = options.checksumAlgorithm;
     fileOptions.checksumBackend = options.checksumBackend;
+    fileOptions.dataTls = options.tls;
+    fileOptions.dataTls.mode = options.dataTlsMode == core::io::DataTlsMode::Required
+                                   ? core::io::TlsMode::Required
+                                   : core::io::TlsMode::Off;
+    fileOptions.dataTlsMode = options.dataTlsMode;
     fileOptions.resume = resumeFile;
 
     const common::Status transferStatus = runFileDownloadClient(fileOptions);

@@ -499,6 +499,11 @@ common::Status runStor(core::io::TlsConnection* control, ControlSession& session
     fileOptions.commitSyncPolicy = controlOptions.commitSyncPolicy;
     fileOptions.preallocateMode = controlOptions.preallocateMode;
     fileOptions.fileIo = controlOptions.fileIo;
+    fileOptions.dataTls = controlOptions.tls;
+    fileOptions.dataTls.mode = controlOptions.dataTlsMode == core::io::DataTlsMode::Required
+                                   ? core::io::TlsMode::Required
+                                   : core::io::TlsMode::Off;
+    fileOptions.dataTlsMode = controlOptions.dataTlsMode;
     fileOptions.resume = response.resume;
 
     const std::string prelude = "Opening GridFlux data connection transfer_id=GFID:" + transferId +
@@ -567,6 +572,11 @@ common::Status runRetr(core::io::TlsConnection* control, ControlSession& session
     senderOptions.checksumAlgorithm = controlOptions.checksumAlgorithm;
     senderOptions.checksumBackend = controlOptions.checksumBackend;
     senderOptions.fileIo = controlOptions.fileIo;
+    senderOptions.dataTls = controlOptions.tls;
+    senderOptions.dataTls.mode = controlOptions.dataTlsMode == core::io::DataTlsMode::Required
+                                     ? core::io::TlsMode::Required
+                                     : core::io::TlsMode::Off;
+    senderOptions.dataTlsMode = controlOptions.dataTlsMode;
     senderOptions.resume = response.resume;
     senderOptions.sourcePath = sourcePath;
 
@@ -748,6 +758,12 @@ common::Status runControlServer(const ControlServerOptions& options) {
         }
         tlsContext = std::make_shared<core::io::TlsServerContext>(std::move(context.value()));
     }
+    const common::Status dataTlsStatus =
+        core::io::validateDataTlsServerConfig(options.tls.mode, options.dataTlsMode, options.tls);
+    if (!dataTlsStatus.isOk()) {
+        emitControlEvent(eventLogger, "data_tls_config_failed", "", "", "", dataTlsStatus);
+        return dataTlsStatus;
+    }
 
     auto listenerResult = core::io::createListener(options.host.c_str(), options.port, 32);
     if (!listenerResult.isOk()) {
@@ -760,7 +776,8 @@ common::Status runControlServer(const ControlServerOptions& options) {
               << " data_port_base=" << options.dataPortBase
               << " connections=" << options.connections
               << " auth_mode=" << authModeName(options.auth.mode)
-              << " tls_mode=" << core::io::tlsModeName(options.tls.mode) << '\n'
+              << " tls_mode=" << core::io::tlsModeName(options.tls.mode)
+              << " data_tls_mode=" << core::io::dataTlsModeName(options.dataTlsMode) << '\n'
               << std::flush;
     emitControlEvent(eventLogger, "server_start", "", options.root, "", common::Status::ok());
 
