@@ -373,6 +373,23 @@ def tree_perf_tool_paths(root: Path) -> list[str]:
     return sorted(result)
 
 
+def beta_perf_tool_paths(root: Path) -> list[str]:
+    result: list[str] = []
+    for name in [
+        "run_gridftp_private_matrix.py",
+        "run_beta1a_private_readiness.py",
+        "analyze_beta1a.py",
+        "test_beta1a_helpers.py",
+        "run_beta1b_stor_writeback.py",
+        "analyze_beta1b_stor_writeback.py",
+        "test_beta1b_stor_writeback.py",
+    ]:
+        path = root / "tools" / "perf" / name
+        if path.is_file():
+            result.append(path.relative_to(root).as_posix())
+    return sorted(result)
+
+
 def demo_tool_paths(root: Path) -> list[str]:
     demo_dir = root / "tools" / "demo"
     if not demo_dir.is_dir():
@@ -447,6 +464,9 @@ def collect_alpha_artifact_paths(
         "docs/SECURITY.md",
         "docs/OBSERVABILITY.md",
         "docs/perf/README.md",
+        "docs/perf/BETA1A_100G_READINESS.md",
+        "docs/perf/BETA1B_DATA_TLS_RESUME_AND_STOR_WRITE.md",
+        "docs/perf/BETA1B_STOR_WRITEBACK_DIAGNOSIS.md",
         "docs/perf/PHASE5B_TREE_DATASET_MATRIX.md",
         "docs/perf/PHASE5C_TREE_ALPHA_HARDENING.md",
         "docs/release/PHASE5D_ALPHA_DEMO.md",
@@ -456,6 +476,7 @@ def collect_alpha_artifact_paths(
         *tree_test_tool_paths(root),
         *security_test_tool_paths(root),
         *tree_perf_tool_paths(root),
+        *beta_perf_tool_paths(root),
         *demo_tool_paths(root),
         *latest_demo_artifacts(root),
         *latest_tree_matrix_artifacts(root),

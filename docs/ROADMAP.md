@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**阶段：** Beta 1A-1 — 私网 readiness matrix 已执行，进入 Beta 1B 方向选择
+**阶段：** Beta 1B-2 — STOR receiver temp write/writeback focused diagnostics completed and release-gated
 
 **已完成：** 项目设计、技术选型、工程规范制定、CMake 工程骨架初始化、GoogleTest 工具链测试、本机与<redacted>二构建验证、GridFTP 源码学习经验整理入设计文档、Phase 1.0 多连接 TCP sink 与本机 loopback 验证、Phase 1.1 性能基线脚本与 loopback smoke matrix、Phase 1.2A offset-aware 单文件传输闭环、Phase 1.2B 文件传输健壮性、Phase 1.3A 文件性能基线自动化、Phase 2A manifest/range-based 断点续传核心、Phase 2B CRC32C chunk checksum 与损坏注入验证、Phase 2C CRC32C backend 自动选择、manifest 批量 flush、恢复统计与 checksum benchmark、Phase 3A GridFTP 风格控制面 STOR 上传与 REST/GFID resume 映射、Phase 3B GridFTP 风格控制面 framed RETR 完整下载、Phase 3C 下载端 manifest/verified_chunks 与 RETR REST/GFID resume、Phase 3D 控制面 SIZE/MDTM/CWD/CDUP/LIST/NLST 与测试工具收敛。
 
@@ -10,7 +10,7 @@
 
 **未开始：** 系统级文件传输调优、raw FTP stream STOR/RETR、GridFTP GSI、MLST/MLSD、网络 io_uring、生产级目录同步。
 
-**下一步：** 用 Beta 1A 私网矩阵和 host/link/storage baseline 判断 100G readiness：单文件/目录、TLS off/on、checksum crc32c/none、POSIX/io_uring 的主要瓶颈分别在哪里；默认仍保持 anonymous、`tls-mode=off`、`data-tls-mode=off`、POSIX backend、full final verify 和现有 framed STOR/RETR 语义。
+**下一步：** 进入 Beta 1B-3，仅做 opt-in receiver writeback/backpressure/profile 优化和 OS storage/writeback 对照，不改变 anonymous、`tls-mode=off`、`data-tls-mode=off`、POSIX backend、full final verify 和现有 framed STOR/RETR 语义。
 
 ---
 
@@ -388,6 +388,24 @@
 
 状态：Beta 1A-1 已执行。两台<redacted> Debug full CTest 182/182 passed；两台<redacted> `build-io-uring-real` Release full CTest 182/182 passed，真实 io_uring smoke Passed。Readiness smoke 通过：single-file 72/72 pass，tree 72/72 pass，host baseline pass。Resume 子矩阵 64/64 pass。Full 4GiB/repeat=3 未执行，原因是耗时较高且先暴露了 `STOR resume + data TLS required` readiness blocker。Quick/full alpha gate、Alpha RC、public hygiene、artifact verify 均通过。
 
+**Beta 1B-0 / 1B-1 data TLS resume 修复与 STOR 写入瓶颈诊断**
+
+- 新增 focused smoke `tools/test/run_gridftp_data_tls_resume_smoke.py`，覆盖普通 STOR/RETR data TLS、STOR resume data TLS、RETR resume data TLS、checksum `crc32c|none`、backend `posix|io_uring`，并确认 LIST/NLST listing data 仍保持 plaintext alpha 行为。
+- 修复 OpenSSL TLS data socket 在 partial upload/resume 注入时可能触发 `SIGPIPE` 终止 server 的边界，使控制连接能返回普通 `550` 并进入 `REST GFID` resume。
+- 跑 focused private matrix：`stor-resume,retr-resume` x TLS/data TLS valid combos x checksum `crc32c|none` x backend `posix|io_uring` x connections `1,2,4,8`。
+- 复用现有 STOR receiver 写入诊断字段和 env sidecar，不重复新增 C++ 指标。
+
+状态：已完成本机/<redacted>二 183/183 CTest、focused smoke 和 96-case private focused matrix。Focused matrix raw CSV 为 `tools/perf/results/20260519T101941Z_gridftp-private-matrix-smoke.csv`，summary 为 `tools/perf/results/20260519T101941Z_gridftp-private-matrix-smoke-summary.csv`；96/96 pass，hash mismatch=0。STOR resume data TLS required median 约 1.37 Gbps；STOR receiver temp write median 约 5.05s，继续指向 temp write/writeback 是主瓶颈。报告见 `docs/perf/BETA1B_DATA_TLS_RESUME_AND_STOR_WRITE.md`。
+
+**Beta 1B-2 STOR receiver temp write/writeback focused diagnostics**
+
+- 新增 `tools/perf/run_beta1b_stor_writeback.py`，先跑 receiver-side native storage bench，再编排四组小范围 STOR A/B：backend/connections、write strategy/file buffer、preallocate/manifest flush、final verify opt-in。
+- 新增 `tools/perf/analyze_beta1b_stor_writeback.py` 和 `docs/perf/BETA1B_STOR_WRITEBACK_DIAGNOSIS.md`，对比 native write throughput、GridFlux temp-write throughput 和 GridFlux STOR end-to-end throughput。
+- `run_gridftp_private_matrix.py` 复用既有 C++ 指标，补充 `rename_commit_seconds` alias，并把 env sidecar 中 Dirty/Writeback/Cached before/after 写入 raw/summary CSV。
+- Beta 1B-2 只做诊断和 opt-in A/B，不改变 STOR/RETR framed data path、checksum、manifest、resume、final verify 或默认策略。
+
+状态：已完成并通过 release gate。Focused runner `tools/perf/results/20260519T124750Z_beta1b-stor-writeback.json` 为 pass；storage summary `64` rows / `192` pass cases / `0` fail cases，STOR raw `120/120` pass，summary `40` rows / `120` pass cases，hash mismatch `0`。本机和<redacted>二 Debug / real io_uring Release full CTest 均为 `184/184 passed`，真实 io_uring smoke Passed。quick gate `tools/perf/results/20260519T135514Z_alpha-release-gate.json`、full gate `tools/perf/results/20260519T135651Z_alpha-release-gate.json` 和 Alpha RC `tools/perf/results/20260519T140445Z_alpha-release-candidate.json` 均 pass；RC artifact sync/final verify checked `1638`，missing `0`，mismatch `0`；public export strict hygiene pass。关键 median：STOR row medians median `1.419 Gbps`，最佳 `1.544 Gbps`，default-like crc32c/POSIX 最佳 `1.488 Gbps`；temp-write wall share median `86.7%`、max `95.7%`；data_receive median `1.6%`；native storage write median `1.078 Gbps`、best `1.328 Gbps`。结论：STOR receiver temp write/writeback 主导，但 opt-in knobs 未显示稳定默认收益；Beta 1B-3 应聚焦 receiver writeback/backpressure/profile 的 opt-in 优化和 OS storage/writeback 对照，不改变默认策略。
+
 **后续候选**
 
 - TLS/GSI 后续设计：Phase 6D 只完成 STOR/RETR framed file data TLS alpha；LIST/NLST data TLS、AUTH TLS、GSI 和生产证书管理仍需设计。
@@ -469,6 +487,8 @@
 | 2026-05-18 | Phase 6C TLS 为 opt-in control-plane-only alpha | 默认 `tls-mode=off`；`required` 只包控制连接，passive data channel 仍为现有 framed TCP；不实现 GSI/AUTH TLS/raw FTP TLS，不记录 cert/key/token 内容 |
 | 2026-05-19 | Phase 6D data TLS 只覆盖 STOR/RETR framed file data | 默认 `data-tls-mode=off`；required 仅在 control TLS required 下可用；LIST/NLST listing data 保持明文 alpha 限制，避免误称完整 FTP/TLS 或 GSI |
 | 2026-05-19 | Phase 6E 只收口 alpha 交付包，不扩核心功能 | 新增 RC 总控、long soak、限制/架构文档和 artifact sync 闭环；默认策略、framed STOR/RETR、checksum、manifest、resume、final verify 均保持不变 |
+| 2026-05-19 | Beta 1B 先修 data TLS resume correctness blocker，再做 STOR write/writeback | OpenSSL TLS data socket partial close 需要避免 SIGPIPE 杀死 server；focused matrix 全绿后，下一步继续诊断 receiver temp write/writeback，不改变默认策略 |
+| 2026-05-19 | Beta 1B-2 聚焦 STOR receiver writeback 而非扩大 heavy matrix | 使用 native storage bench + focused STOR A/B 拆 GridFlux 写入路径、page cache/writeback、manifest/final verify/rename 和环境波动；默认策略保持不变 |
 
 ---
 

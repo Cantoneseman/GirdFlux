@@ -354,6 +354,10 @@ if(GRIDFLUX_BUILD_TESTS)
         COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/test/run_gridftp_data_tls_smoke.py --build-dir ${CMAKE_BINARY_DIR}
     )
     add_test(
+        NAME gridflux_gridftp_data_tls_resume_smoke
+        COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/test/run_gridftp_data_tls_resume_smoke.py --build-dir ${CMAKE_BINARY_DIR}
+    )
+    add_test(
         NAME gridflux_event_log_smoke
         COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/test/run_gridftp_event_log_smoke.py --build-dir ${CMAKE_BINARY_DIR}
     )
@@ -416,5 +420,9 @@ if(GRIDFLUX_BUILD_TESTS)
     add_test(
         NAME gridflux_beta1a_perf_helper_behavior
         COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/perf/test_beta1a_helpers.py
+    )
+    add_test(
+        NAME gridflux_beta1b_stor_writeback_helper_behavior
+        COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/perf/test_beta1b_stor_writeback.py
     )
 endif()

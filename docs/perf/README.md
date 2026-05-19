@@ -900,7 +900,7 @@ timestamp,mode,host,port,connections,chunk_size,buffer_size,bytes,checksum_enabl
 GridFTP-like 私网矩阵 CSV 字段：
 
 ```text
-timestamp,mode,direction,bytes,connections,chunk_size,buffer_size,checksum_algorithm,checksum_backend,preallocate,file_io_backend,file_io_buffer_size,posix_write_strategy,posix_write_strategy_effective,file_io_queue_depth,file_io_batch_size,file_io_advice,repeat_index,elapsed,throughput_gbps,skipped_bytes,resent_bytes,verified_bytes,manifest_flush_count,manifest_flush_policy,manifest_flush_interval_chunks,commit_sync_policy,final_verify_policy,final_verify_policy_effective,stage_*,write_call_count,write_syscall_count,write_retry_count,write_short_count,write_zero_count,write_total_bytes,write_avg_bytes_per_call,write_avg_bytes_per_syscall,data_receive_seconds,temp_write_seconds,source_read_seconds,network_send_seconds,download_temp_write_seconds,sender_*,receiver_*,host_baseline_csv,storage_bench_csv,source_sha256,dest_sha256,result,server_log,client_log,server_env_before_log,server_env_after_log,client_env_before_log,client_env_after_log,server_hostname,client_hostname,server_kernel,client_kernel,server_cpu_flags,client_cpu_flags,server_fs_type,client_fs_type,server_free_bytes,client_free_bytes
+timestamp,mode,direction,bytes,connections,chunk_size,buffer_size,checksum_algorithm,checksum_backend,preallocate,file_io_backend,file_io_buffer_size,posix_write_strategy,posix_write_strategy_effective,file_io_queue_depth,file_io_batch_size,file_io_advice,repeat_index,elapsed,throughput_gbps,skipped_bytes,resent_bytes,verified_bytes,manifest_flush_count,manifest_flush_policy,manifest_flush_interval_chunks,commit_sync_policy,final_verify_policy,final_verify_policy_effective,stage_*,write_call_count,write_syscall_count,write_retry_count,write_short_count,write_zero_count,write_total_bytes,write_avg_bytes_per_call,write_avg_bytes_per_syscall,data_receive_seconds,temp_write_seconds,rename_commit_seconds,source_read_seconds,network_send_seconds,download_temp_write_seconds,sender_*,receiver_*,host_baseline_csv,storage_bench_csv,source_sha256,dest_sha256,result,server_log,client_log,server_env_before_log,server_env_after_log,client_env_before_log,client_env_after_log,server_dirty_kb_before,server_writeback_kb_before,server_cached_kb_before,server_dirty_kb_after,server_writeback_kb_after,server_cached_kb_after,client_dirty_kb_before,client_writeback_kb_before,client_cached_kb_before,client_dirty_kb_after,client_writeback_kb_after,client_cached_kb_after,server_hostname,client_hostname,server_kernel,client_kernel,server_cpu_flags,client_cpu_flags,server_fs_type,client_fs_type,server_free_bytes,client_free_bytes
 ```
 
 实际 CSV 还会附加 `transfer_id`、端口、临时路径和错误摘要。`throughput_gbps` / `elapsed` 优先使用接收端语义：STOR 取 server receiver，RETR 取 download client receiver。RETR sender 的 `verified_bytes` 表示 sender 已确认/发送的 verified range 字节；download client 的 `verified_bytes` 表示接收端本地校验完成字节。Phase 4J 起 CSV 同时保留 `sender_*` / `receiver_*` 双侧阶段字段，便于同一 RETR row 同时分析 sender read/send 与 receiver write/final verify。Phase 4L 起 summary CSV 对数值字段追加 `*_spread_pct` 和近似 `*_p95`，并输出 `unstable_spread_gt_20pct`、`unstable_minmax_outlier`、`stage_throughput_mismatch` 与 `repeat_count`。
@@ -998,3 +998,108 @@ backend. Tree matrix supports the same TLS/data TLS and `posix|io_uring`
 backend dimensions. `data-tls-mode required` remains scoped to STOR/RETR framed
 file data; LIST/NLST listing data is not part of the Beta 1A TLS performance
 claim.
+
+## Beta 1B Data TLS Resume Focused Gate
+
+Beta 1B first fixes the Beta 1A-1 correctness blocker before any heavier
+readiness run. The focused smoke covers ordinary STOR/RETR data TLS, STOR
+resume data TLS, RETR resume data TLS, and LIST/NLST compatibility with the
+existing plaintext listing data channel:
+
+```bash
+python3 tools/test/run_gridftp_data_tls_resume_smoke.py \
+  --build-dir build-io-uring-real \
+  --file-io-backends posix,io_uring
+```
+
+The private focused matrix intentionally stays smaller than the full 4 GiB
+heavy run:
+
+```bash
+python3 tools/perf/run_gridftp_private_matrix.py \
+  --smoke \
+  --directions stor-resume,retr-resume \
+  --bytes 1073741824 \
+  --connections 1,2,4,8 \
+  --chunk-sizes 4194304 \
+  --buffer-sizes 262144 \
+  --checksums crc32c,none \
+  --file-io-backends posix,io_uring \
+  --tls-modes off,required \
+  --data-tls-modes off,required \
+  --repeat 1 \
+  --remote <remote> \
+  --server-host <server-host> \
+  --local-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --output-dir tools/perf/results \
+  --case-timeout 900
+```
+
+`tls=off + data_tls=required` is an invalid combination and is skipped by the
+matrix generator. STOR write/writeback diagnosis should reuse existing CSV
+fields: `temp_write_seconds`, `stage_write_seconds`,
+`stage_manifest_flush_seconds`, `stage_final_verify_seconds`,
+`stage_rename_commit_seconds`, `rename_commit_seconds`,
+`write_syscall_count`, `write_avg_bytes_per_syscall`,
+`file_io_wait_seconds`, and the per-case
+Dirty/Writeback/env sidecar logs. Beta 1B-2 also writes parsed sidecar values
+to raw/summary CSV fields such as `server_dirty_kb_before`,
+`server_writeback_kb_after`, and `client_cached_kb_after`; `iostat=unavailable`
+inside the sidecar is an accepted environment state.
+
+## Beta 1B STOR Writeback Focused Diagnosis
+
+Beta 1B-2 adds a focused wrapper for STOR receiver temp write/writeback. It does
+not run the 4 GiB repeat=3 full heavy matrix and does not change defaults.
+
+Smoke:
+
+```bash
+python3 tools/perf/run_beta1b_stor_writeback.py \
+  --smoke \
+  --remote <remote> \
+  --server-host <server-host> \
+  --local-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --output-dir tools/perf/results
+```
+
+Focused run:
+
+```bash
+python3 tools/perf/run_beta1b_stor_writeback.py \
+  --focused \
+  --bytes 1073741824 \
+  --repeat 3 \
+  --remote <remote> \
+  --server-host <server-host> \
+  --local-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --output-dir tools/perf/results \
+  --case-timeout 900
+```
+
+The wrapper writes:
+
+- `tools/perf/results/<timestamp>_beta1b-stor-writeback.json`
+- receiver-side native storage bench raw/summary CSV
+- four STOR focused raw/summary CSV pairs from `run_gridftp_private_matrix.py`
+- per-case server/client logs, JSONL event logs, and env sidecars
+- `docs/perf/BETA1B_STOR_WRITEBACK_DIAGNOSIS.md`
+
+The focused STOR batches cover backend/connections, POSIX write strategy and
+file IO buffer size, preallocate/manifest flush, and `verified_chunks` final
+verify as a crc32c-only opt-in. The analyzer compares native write throughput,
+GridFlux temp-write throughput, and GridFlux end-to-end STOR throughput using
+repeat medians.
+
+Beta 1B-2 focused execution from 2026-05-19:
+
+- Wrapper JSON: `tools/perf/results/20260519T124750Z_beta1b-stor-writeback.json`
+- Storage raw/summary: `tools/perf/results/20260519T124750Z_storage-bench.csv`, `tools/perf/results/20260519T124750Z_storage-bench-summary.csv`
+- STOR raw CSVs: `tools/perf/results/20260519T131343Z_gridftp-private-matrix-smoke.csv`, `tools/perf/results/20260519T132246Z_gridftp-private-matrix-smoke.csv`, `tools/perf/results/20260519T133438Z_gridftp-private-matrix-smoke.csv`, `tools/perf/results/20260519T134036Z_gridftp-private-matrix-smoke.csv`
+- STOR summary CSVs: `tools/perf/results/20260519T131343Z_gridftp-private-matrix-smoke-summary.csv`, `tools/perf/results/20260519T132246Z_gridftp-private-matrix-smoke-summary.csv`, `tools/perf/results/20260519T133438Z_gridftp-private-matrix-smoke-summary.csv`, `tools/perf/results/20260519T134036Z_gridftp-private-matrix-smoke-summary.csv`
+- Result: storage summary `64` rows / `192` pass cases / `0` fail cases; STOR raw `120/120` pass; STOR summary `40` rows / `120` pass cases / `0` fail cases; hash mismatch `0`.
+- Key medians: STOR row medians median `1.419 Gbps`, best `1.544 Gbps`, default-like crc32c/POSIX best `1.488 Gbps`; temp-write wall share median `86.7%`, max `95.7%`; data_receive median `1.6%`; native storage write median `1.078 Gbps`, best `1.328 Gbps`.
+- Recommendation: no default policy change; continue Beta 1B-3 as opt-in receiver writeback/backpressure/profile work plus OS storage/writeback comparison.

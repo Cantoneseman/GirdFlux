@@ -8,6 +8,45 @@ Best observed median throughput in the supplied summaries is 4.217 Gbps, about 2
 
 Defaults remain unchanged: anonymous auth, TLS off, data TLS off, POSIX backend, full final verify, every-n-chunks manifest flush, preallocate off, and POSIX write strategy auto.
 
+## Beta 1B-0 Follow-up: Data TLS Resume Blocker
+
+Beta 1A-1 exposed a correctness blocker before the 4 GiB repeat=3 heavy run was
+continued: `STOR resume + tls=required + data_tls=required` could close the
+control connection after a partial upload rather than returning a recoverable
+`550` for `REST GFID` resume. Beta 1B fixed the issue by preventing OpenSSL
+data-channel writes/shutdown from delivering `SIGPIPE` to the server process.
+
+Focused validation after the fix:
+
+- raw CSV: `tools/perf/results/20260519T101941Z_gridftp-private-matrix-smoke.csv`
+- summary CSV: `tools/perf/results/20260519T101941Z_gridftp-private-matrix-smoke-summary.csv`
+- coverage: STOR/RETR resume, TLS off/required, data TLS off/required, checksum
+  `crc32c|none`, backend `posix|io_uring`, connections `1,2,4,8`
+- result: 96/96 pass, hash mismatch=0
+
+This does not change the Beta 1A readiness conclusion: the environment remains
+far below 100G, CRC32C hardware is not the main bottleneck, STOR is still
+receiver temp write/writeback dominated, and RETR alternates between sender
+network send and receiver download temp write pressure.
+
+## Beta 1B-2 Follow-up: STOR Writeback Diagnosis
+
+Beta 1B-2 narrows the next performance question to STOR receiver temp
+write/writeback. The new focused package aligns receiver-side native
+`gridflux-storage-bench` write results with GridFlux STOR temp write and
+end-to-end throughput, while keeping all defaults unchanged.
+
+New artifacts:
+
+- runner: `tools/perf/run_beta1b_stor_writeback.py`
+- analyzer: `tools/perf/analyze_beta1b_stor_writeback.py`
+- report: `docs/perf/BETA1B_STOR_WRITEBACK_DIAGNOSIS.md`
+
+The focused runner avoids the 4 GiB repeat=3 full heavy matrix. It scans only
+small opt-in STOR A/B batches for backend/connections, POSIX write
+strategy/file buffer, preallocate/manifest flush, and crc32c-only final verify
+policy.
+
 ## Host / Link / Storage Baseline
 
 | side | category | tool | bytes | Gbps | result |
@@ -332,3 +371,13 @@ Do not change defaults. Recommended Beta 1B direction:
 3. Investigate RETR sender network-send scheduling and receiver temp-write coupling with repeat=3 before adding new io_uring features.
 4. If 100G remains a goal, validate the private link and disk subsystem independently of GridFlux; the current memory-sink and disk baselines are already below the target by large margins.
 5. After the data-TLS resume blocker is fixed, rerun a reduced 4GiB repeat=3 matrix focused on default POSIX, io_uring opt-in, TLS/data TLS, and connections 4/8.
+
+## Beta 1B-2 Follow-Up
+
+The follow-up STOR writeback diagnosis completed a focused 1GiB/repeat=3 run without expanding to the 4GiB full heavy matrix. Artifacts:
+
+- Wrapper JSON: `tools/perf/results/20260519T124750Z_beta1b-stor-writeback.json`
+- Report: `docs/perf/BETA1B_STOR_WRITEBACK_DIAGNOSIS.md`
+- Result: storage summary `64` rows / `192` pass cases / `0` fail cases; STOR raw `120/120` pass; STOR summary `40` rows / `120` pass cases / `0` fail cases; hash mismatch `0`.
+
+Key result: STOR receiver temp write/writeback is still dominant. STOR row medians median `1.419 Gbps`, best `1.544 Gbps`, default-like crc32c/POSIX best `1.488 Gbps`; temp-write wall share median `86.7%`, max `95.7%`; data_receive wall share median `1.6%`; native storage write median `1.078 Gbps`, best `1.328 Gbps`. POSIX vs io_uring, file buffer/coalesced, preallocate, final_only, and verified_chunks did not show a stable default-worthy win. Beta 1B-3 should continue as opt-in receiver writeback/backpressure/profile work plus OS storage/writeback comparison, with defaults unchanged.

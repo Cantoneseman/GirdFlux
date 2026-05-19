@@ -5,6 +5,7 @@
 
 #include <cerrno>
 #include <climits>
+#include <csignal>
 #include <cstring>
 #include <string>
 #include <utility>
@@ -74,7 +75,13 @@ common::Status tlsIoStatus(SSL* ssl, int result, const char* operation) {
     return opensslStatus(operation);
 }
 
-void initializeOpenSsl() { (void)OPENSSL_init_ssl(0, nullptr); }
+void initializeOpenSsl() {
+    // OpenSSL's SSL_write/SSL_shutdown may otherwise raise SIGPIPE when a peer
+    // intentionally closes a TLS data connection, such as a partial transfer
+    // used to create a resumable manifest.
+    (void)std::signal(SIGPIPE, SIG_IGN);
+    (void)OPENSSL_init_ssl(0, nullptr);
+}
 
 }  // namespace
 

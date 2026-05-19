@@ -119,6 +119,7 @@ PHASE_ALIAS_FIELDS = [
     "final_verify_bytes",
     "finalize_rename_seconds",
     "finalize_rename_bytes",
+    "rename_commit_seconds",
     "source_read_seconds",
     "source_read_bytes",
     "network_send_seconds",
@@ -184,6 +185,18 @@ CSV_FIELDS = [
     "server_env_after_log",
     "client_env_before_log",
     "client_env_after_log",
+    "server_dirty_kb_before",
+    "server_writeback_kb_before",
+    "server_cached_kb_before",
+    "server_dirty_kb_after",
+    "server_writeback_kb_after",
+    "server_cached_kb_after",
+    "client_dirty_kb_before",
+    "client_writeback_kb_before",
+    "client_cached_kb_before",
+    "client_dirty_kb_after",
+    "client_writeback_kb_after",
+    "client_cached_kb_after",
     "server_hostname",
     "client_hostname",
     "server_kernel",
@@ -602,6 +615,24 @@ def event_error_code_counts(*paths: Path) -> str:
             elif result == "fail":
                 counts["unknown_error"] = counts.get("unknown_error", 0) + 1
     return json.dumps(counts, sort_keys=True, separators=(",", ":"))
+
+
+def env_sidecar_meminfo(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {"dirty_kb": "", "writeback_kb": "", "cached_kb": ""}
+    result = {"dirty_kb": "", "writeback_kb": "", "cached_kb": ""}
+    mapping = {"Dirty": "dirty_kb", "Writeback": "writeback_kb", "Cached": "cached_kb"}
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        match = re.match(r"^(Dirty|Writeback|Cached):\s+(\d+)\s+kB\b", line)
+        if match:
+            result[mapping[match.group(1)]] = match.group(2)
+    return result
+
+
+def fill_env_sidecar_fields(row: dict[str, str], side: str, label: str, path: Path) -> None:
+    values = env_sidecar_meminfo(path)
+    for name, value in values.items():
+        row[f"{side}_{name}_{label}"] = value
 
 
 def start_control_server(
@@ -1111,6 +1142,18 @@ def initial_row(args: argparse.Namespace, case: Case, env: EnvironmentSnapshot, 
         "server_env_after_log": "",
         "client_env_before_log": "",
         "client_env_after_log": "",
+        "server_dirty_kb_before": "",
+        "server_writeback_kb_before": "",
+        "server_cached_kb_before": "",
+        "server_dirty_kb_after": "",
+        "server_writeback_kb_after": "",
+        "server_cached_kb_after": "",
+        "client_dirty_kb_before": "",
+        "client_writeback_kb_before": "",
+        "client_cached_kb_before": "",
+        "client_dirty_kb_after": "",
+        "client_writeback_kb_after": "",
+        "client_cached_kb_after": "",
         "server_hostname": env.server_hostname,
         "client_hostname": env.client_hostname,
         "server_kernel": env.server_kernel,
@@ -1135,6 +1178,16 @@ def initial_row(args: argparse.Namespace, case: Case, env: EnvironmentSnapshot, 
         for field in ROLE_METRIC_FIELDS + STAGE_FIELDS + PHASE_ALIAS_FIELDS:
             row[f"{prefix}_{field}"] = ""
     return row
+
+
+def metric_value(metrics: dict[str, str], field: str) -> str:
+    if field == "rename_commit_seconds":
+        return (
+            metrics.get("rename_commit_seconds")
+            or metrics.get("stage_rename_commit_seconds")
+            or metrics.get("finalize_rename_seconds", "")
+        )
+    return metrics.get(field, "")
 
 
 def fill_metrics(row: dict[str, str], direction: str, server_text: str, client_text: str) -> None:
@@ -1173,7 +1226,7 @@ def fill_metrics(row: dict[str, str], direction: str, server_text: str, client_t
         "posix_write_strategy_effective", row["posix_write_strategy_effective"]
     )
     for field in STAGE_FIELDS + PHASE_ALIAS_FIELDS:
-        row[field] = metrics.get(field, "")
+        row[field] = metric_value(metrics, field)
 
     role_metrics = {"sender": sender_metrics, "receiver": receiver_metrics}
     for prefix, values in role_metrics.items():
@@ -1203,7 +1256,7 @@ def fill_metrics(row: dict[str, str], direction: str, server_text: str, client_t
         for field, source_key in role_map.items():
             row[f"{prefix}_{field}"] = values.get(source_key, "")
         for field in STAGE_FIELDS + PHASE_ALIAS_FIELDS:
-            row[f"{prefix}_{field}"] = values.get(field, "")
+            row[f"{prefix}_{field}"] = metric_value(values, field)
 
 
 SUMMARY_GROUP_FIELDS = [
@@ -1243,6 +1296,18 @@ SUMMARY_METRIC_FIELDS = [
     *[f"receiver_{field}" for field in ROLE_METRIC_FIELDS],
     *[f"receiver_{field}" for field in STAGE_FIELDS],
     *[f"receiver_{field}" for field in PHASE_ALIAS_FIELDS],
+    "server_dirty_kb_before",
+    "server_writeback_kb_before",
+    "server_cached_kb_before",
+    "server_dirty_kb_after",
+    "server_writeback_kb_after",
+    "server_cached_kb_after",
+    "client_dirty_kb_before",
+    "client_writeback_kb_before",
+    "client_cached_kb_before",
+    "client_dirty_kb_after",
+    "client_writeback_kb_after",
+    "client_cached_kb_after",
 ]
 
 SUMMARY_FIELDS = [
@@ -1495,6 +1560,8 @@ def run_case(args: argparse.Namespace, case: Case, run_root: Path, env: Environm
             row["server_env_before_log"] = str(before_server)
             row["client_env_before_log"] = str(before_client)
             row["env_snapshot_before"] = f"{before_server};{before_client}"
+            fill_env_sidecar_fields(row, "server", "before", before_server)
+            fill_env_sidecar_fields(row, "client", "before", before_client)
             if case.direction == "stor":
                 transfer_id, client_text = run_stor_once(
                     args, case, remote_source, output_name, remote_client_event_log
@@ -1515,6 +1582,8 @@ def run_case(args: argparse.Namespace, case: Case, run_root: Path, env: Environm
             row["server_env_before_log"] = str(before_server)
             row["client_env_before_log"] = str(before_client)
             row["env_snapshot_before"] = f"{before_server};{before_client}"
+            fill_env_sidecar_fields(row, "server", "before", before_server)
+            fill_env_sidecar_fields(row, "client", "before", before_client)
             if case.direction == "retr":
                 transfer_id, client_text = run_retr_once(
                     args, case, local_source.name, remote_output, remote_client_event_log
@@ -1531,6 +1600,8 @@ def run_case(args: argparse.Namespace, case: Case, run_root: Path, env: Environm
         row["server_env_after_log"] = str(after_server)
         row["client_env_after_log"] = str(after_client)
         row["env_snapshot_after"] = f"{after_server};{after_client}"
+        fill_env_sidecar_fields(row, "server", "after", after_server)
+        fill_env_sidecar_fields(row, "client", "after", after_client)
         fetch_remote_file(args.remote, remote_client_event_log, client_event_log)
         write_text(client_log, client_text)
         server_text = server_log.read_text(encoding="utf-8", errors="replace")
@@ -1553,6 +1624,8 @@ def run_case(args: argparse.Namespace, case: Case, run_root: Path, env: Environm
                 row["server_env_after_log"] = str(after_server)
                 row["client_env_after_log"] = str(after_client)
                 row["env_snapshot_after"] = f"{after_server};{after_client}"
+                fill_env_sidecar_fields(row, "server", "after", after_server)
+                fill_env_sidecar_fields(row, "client", "after", after_client)
             except Exception as sidecar_error:  # noqa: BLE001
                 row["error"] = (row["error"] + f" env_sidecar_after={sidecar_error}").strip()[:1000]
         fetch_remote_file(args.remote, remote_client_event_log, client_event_log)
