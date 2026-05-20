@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**阶段：** Beta 1B-3 — opt-in drain-budget receiver writeback/backpressure/profile implemented; focused validation complete
+**阶段：** Beta 1B-4 — receiver writeback opt-in stability matrix complete; defaults unchanged
 
 **已完成：** 项目设计、技术选型、工程规范制定、CMake 工程骨架初始化、GoogleTest 工具链测试、本机与<redacted>二构建验证、GridFTP 源码学习经验整理入设计文档、Phase 1.0 多连接 TCP sink 与本机 loopback 验证、Phase 1.1 性能基线脚本与 loopback smoke matrix、Phase 1.2A offset-aware 单文件传输闭环、Phase 1.2B 文件传输健壮性、Phase 1.3A 文件性能基线自动化、Phase 2A manifest/range-based 断点续传核心、Phase 2B CRC32C chunk checksum 与损坏注入验证、Phase 2C CRC32C backend 自动选择、manifest 批量 flush、恢复统计与 checksum benchmark、Phase 3A GridFTP 风格控制面 STOR 上传与 REST/GFID resume 映射、Phase 3B GridFTP 风格控制面 framed RETR 完整下载、Phase 3C 下载端 manifest/verified_chunks 与 RETR REST/GFID resume、Phase 3D 控制面 SIZE/MDTM/CWD/CDUP/LIST/NLST 与测试工具收敛。
 
@@ -10,7 +10,7 @@
 
 **未开始：** 系统级文件传输调优、raw FTP stream STOR/RETR、GridFTP GSI、MLST/MLSD、网络 io_uring、生产级目录同步。
 
-**下一步：** 基于 Beta 1B-3 focused 数据，只挑选稳定的 bounded budget/yield 候选进入更大矩阵；`receiver_write_profile=bounded`、`receiver_max_pending_bytes` 和 `receiver_write_yield_policy=dirty_poll` 均保持 opt-in，默认策略不变。
+**下一步：** 不扩大 receiver bounded/default 策略；优先转向磁盘、文件系统、云盘和 OS writeback 限制分析，继续保留 bounded/dirty_poll 为 opt-in 观察项。
 
 ---
 
@@ -415,6 +415,15 @@
 - 扩展 `tools/perf/run_beta1b_stor_writeback.py --receiver-writeback-optin` 和新增 `tools/perf/analyze_beta1b_receiver_writeback.py` / `docs/perf/BETA1B_RECEIVER_WRITEBACK_OPTIN.md`，focused matrix 只覆盖 STOR、POSIX、connections `1,4,8`、checksum `crc32c,none`、baseline default 和 bounded 64MiB/256MiB with `none|dirty_poll`。
 
 状态：实现已落地并完成 focused 验证。Focused runner `tools/perf/results/20260519T165059Z_beta1b-receiver-writeback-optin.json` 为 pass；storage raw `4` pass / `0` fail，STOR raw `90/90` pass，summary `30` rows / grouped fail `0`，hash mismatch `0`。本机和<redacted>二 Debug / real io_uring Release full CTest 均为 `184/184 passed`，真实 io_uring smoke Passed。关键 median：STOR summary median `1.711 Gbps`，best summary median `1.841 Gbps`，baseline median `1.724 Gbps`，opt-in median `1.701 Gbps`；temp-write wall share median `83.6%`，data_receive median `1.9%`；aligned POSIX/default native storage write median `0.938 Gbps`。结论：bounded drain-budget 只在部分 matched rows 改善 temp-share/spread，同时有 `4` 个 matched opt-in rows 超过 `5%` throughput regression；继续保留 opt-in、默认不变，后续只扩大稳定候选，不提前引入 user-space queue。
+
+**Beta 1B-4 receiver writeback opt-in stability matrix**
+
+- 不新增 receiver 功能，不改 C++ receiver 数据路径，不引入独立 user-space queue。
+- 扩展 `tools/perf/run_beta1b_stor_writeback.py --receiver-writeback-stability`，默认 `1GiB repeat=3`，`256MiB/4GiB` 仅通过 `--bytes-list` opt-in。
+- POSIX 主矩阵覆盖 STOR、connections `1,4,8`、checksum `crc32c,none`、TLS/data TLS pair `off/off` 与 `required/required`；io_uring 只跑 `connections=4`、`checksum=crc32c`、`off/off` 小子集。
+- 新增 `tools/perf/analyze_beta1b_receiver_writeback_stability.py` 和 `docs/perf/BETA1B_RECEIVER_WRITEBACK_STABILITY.md`，对 matched default vs bounded 统计 median、p95、spread、`>=5%` improvement、`<=-5%` regression，并单独比较 `dirty_poll` vs `none`。
+
+状态：已完成并通过 release gate。Stability runner `tools/perf/results/20260520T052835Z_beta1b-receiver-writeback-stability.json` 为 pass；storage raw `4` pass / `0` fail，STOR raw `195/195` pass，summary `65` rows / grouped fail `0`，hash mismatch `0`。本机和<redacted>二 Debug / real io_uring Release full CTest 均为 `184/184 passed`，真实 io_uring smoke Passed。quick gate `tools/perf/results/20260520T061737Z_alpha-release-gate.json`、full gate `tools/perf/results/20260520T061938Z_alpha-release-gate.json` 和 Alpha RC `tools/perf/results/20260520T062712Z_alpha-release-candidate.json` 均 pass；RC artifact verify checked `2077`，missing `0`，mismatch `0`；public export strict hygiene pass。关键 median：STOR summary median `1.849 Gbps`，best `2.183 Gbps`，baseline median `1.890 Gbps`，opt-in median `1.838 Gbps`；temp-write wall share median `74.2%`，data_receive median `2.5%`；matched bounded improvements/regressions 各 `9`，dirty_poll 独立对照 wins `4` / regressions `6`。结论：bounded/dirty_poll 不具备稳定收益，不推荐默认启用或进入 user-space queue 设计；下一步转向磁盘、文件系统、云盘和 OS writeback 限制分析。
 
 **后续候选**
 

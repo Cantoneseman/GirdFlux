@@ -1,6 +1,53 @@
 # GridFlux 项目状态记录
 
 
+## 2026-05-20 Beta 1B-4 receiver writeback opt-in stability matrix
+
+### 实现范围
+
+- 扩展 `tools/perf/run_beta1b_stor_writeback.py`：
+  - 新增 `--receiver-writeback-stability`，与 `--receiver-writeback-optin` 互斥；
+  - 新增 `--bytes-list`，stability 默认使用 `--bytes` 或 focused 默认 `1073741824`，`256MiB/4GiB` 只通过参数 opt-in；
+  - 输出 slug 为 `beta1b-receiver-writeback-stability`，报告写入 `docs/perf/BETA1B_RECEIVER_WRITEBACK_STABILITY.md`。
+- Stability POSIX 主矩阵只跑 STOR、repeat `3`、connections `1,4,8`、checksum `crc32c,none`、TLS/data TLS pair `off/off` 与 `required/required`。
+- io_uring 只做小子集：backend `io_uring`、connections `4`、checksum `crc32c`、TLS/data TLS `off/off`。
+- 新增 `tools/perf/analyze_beta1b_receiver_writeback_stability.py`：
+  - matched key 包含 bytes、backend、connections、checksum、TLS/data TLS pair 和固定 storage policy；
+  - 输出 median、p95、spread、temp-write share、receiver backpressure/yield stats、Dirty/Writeback/Cached 相关性；
+  - `>= +5%` median throughput 计为 improvement，`<= -5%` 计为 regression；
+  - 单独比较同 budget 下 `dirty_poll` vs `none`。
+- 更新 release gate artifact 收集，纳入新 analyzer 和新报告。
+
+### 默认策略
+
+Beta 1B-4 不改变默认传输策略：`auth-mode=anonymous`、`tls-mode=off`、`data-tls-mode=off`、`file_io_backend=posix`、`final_verify_policy=full`、`manifest_flush_policy=every_n_chunks`、`preallocate=off`、`posix_write_strategy=auto`、`receiver_write_profile=default`、`receiver_write_yield_policy=none`。不引入独立 user-space queue。
+
+### 当前验证
+
+- 通过：`python3 -m py_compile tools/perf/run_beta1b_stor_writeback.py tools/perf/analyze_beta1b_receiver_writeback_stability.py tools/perf/test_beta1b_stor_writeback.py tools/release/run_alpha_release_gate.py`。
+- 通过：`python3 tools/perf/test_beta1b_stor_writeback.py`。
+- 通过：`ctest --test-dir build -R 'gridflux_beta1a_perf_helper_behavior|gridflux_beta1b_stor_writeback_helper_behavior' --output-on-failure`，2/2 passed。
+- 通过：本机 Debug full CTest `184/184 passed`。
+- 通过：本机 real io_uring Release full CTest `184/184 passed`，`FileIoTest.IoUringContextReadWriteSmokeWhenAvailable` Passed。
+- 通过：<redacted>二 Debug full CTest `184/184 passed`。
+- 通过：<redacted>二 real io_uring Release full CTest `184/184 passed`，`FileIoTest.IoUringContextReadWriteSmokeWhenAvailable` Passed。
+- 通过：Beta 1B-4 stability runner `tools/perf/results/20260520T052835Z_beta1b-receiver-writeback-stability.json`，storage raw `4` pass / `0` fail，STOR raw `195/195` pass，summary `65` rows / grouped fail `0`，hash mismatch `0`。
+- Stability raw/summary：
+  - storage：`tools/perf/results/20260520T052835Z_storage-bench.csv`、`tools/perf/results/20260520T052835Z_storage-bench-summary.csv`；
+  - POSIX off/off：`tools/perf/results/20260520T052858Z_gridftp-private-matrix-smoke.csv`、`tools/perf/results/20260520T052858Z_gridftp-private-matrix-smoke-summary.csv`；
+  - POSIX required/required：`tools/perf/results/20260520T054933Z_gridftp-private-matrix-smoke.csv`、`tools/perf/results/20260520T054933Z_gridftp-private-matrix-smoke-summary.csv`；
+  - io_uring off/off subset：`tools/perf/results/20260520T061049Z_gridftp-private-matrix-smoke.csv`、`tools/perf/results/20260520T061049Z_gridftp-private-matrix-smoke-summary.csv`；
+  - report：`docs/perf/BETA1B_RECEIVER_WRITEBACK_STABILITY.md`。
+- 关键结论：STOR summary median `1.849 Gbps`，best summary median `2.183 Gbps`，baseline median `1.890 Gbps`，opt-in median `1.838 Gbps`；temp-write wall share median `74.2%`，data_receive wall share median `2.5%`；matched bounded comparisons `52`，`>=5%` improvements `9`，`<=-5%` regressions `9`；dirty_poll matched pairs `26`，wins `4` / regressions `6`；TLS/data TLS required bounded rows `24`，regressions `4`；Dirty/Writeback 与 raw throughput Pearson r `0.942`；native storage aligned write median `0.926 Gbps`。
+- 通过：quick alpha gate `tools/perf/results/20260520T061737Z_alpha-release-gate.json`。
+- 通过：full alpha gate `tools/perf/results/20260520T061938Z_alpha-release-gate.json`。
+- 通过：Alpha RC `tools/perf/results/20260520T062712Z_alpha-release-candidate.json`。
+- 通过：RC artifact freshness checked `2080` stale `0`；artifact sync/verify checked `2077`，missing `0`，mismatch `0`。
+- 通过：public export strict hygiene，`/tmp/gridflux-public-alpha-rc-20260520T062712Z`。
+- 通过：两台<redacted>最终无 `gridflux-gridftp-server` / `gridflux-file-*` 残留进程。
+- Beta 1B-4 结论：bounded/dirty_poll 没有稳定到足以扩大到 user-space queue 设计或改变默认策略；建议保留 opt-in，下一步优先转向磁盘、文件系统、云盘和 OS writeback 限制分析。
+
+
 ## 2026-05-20 Beta 1B-3 opt-in receiver writeback/backpressure/profile
 
 ### 实现范围

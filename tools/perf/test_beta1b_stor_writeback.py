@@ -79,6 +79,43 @@ def test_receiver_writeback_runner_dimensions() -> None:
     assert "--receiver-write-yield-policies" in command and "none,dirty_poll" in command
 
 
+def flag_value(command: list[str], flag: str) -> str:
+    index = command.index(flag)
+    return command[index + 1]
+
+
+def test_receiver_writeback_stability_runner_dimensions() -> None:
+    runner = load_module("tools/perf/run_beta1b_stor_writeback.py")
+    specs = runner.receiver_writeback_stability_matrix_step_specs(
+        runner_args(),
+        bytes_value="1073741824",
+        repeat=3,
+        event_dir=Path("events"),
+        storage_csv="storage.csv",
+    )
+    assert [spec.name for spec in specs] == [
+        "stor_receiver_writeback_stability_posix_off_1073741824",
+        "stor_receiver_writeback_stability_posix_tls_1073741824",
+        "stor_receiver_writeback_stability_iouring_off_1073741824",
+    ]
+    posix_off, posix_tls, iouring = [spec.command for spec in specs]
+    assert flag_value(posix_off, "--bytes") == "1073741824"
+    assert flag_value(posix_off, "--repeat") == "3"
+    assert flag_value(posix_off, "--tls-modes") == "off"
+    assert flag_value(posix_off, "--data-tls-modes") == "off"
+    assert flag_value(posix_tls, "--tls-modes") == "required"
+    assert flag_value(posix_tls, "--data-tls-modes") == "required"
+    assert flag_value(posix_off, "--file-io-backends") == "posix"
+    assert flag_value(posix_tls, "--file-io-backends") == "posix"
+    assert flag_value(iouring, "--file-io-backends") == "io_uring"
+    assert flag_value(iouring, "--connections") == "4"
+    assert flag_value(iouring, "--checksums") == "crc32c"
+    for command in [posix_off, posix_tls, iouring]:
+        assert flag_value(command, "--receiver-write-profiles") == "default,bounded"
+        assert flag_value(command, "--receiver-max-pending-bytes-list") == "0,67108864,268435456"
+        assert flag_value(command, "--receiver-write-yield-policies") == "none,dirty_poll"
+
+
 def test_matrix_skips_invalid_coalesced_zero() -> None:
     matrix = load_module("tools/perf/run_gridftp_private_matrix.py")
     args = argparse.Namespace(
@@ -232,13 +269,68 @@ def test_receiver_writeback_analyzer_fixture() -> None:
         assert "default remains unchanged" in report
 
 
+def test_receiver_writeback_stability_analyzer_fixture() -> None:
+    analyzer = load_module("tools/perf/analyze_beta1b_receiver_writeback_stability.py")
+    with tempfile.TemporaryDirectory() as temp_text:
+        temp = Path(temp_text)
+        storage = temp / "storage-summary.csv"
+        storage.write_text(
+            "side,operation,bytes,buffer_size,preallocate,file_io_backend,file_io_buffer_size,file_io_queue_depth,file_io_batch_size,file_io_advice,posix_write_strategy,posix_write_strategy_effective,case_count,pass_count,fail_count,throughput_gbps_median\n"
+            "local,write,1073741824,262144,off,posix,0,1,1,off,auto,direct,3,3,0,2.000000\n",
+            encoding="utf-8",
+        )
+        raw = temp / "matrix.csv"
+        raw.write_text(
+            "direction,result,throughput_gbps,receiver_write_profile,receiver_max_pending_bytes,receiver_write_yield_policy,server_dirty_kb_after,server_writeback_kb_after,event_log,server_env_before_log,server_env_after_log\n"
+            "stor,pass,1.000000,default,0,none,1000,0,event-default.jsonl,before.log,after.log\n"
+            "stor,pass,1.100000,bounded,67108864,none,2000,4,event-bounded.jsonl,before.log,after.log\n"
+            "stor,pass,0.900000,bounded,67108864,dirty_poll,3000,8,event-dirty.jsonl,before.log,after.log\n",
+            encoding="utf-8",
+        )
+        summary = temp / "matrix-summary.csv"
+        summary.write_text(
+            "mode,direction,bytes,connections,chunk_size,buffer_size,checksum_algorithm,checksum_backend,preallocate,file_io_backend,file_io_buffer_size,file_io_queue_depth,file_io_batch_size,file_io_advice,posix_write_strategy,posix_write_strategy_effective,receiver_write_profile,receiver_max_pending_bytes,receiver_write_yield_policy,tls_mode,data_tls_mode,manifest_flush_policy,manifest_flush_interval_chunks,commit_sync_policy,final_verify_policy,final_verify_policy_effective,repeat_count,pass_count,fail_count,throughput_gbps_median,throughput_gbps_p95,throughput_gbps_spread_pct,elapsed_median,receiver_temp_write_seconds_median,receiver_data_receive_seconds_median,receiver_backpressure_count_median,receiver_backpressure_seconds_median,receiver_write_yield_count_median\n"
+            "smoke,stor,1073741824,4,4194304,262144,crc32c,auto,off,posix,0,1,1,off,auto,direct,default,0,none,off,off,every_n_chunks,16,none,full,full,3,3,0,1.000000,1.000000,10.000000,2.000000,1.600000,0.050000,0,0,0\n"
+            "smoke,stor,1073741824,4,4194304,262144,crc32c,auto,off,posix,0,1,1,off,auto,direct,bounded,67108864,none,off,off,every_n_chunks,16,none,full,full,3,3,0,1.100000,1.100000,8.000000,2.000000,1.400000,0.050000,4,0.004,0\n"
+            "smoke,stor,1073741824,4,4194304,262144,crc32c,auto,off,posix,0,1,1,off,auto,direct,bounded,67108864,dirty_poll,off,off,every_n_chunks,16,none,full,full,3,3,0,0.900000,0.900000,12.000000,2.000000,1.500000,0.050000,5,0.005,1\n"
+            "smoke,stor,1073741824,4,4194304,262144,crc32c,auto,off,posix,0,1,1,off,auto,direct,default,0,none,required,required,every_n_chunks,16,none,full,full,3,3,0,1.000000,1.000000,10.000000,2.000000,1.600000,0.050000,0,0,0\n"
+            "smoke,stor,1073741824,4,4194304,262144,crc32c,auto,off,posix,0,1,1,off,auto,direct,bounded,67108864,dirty_poll,required,required,every_n_chunks,16,none,full,full,3,3,0,0.900000,0.900000,12.000000,2.000000,1.500000,0.050000,5,0.005,1\n",
+            encoding="utf-8",
+        )
+        output = temp / "report.md"
+        old_argv = sys.argv
+        try:
+            sys.argv = [
+                "analyze_beta1b_receiver_writeback_stability.py",
+                "--storage-summary-csv",
+                str(storage),
+                "--matrix-raw-csv",
+                str(raw),
+                "--matrix-summary-csv",
+                str(summary),
+                "--output",
+                str(output),
+            ]
+            assert analyzer.main() == 0
+        finally:
+            sys.argv = old_argv
+        report = output.read_text(encoding="utf-8")
+        assert "Beta 1B Receiver Writeback Stability" in report
+        assert "Matched bounded comparisons" in report
+        assert "Dirty-poll independent pairs" in report
+        assert "TLS/data TLS required" in report
+        assert "shift near-term Beta work toward disk" in report
+
+
 def main() -> int:
     test_runner_command_dimensions()
     test_receiver_writeback_runner_dimensions()
+    test_receiver_writeback_stability_runner_dimensions()
     test_matrix_skips_invalid_coalesced_zero()
     test_env_sidecar_parser()
     test_analyzer_fixture()
     test_receiver_writeback_analyzer_fixture()
+    test_receiver_writeback_stability_analyzer_fixture()
     print("beta1b stor writeback helper tests passed")
     return 0
 

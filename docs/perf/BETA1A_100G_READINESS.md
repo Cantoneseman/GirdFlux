@@ -74,6 +74,34 @@ data_receive stayed small at `1.9%`. Bounded drain-budget produced selective
 temp-share/spread improvements, but `4` matched opt-in rows regressed median
 throughput by more than `5%`; default policy therefore remains unchanged.
 
+## Beta 1B-4 Follow-up: Receiver Writeback Stability
+
+Beta 1B-4 keeps the Beta 1A readiness conclusion unchanged and does not add a
+new receiver data path. It expands only the opt-in stability matrix for the
+existing drain-budget controls:
+
+- runner mode: `tools/perf/run_beta1b_stor_writeback.py --receiver-writeback-stability`
+- analyzer: `tools/perf/analyze_beta1b_receiver_writeback_stability.py`
+- report: `docs/perf/BETA1B_RECEIVER_WRITEBACK_STABILITY.md`
+
+The default run is `1GiB repeat=3`, STOR only. POSIX remains the primary
+backend, TLS/data TLS pairs are limited to `off/off` and `required/required`,
+and io_uring is restricted to a small `connections=4`, `checksum=crc32c`,
+`off/off` subset. `256MiB` and `4GiB` are opt-in through `--bytes-list`.
+
+The stability report decides whether bounded/dirty_poll has enough stable
+matched wins to justify deeper queue design, or whether Beta work should shift
+back toward disk, filesystem, cloud-volume, and OS writeback analysis. Defaults
+remain unchanged.
+
+Focused stability result: `tools/perf/results/20260520T052835Z_beta1b-receiver-writeback-stability.json`
+passed with STOR raw `195/195` pass, grouped fail `0`, and hash mismatch `0`.
+Summary median throughput was `1.849 Gbps`, baseline median `1.890 Gbps`, and
+opt-in median `1.838 Gbps`; matched bounded wins and regressions were both
+`9`, while `dirty_poll` independent pairs had `4` wins and `6` regressions.
+This does not support a default change or immediate user-space queue design;
+the next Beta work should focus on storage and OS writeback limits.
+
 ## Host / Link / Storage Baseline
 
 | side | category | tool | bytes | Gbps | result |

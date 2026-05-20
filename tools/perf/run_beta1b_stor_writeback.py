@@ -114,6 +114,10 @@ def read_csv(path_text: str) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
+def split_list(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 def summary_fail_count(paths: list[str]) -> int:
     total = 0
     for path in paths:
@@ -225,6 +229,8 @@ def matrix_common(
     repeat: int,
     event_dir: Path,
     storage_csv: str,
+    tls_mode: str = "off",
+    data_tls_mode: str = "off",
 ) -> list[str]:
     command = [
         sys.executable,
@@ -261,9 +267,9 @@ def matrix_common(
         "--commit-sync-policies",
         "none",
         "--tls-modes",
-        "off",
+        tls_mode,
         "--data-tls-modes",
-        "off",
+        data_tls_mode,
         "--event-log-dir",
         str(event_dir),
         "--repeat",
@@ -430,6 +436,107 @@ def receiver_writeback_matrix_step_specs(
     ]
 
 
+def receiver_writeback_stability_matrix_step_specs(
+    args: argparse.Namespace,
+    *,
+    bytes_value: str,
+    repeat: int,
+    event_dir: Path,
+    storage_csv: str,
+) -> list[StepSpec]:
+    receiver_args = [
+        "--receiver-write-profiles",
+        "default,bounded",
+        "--receiver-max-pending-bytes-list",
+        "0,67108864,268435456",
+        "--receiver-write-yield-policies",
+        "none,dirty_poll",
+    ]
+
+    def common_for(tls_mode: str, data_tls_mode: str) -> list[str]:
+        return matrix_common(
+            args,
+            bytes_value=bytes_value,
+            repeat=repeat,
+            event_dir=event_dir,
+            storage_csv=storage_csv,
+            tls_mode=tls_mode,
+            data_tls_mode=data_tls_mode,
+        )
+
+    return [
+        StepSpec(
+            f"stor_receiver_writeback_stability_posix_off_{bytes_value}",
+            [
+                *common_for("off", "off"),
+                "--connections",
+                "1,4,8",
+                "--checksums",
+                "crc32c,none",
+                "--file-io-backends",
+                "posix",
+                "--file-io-buffer-sizes",
+                "0",
+                "--posix-write-strategies",
+                "auto",
+                "--preallocates",
+                "off",
+                "--manifest-flush-policies",
+                "every_n_chunks",
+                "--final-verify-policies",
+                "full",
+                *receiver_args,
+            ],
+        ),
+        StepSpec(
+            f"stor_receiver_writeback_stability_posix_tls_{bytes_value}",
+            [
+                *common_for("required", "required"),
+                "--connections",
+                "1,4,8",
+                "--checksums",
+                "crc32c,none",
+                "--file-io-backends",
+                "posix",
+                "--file-io-buffer-sizes",
+                "0",
+                "--posix-write-strategies",
+                "auto",
+                "--preallocates",
+                "off",
+                "--manifest-flush-policies",
+                "every_n_chunks",
+                "--final-verify-policies",
+                "full",
+                *receiver_args,
+            ],
+        ),
+        StepSpec(
+            f"stor_receiver_writeback_stability_iouring_off_{bytes_value}",
+            [
+                *common_for("off", "off"),
+                "--connections",
+                "4",
+                "--checksums",
+                "crc32c",
+                "--file-io-backends",
+                "io_uring",
+                "--file-io-buffer-sizes",
+                "0",
+                "--posix-write-strategies",
+                "auto",
+                "--preallocates",
+                "off",
+                "--manifest-flush-policies",
+                "every_n_chunks",
+                "--final-verify-policies",
+                "full",
+                *receiver_args,
+            ],
+        ),
+    ]
+
+
 def analyze_command(
     *,
     storage_raw: str,
@@ -480,6 +587,31 @@ def analyze_receiver_writeback_command(
     return StepSpec("analyze_beta1b_receiver_writeback", command)
 
 
+def analyze_receiver_writeback_stability_command(
+    *,
+    storage_raws: list[str],
+    storage_summaries: list[str],
+    matrix_raws: list[str],
+    matrix_summaries: list[str],
+    report_path: Path,
+) -> StepSpec:
+    command = [
+        sys.executable,
+        "tools/perf/analyze_beta1b_receiver_writeback_stability.py",
+        "--output",
+        str(report_path),
+    ]
+    for raw in storage_raws:
+        command.extend(["--storage-raw-csv", raw])
+    for summary in storage_summaries:
+        command.extend(["--storage-summary-csv", summary])
+    for raw in matrix_raws:
+        command.extend(["--matrix-raw-csv", raw])
+    for summary in matrix_summaries:
+        command.extend(["--matrix-summary-csv", summary])
+    return StepSpec("analyze_beta1b_receiver_writeback_stability", command)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run Beta 1B-2 STOR write/writeback diagnostics.")
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -491,97 +623,152 @@ def main() -> int:
     parser.add_argument("--remote-build-dir", default="/root/projects/GridFlux/build-io-uring-real")
     parser.add_argument("--output-dir", default="tools/perf/results")
     parser.add_argument("--bytes", default="")
+    parser.add_argument(
+        "--bytes-list",
+        default="",
+        help="comma-separated byte sizes for stability mode; defaults to --bytes or the mode default",
+    )
     parser.add_argument("--repeat", type=int, default=0)
     parser.add_argument("--case-timeout", type=int, default=900)
     parser.add_argument("--skip-storage-bench", action="store_true")
-    parser.add_argument(
+    receiver_mode = parser.add_mutually_exclusive_group()
+    receiver_mode.add_argument(
         "--receiver-writeback-optin",
         action="store_true",
         help="run the Beta 1B-3 opt-in drain-budget receiver writeback matrix",
+    )
+    receiver_mode.add_argument(
+        "--receiver-writeback-stability",
+        action="store_true",
+        help="run the Beta 1B-4 receiver writeback stability matrix",
     )
     args = parser.parse_args()
 
     if args.repeat < 0:
         raise SystemExit("--repeat must not be negative")
-    bytes_value = args.bytes or ("268435456" if args.smoke else "1073741824")
+    bytes_values = (
+        split_list(args.bytes_list)
+        if args.bytes_list
+        else [args.bytes or ("268435456" if args.smoke else "1073741824")]
+    )
+    if not bytes_values:
+        raise SystemExit("at least one byte size is required")
+    if args.bytes_list and args.bytes:
+        raise SystemExit("--bytes and --bytes-list are mutually redundant; use one")
     repeat = args.repeat or (1 if args.smoke else 3)
 
     output_dir = ROOT / args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     run_id = compact_timestamp()
-    run_slug = "beta1b-receiver-writeback-optin" if args.receiver_writeback_optin else "beta1b-stor-writeback"
+    if args.receiver_writeback_stability:
+        run_slug = "beta1b-receiver-writeback-stability"
+    elif args.receiver_writeback_optin:
+        run_slug = "beta1b-receiver-writeback-optin"
+    else:
+        run_slug = "beta1b-stor-writeback"
     log_dir = output_dir / f"{run_id}_{run_slug}"
     event_dir = log_dir / "events"
     event_dir.mkdir(parents=True, exist_ok=True)
     summary_json = output_dir / f"{run_id}_{run_slug}.json"
     report_path = ROOT / "docs" / "perf" / (
-        "BETA1B_RECEIVER_WRITEBACK_OPTIN.md"
-        if args.receiver_writeback_optin
-        else "BETA1B_STOR_WRITEBACK_DIAGNOSIS.md"
+        "BETA1B_RECEIVER_WRITEBACK_STABILITY.md"
+        if args.receiver_writeback_stability
+        else (
+            "BETA1B_RECEIVER_WRITEBACK_OPTIN.md"
+            if args.receiver_writeback_optin
+            else "BETA1B_STOR_WRITEBACK_DIAGNOSIS.md"
+        )
     )
 
     env = run_env(args.remote)
     steps: list[dict[str, object]] = []
-    storage_raw = ""
-    storage_summary = ""
-
-    if not args.skip_storage_bench:
-        storage_spec = (
-            receiver_writeback_storage_command(args, bytes_value, repeat)
-            if args.receiver_writeback_optin
-            else storage_command(args, bytes_value, repeat)
-        )
-        storage_step = run_step(storage_spec, log_dir, env=env)
-        steps.append(storage_step)
-        storage_raw = extract_path(str(storage_step.get("stdout", "")), "csv")
-        storage_summary = extract_path(str(storage_step.get("stdout", "")), "summary_csv")
-
+    storage_raws: list[str] = []
+    storage_summaries: list[str] = []
     matrix_raws: list[str] = []
     matrix_summaries: list[str] = []
-    specs = (
-        receiver_writeback_matrix_step_specs(
-            args,
-            bytes_value=bytes_value,
-            repeat=repeat,
-            event_dir=event_dir,
-            storage_csv=storage_raw,
-        )
-        if args.receiver_writeback_optin
-        else matrix_step_specs(
-            args,
-            bytes_value=bytes_value,
-            repeat=repeat,
-            event_dir=event_dir,
-            storage_csv=storage_raw,
-        )
-    )
-    for spec in specs:
-        step = run_step(spec, log_dir, env=env)
-        steps.append(step)
-        raw = extract_path(str(step.get("stdout", "")), "csv")
-        summary = extract_path(str(step.get("stdout", "")), "summary_csv")
-        if raw:
-            matrix_raws.append(raw)
-        if summary:
-            matrix_summaries.append(summary)
 
-    analyze_spec = (
-        analyze_receiver_writeback_command(
-            storage_raw=storage_raw,
-            storage_summary=storage_summary,
+    for bytes_value in bytes_values:
+        storage_raw = ""
+        storage_summary = ""
+        if not args.skip_storage_bench:
+            storage_spec = (
+                receiver_writeback_storage_command(args, bytes_value, repeat)
+                if args.receiver_writeback_optin or args.receiver_writeback_stability
+                else storage_command(args, bytes_value, repeat)
+            )
+            if len(bytes_values) > 1 or args.receiver_writeback_stability:
+                storage_spec = StepSpec(f"storage_bench_{bytes_value}", storage_spec.command)
+            storage_step = run_step(storage_spec, log_dir, env=env)
+            steps.append(storage_step)
+            storage_raw = extract_path(str(storage_step.get("stdout", "")), "csv")
+            storage_summary = extract_path(str(storage_step.get("stdout", "")), "summary_csv")
+            if storage_raw:
+                storage_raws.append(storage_raw)
+            if storage_summary:
+                storage_summaries.append(storage_summary)
+
+        if args.receiver_writeback_stability:
+            specs = receiver_writeback_stability_matrix_step_specs(
+                args,
+                bytes_value=bytes_value,
+                repeat=repeat,
+                event_dir=event_dir,
+                storage_csv=storage_raw,
+            )
+        else:
+            specs = (
+                receiver_writeback_matrix_step_specs(
+                    args,
+                    bytes_value=bytes_value,
+                    repeat=repeat,
+                    event_dir=event_dir,
+                    storage_csv=storage_raw,
+                )
+                if args.receiver_writeback_optin
+                else matrix_step_specs(
+                    args,
+                    bytes_value=bytes_value,
+                    repeat=repeat,
+                    event_dir=event_dir,
+                    storage_csv=storage_raw,
+                )
+            )
+        for spec in specs:
+            step = run_step(spec, log_dir, env=env)
+            steps.append(step)
+            raw = extract_path(str(step.get("stdout", "")), "csv")
+            summary = extract_path(str(step.get("stdout", "")), "summary_csv")
+            if raw:
+                matrix_raws.append(raw)
+            if summary:
+                matrix_summaries.append(summary)
+
+    if args.receiver_writeback_stability:
+        analyze_spec = analyze_receiver_writeback_stability_command(
+            storage_raws=storage_raws,
+            storage_summaries=storage_summaries,
             matrix_raws=matrix_raws,
             matrix_summaries=matrix_summaries,
             report_path=report_path,
         )
-        if args.receiver_writeback_optin
-        else analyze_command(
-            storage_raw=storage_raw,
-            storage_summary=storage_summary,
-            matrix_raws=matrix_raws,
-            matrix_summaries=matrix_summaries,
-            report_path=report_path,
+    else:
+        analyze_spec = (
+            analyze_receiver_writeback_command(
+                storage_raw=storage_raws[-1] if storage_raws else "",
+                storage_summary=storage_summaries[-1] if storage_summaries else "",
+                matrix_raws=matrix_raws,
+                matrix_summaries=matrix_summaries,
+                report_path=report_path,
+            )
+            if args.receiver_writeback_optin
+            else analyze_command(
+                storage_raw=storage_raws[-1] if storage_raws else "",
+                storage_summary=storage_summaries[-1] if storage_summaries else "",
+                matrix_raws=matrix_raws,
+                matrix_summaries=matrix_summaries,
+                report_path=report_path,
+            )
         )
-    )
     analyze_step = run_step(analyze_spec, log_dir, env=env)
     steps.append(analyze_step)
 
@@ -591,7 +778,7 @@ def main() -> int:
     stor_transfer_failures = 0
     for step in steps:
         step_cases, step_failures = parse_cases(str(step.get("stdout", "")))
-        if step["name"] == "storage_bench":
+        if str(step["name"]).startswith("storage_bench"):
             storage_cases += step_cases
             storage_case_failures += step_failures
         elif str(step["name"]).startswith("stor_"):
@@ -604,8 +791,10 @@ def main() -> int:
         "timestamp": timestamp_utc(),
         "mode": "smoke" if args.smoke else "focused",
         "receiver_writeback_optin": args.receiver_writeback_optin,
+        "receiver_writeback_stability": args.receiver_writeback_stability,
         "result": "pass" if not failures and grouped_failures == 0 and mismatches == 0 else "fail",
-        "bytes": bytes_value,
+        "bytes": bytes_values[0],
+        "bytes_list": bytes_values,
         "repeat": repeat,
         "steps": [
             {
@@ -617,8 +806,10 @@ def main() -> int:
             }
             for step in steps
         ],
-        "storage_raw_csv": storage_raw,
-        "storage_summary_csv": storage_summary,
+        "storage_raw_csv": storage_raws[-1] if storage_raws else "",
+        "storage_summary_csv": storage_summaries[-1] if storage_summaries else "",
+        "storage_raw_csvs": storage_raws,
+        "storage_summary_csvs": storage_summaries,
         "stor_raw_csvs": matrix_raws,
         "stor_summary_csvs": matrix_summaries,
         "report": str(report_path),
@@ -635,10 +826,10 @@ def main() -> int:
     summary_json.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"json={summary_json}")
     print(f"report={report_path}")
-    if storage_raw:
-        print(f"storage_raw_csv={storage_raw}")
-    if storage_summary:
-        print(f"storage_summary_csv={storage_summary}")
+    for raw in storage_raws:
+        print(f"storage_raw_csv={raw}")
+    for summary in storage_summaries:
+        print(f"storage_summary_csv={summary}")
     for raw in matrix_raws:
         print(f"stor_raw_csv={raw}")
     for summary in matrix_summaries:

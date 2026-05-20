@@ -1164,3 +1164,60 @@ Beta 1B-3 focused execution from 2026-05-19:
 - Result: storage raw `4` pass / `0` fail; STOR raw `90/90` pass; summary `30` rows / grouped fail `0`; hash mismatch `0`.
 - Key medians: STOR summary median `1.711 Gbps`, best summary median `1.841 Gbps`, baseline median `1.724 Gbps`, opt-in median `1.701 Gbps`; temp-write wall share median `83.6%`; data_receive median `1.9%`; aligned POSIX/default native storage write median `0.938 Gbps`.
 - Recommendation: keep bounded receiver writeback and `dirty_poll` opt-in; expand only the stable candidate rows before considering an independent user-space queue.
+
+## Beta 1B-4 Receiver Writeback Stability
+
+Beta 1B-4 does not add receiver functionality or change defaults. It expands
+only the opt-in stability matrix around the Beta 1B-3 candidates.
+
+Default stability run:
+
+```bash
+python3 tools/perf/run_beta1b_stor_writeback.py \
+  --focused \
+  --receiver-writeback-stability \
+  --remote <remote> \
+  --server-host <server-host> \
+  --local-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --output-dir tools/perf/results \
+  --case-timeout 900
+```
+
+The default stability run uses `1GiB repeat=3`. Optional byte sizes are passed
+explicitly, for example `--bytes-list 268435456,1073741824,4294967296`.
+
+Coverage:
+
+- STOR only.
+- POSIX primary matrix: connections `1,4,8`, checksum `crc32c,none`,
+  TLS/data TLS pairs `off/off` and `required/required`.
+- Receiver cases: baseline `default+0+none`, bounded `64MiB/256MiB` with
+  `none|dirty_poll`.
+- io_uring subset only: connection `4`, checksum `crc32c`, TLS/data TLS
+  `off/off`.
+
+Outputs:
+
+- `tools/perf/results/<timestamp>_beta1b-receiver-writeback-stability.json`
+- raw/summary CSVs from each private matrix step
+- storage bench CSVs
+- event logs, server/client logs, env/iostat sidecars
+- `docs/perf/BETA1B_RECEIVER_WRITEBACK_STABILITY.md`
+
+The analyzer matches bounded rows against the same bytes/backend/connections/
+checksum/TLS pair and fixed storage policy. `>= +5%` median throughput is an
+improvement; `<= -5%` is a regression. `dirty_poll` is also compared against
+`none` for the same bounded budget. Defaults remain unchanged regardless of the
+stability result.
+
+Beta 1B-4 stability execution from 2026-05-20:
+
+- Wrapper: `tools/perf/results/20260520T052835Z_beta1b-receiver-writeback-stability.json`
+- Storage raw/summary: `tools/perf/results/20260520T052835Z_storage-bench.csv`, `tools/perf/results/20260520T052835Z_storage-bench-summary.csv`
+- POSIX off/off raw/summary: `tools/perf/results/20260520T052858Z_gridftp-private-matrix-smoke.csv`, `tools/perf/results/20260520T052858Z_gridftp-private-matrix-smoke-summary.csv`
+- POSIX required/required raw/summary: `tools/perf/results/20260520T054933Z_gridftp-private-matrix-smoke.csv`, `tools/perf/results/20260520T054933Z_gridftp-private-matrix-smoke-summary.csv`
+- io_uring subset raw/summary: `tools/perf/results/20260520T061049Z_gridftp-private-matrix-smoke.csv`, `tools/perf/results/20260520T061049Z_gridftp-private-matrix-smoke-summary.csv`
+- Result: storage raw `4` pass / `0` fail; STOR raw `195/195` pass; summary `65` rows / grouped fail `0`; hash mismatch `0`.
+- Key medians: STOR summary median `1.849 Gbps`, best summary median `2.183 Gbps`, baseline median `1.890 Gbps`, opt-in median `1.838 Gbps`; temp-write wall share median `74.2%`; data_receive median `2.5%`; native storage aligned write median `0.926 Gbps`.
+- Recommendation: keep bounded/dirty_poll opt-in only; do not change defaults or start user-space queue design from this evidence. Shift near-term Beta work toward disk, filesystem, cloud-volume, and OS writeback analysis.
