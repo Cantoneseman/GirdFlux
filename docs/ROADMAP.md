@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**阶段：** Beta 1B-5 — storage/system writeback attribution complete; defaults unchanged
+**阶段：** Beta 1C + baseline smoke — RETR stability review complete; ordinary FTP baseline measured; beta performance closeout ready for gate/RC
 
 **已完成：** 项目设计、技术选型、工程规范制定、CMake 工程骨架初始化、GoogleTest 工具链测试、本机与<redacted>二构建验证、GridFTP 源码学习经验整理入设计文档、Phase 1.0 多连接 TCP sink 与本机 loopback 验证、Phase 1.1 性能基线脚本与 loopback smoke matrix、Phase 1.2A offset-aware 单文件传输闭环、Phase 1.2B 文件传输健壮性、Phase 1.3A 文件性能基线自动化、Phase 2A manifest/range-based 断点续传核心、Phase 2B CRC32C chunk checksum 与损坏注入验证、Phase 2C CRC32C backend 自动选择、manifest 批量 flush、恢复统计与 checksum benchmark、Phase 3A GridFTP 风格控制面 STOR 上传与 REST/GFID resume 映射、Phase 3B GridFTP 风格控制面 framed RETR 完整下载、Phase 3C 下载端 manifest/verified_chunks 与 RETR REST/GFID resume、Phase 3D 控制面 SIZE/MDTM/CWD/CDUP/LIST/NLST 与测试工具收敛。
 
@@ -10,7 +10,7 @@
 
 **未开始：** 系统级文件传输调优、raw FTP stream STOR/RETR、GridFTP GSI、MLST/MLSD、网络 io_uring、生产级目录同步。
 
-**下一步：** 不扩大 receiver bounded/default 策略；继续保留 bounded/dirty_poll 为 opt-in 观察项。Beta 1B-5 已将 STOR 写入瓶颈归因推进到 storage/system 层，后续优先验证磁盘/文件系统/云盘规格、direct I/O、多盘或更高规格<redacted>，而不是立即设计 user-space queue。
+**下一步：** 进入 Beta Gate / Beta RC 准备。Beta 1C RETR focused matrix 已通过，普通 FTP baseline smoke 已完成，GridFTP 系统包存在但匿名/no-GSI baseline 未跑通；结论是不改变默认策略、不默认启用 verified_chunks/io_uring/bounded/dirty_poll。如继续优化 RETR，应聚焦 sender network-send 稳定性、connections scaling 波动和 receiver download temp-write 压力。
 
 ---
 
@@ -424,6 +424,39 @@
 - 新增 `tools/perf/analyze_beta1b_receiver_writeback_stability.py` 和 `docs/perf/BETA1B_RECEIVER_WRITEBACK_STABILITY.md`，对 matched default vs bounded 统计 median、p95、spread、`>=5%` improvement、`<=-5%` regression，并单独比较 `dirty_poll` vs `none`。
 
 状态：已完成并通过 release gate。Stability runner `tools/perf/results/20260520T052835Z_beta1b-receiver-writeback-stability.json` 为 pass；storage raw `4` pass / `0` fail，STOR raw `195/195` pass，summary `65` rows / grouped fail `0`，hash mismatch `0`。本机和<redacted>二 Debug / real io_uring Release full CTest 均为 `184/184 passed`，真实 io_uring smoke Passed。quick gate `tools/perf/results/20260520T061737Z_alpha-release-gate.json`、full gate `tools/perf/results/20260520T061938Z_alpha-release-gate.json` 和 Alpha RC `tools/perf/results/20260520T062712Z_alpha-release-candidate.json` 均 pass；RC artifact verify checked `2077`，missing `0`，mismatch `0`；public export strict hygiene pass。关键 median：STOR summary median `1.849 Gbps`，best `2.183 Gbps`，baseline median `1.890 Gbps`，opt-in median `1.838 Gbps`；temp-write wall share median `74.2%`，data_receive median `2.5%`；matched bounded improvements/regressions 各 `9`，dirty_poll 独立对照 wins `4` / regressions `6`。结论：bounded/dirty_poll 不具备稳定收益，不推荐默认启用或进入 user-space queue 设计；下一步转向磁盘、文件系统、云盘和 OS writeback 限制分析。
+
+**Beta 1B-5 storage/system writeback attribution**
+
+- 新增 `tools/perf/run_beta1b_storage_system_probe.py`，默认 `1GiB repeat=3`，probe project temp、`/tmp` 和 target root 所在目录，采集 Dirty/Writeback/Cached、`df`、`mount`、`lsblk` 和 iostat sidecar。
+- 使用 `gridflux-storage-bench` POSIX backend 作为项目 PosixFile 路径代表，fio 如可用作为外部对照，缺失记录 `unavailable`。
+- aligned STOR 固定 receiver write profile 为 `default/0/none`，继续对照 storage/system 上限，不改变默认策略。
+- 新增 `tools/perf/analyze_beta1b_storage_system.py` 和 `docs/perf/BETA1B_STORAGE_SYSTEM_ATTRIBUTION.md`，回答 native storage write/read 上限、GridFlux temp-write vs native、Dirty/Writeback 相关性、mount 同盘关系、preallocate 和 io_uring 差异。
+
+状态：已完成并通过 release gate。Focused runner `tools/perf/results/20260520T075607Z_beta1b-storage-system-attribution.json` 为 pass；storage probe raw pass `144`、fail `0`、fio unavailable `24`，aligned STOR raw `21/21` pass，summary `7` rows / grouped fail `0`，hash mismatch `0`。本机和<redacted>二 Debug / real io_uring Release full CTest 均为 `184/184 passed`，真实 io_uring smoke Passed。quick gate `tools/perf/results/20260520T082022Z_alpha-release-gate.json`、full gate `tools/perf/results/20260520T082210Z_alpha-release-gate.json` 和 Alpha RC `tools/perf/results/20260520T082955Z_alpha-release-candidate.json` 均 pass；artifact verify missing `0`、mismatch `0`；public export strict hygiene pass。结论：STOR 写入瓶颈更接近云盘、文件系统、page cache 和 OS writeback 限制；不推荐进入 user-space queue 或改变默认策略。
+
+**Beta 1C RETR stability review and beta performance closeout**
+
+- 新增 `tools/perf/run_beta1c_retr_stability.py`，默认 `1GiB repeat=3`，`256MiB/4GiB` 仅通过 `--bytes-list` opt-in。
+- POSIX/off/off 主矩阵覆盖 RETR、connections `1,4,8`、checksum `crc32c,none`、final verify `full`；TLS/data TLS required、io_uring 和 `verified_chunks` 只做 `connections=4`、`checksum=crc32c` 小子集。
+- 新增 `tools/perf/analyze_beta1c_retr_stability.py` 和 `docs/perf/BETA1C_RETR_STABILITY.md`，复用现有 sender/receiver 阶段字段，报告 median/best/p95/spread、sender network send、source read、checksum、receiver temp write、final verify、rename/commit、TLS/data TLS overhead、connections scaling 和 POSIX vs io_uring。
+
+状态：已完成并通过 release gate。Focused runner `tools/perf/results/20260520T100107Z_beta1c-retr-stability.json` 为 pass；RETR raw `30/30` pass，summary `10` rows / grouped fail `0`，hash mismatch `0`。本机和<redacted>二 Debug / real io_uring Release full CTest 均为 `184/184 passed`，真实 io_uring smoke Passed。quick gate、full gate 和 Alpha RC 均 pass；RC artifact freshness stale `0`，artifact verify missing `0`、mismatch `0`；public export strict hygiene pass。关键 median：RETR summary median/best `3.457/4.675 Gbps`，median p95/spread `4.439 Gbps/88.8%`；sender network-send aggregate ratio median `233.8%`，receiver download temp-write aggregate ratio median `171.9%`；TLS/data TLS required delta `-11.1%`；verified_chunks delta `-1.8%`；io_uring 小子集 delta `+20.5%`。结论：RETR correctness/stability gate 通过但波动仍高；不改变默认策略，可进入 Beta Gate / Beta RC 准备。
+
+**Baseline FTP / GridFTP smoke comparison**
+
+- 新增 `tools/perf/run_baseline_ftp_gridftp_smoke.py`，使用临时 `/tmp/gridflux-baseline-*` 目录、独立 `vsftpd` 配置和<redacted>二 `lftp` client 跑普通 FTP `256MiB/1GiB` upload/download。
+- GridFTP baseline 只使用系统包 `globus-gridftp-server` / `globus-url-copy`；包或匿名/no-GSI 运行不可用时记录 status，不源码编译、不搭建 GSI。
+- 新增 `docs/perf/BASELINE_FTP_GRIDFTP_SMOKE.md`，记录环境、CSV、吞吐、80 MB/s 对比和清理结果。
+
+状态：已完成轻量摸底，不属于正式 GridFlux release gate。FTP CSV 为 `tools/perf/results/20260520T112036Z_ftp-baseline.csv`，4/4 rows pass，sha256 全部一致：256MiB upload/download `188.012/1474.680 MiB/s`，1GiB upload/download `122.772/235.891 MiB/s`。GridFTP status 为 `tools/perf/results/20260520T112036Z_gridftp-baseline-status.txt`，系统包命令存在但匿名/no-GSI server 未能打开测试端口，本轮记录为 unavailable，没有源码编译或证书/GSI 搭建。报告见 `docs/perf/BASELINE_FTP_GRIDFTP_SMOKE.md`；清理已删除 `/tmp/gridflux-baseline-*`，两台<redacted>无 `vsftpd`、`globus-gridftp-server`、`globus-url-copy`、`ftp`、`lftp` 残留测试进程。
+
+**FTP / GridFTP / GridFlux three-way comparison**
+
+- 新增 `tools/perf/run_three_way_ftp_gridftp_gridflux.py`，用同一两台阿里云<redacted>和私网 IP 比较普通 FTP、原生 Globus GridFTP 与当前 GridFlux。
+- 普通 FTP 使用 `vsftpd` / `lftp` single-stream；原生 GridFTP 使用临时 anonymous/no-GSI `globus-gridftp-server` 与 `globus-url-copy -nodcau -rp` parallelism `1/4/8`；GridFlux 复用 framed STOR/RETR private matrix，connections `1/4/8`，checksum `crc32c/none`。
+- 新增 `docs/perf/FTP_GRIDFTP_GRIDFLUX_COMPARISON.md`，记录环境、host baseline、三方 raw CSV、summary、best 结果、1GiB/10GB 预计耗时和清理结果。
+
+状态：已完成三方吞吐对比。Final wrapper 为 `tools/perf/results/20260520T120942Z_three-way-wrapper.json`；plain FTP `8/8` pass，native GridFTP `24/24` pass，GridFlux `48/48` pass，三方 hash mismatch 均为 `0`。Host baseline：iperf3 parallel `1/4/8` 为 `15.687/15.688/15.203 Gbps`，server/client 1GiB `/tmp` write 为 `128.731/128.512 MB/s`。1GiB upload/STOR best：native GridFTP p4 `1.700 Gbps`，GridFlux STOR none c8 `1.692 Gbps`，普通 FTP `1.046 Gbps`。1GiB download/RETR best：GridFlux RETR none c8 `5.566 Gbps`，native GridFTP p8 `0.998 Gbps`，普通 FTP `0.953 Gbps`。清理已删除 `/tmp/gridflux-three-way-*` 和 `/tmp/xtransfer-baseline-*`，两台<redacted>无本轮测试进程残留。
 
 **后续候选**
 

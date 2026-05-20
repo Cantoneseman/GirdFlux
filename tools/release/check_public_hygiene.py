@@ -138,13 +138,15 @@ def scan_file(path: Path, root: Path, strict: bool) -> list[str]:
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
-        if not strict:
-            return []
         try:
             data = path.read_bytes()
         except OSError as exc:
             return [f"{relative}: unreadable binary file in strict export: {exc}"]
-        findings = [f"{relative}: unknown binary file present in strict export"]
+        if not strict:
+            return []
+        findings: list[str] = []
+        if path.suffix.lower() not in ALLOWED_BINARY_SUFFIXES:
+            findings.append(f"{relative}: unknown binary file present in strict export")
         for name, needle in BINARY_SECRET_PATTERNS:
             if needle in data:
                 findings.append(f"{relative}: {name} embedded in binary")

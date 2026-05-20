@@ -21,19 +21,22 @@
 | [BETA1B_RECEIVER_WRITEBACK_OPTIN.md](docs/perf/BETA1B_RECEIVER_WRITEBACK_OPTIN.md) | Beta 1B-3 opt-in drain-budget receiver writeback/backpressure 诊断 |
 | [BETA1B_RECEIVER_WRITEBACK_STABILITY.md](docs/perf/BETA1B_RECEIVER_WRITEBACK_STABILITY.md) | Beta 1B-4 receiver writeback opt-in 稳定候选矩阵 |
 | [BETA1B_STORAGE_SYSTEM_ATTRIBUTION.md](docs/perf/BETA1B_STORAGE_SYSTEM_ATTRIBUTION.md) | Beta 1B-5 storage/system writeback 瓶颈归因 |
+| [BETA1C_RETR_STABILITY.md](docs/perf/BETA1C_RETR_STABILITY.md) | Beta 1C RETR 稳定性复核与 beta 性能收口 |
+| [BASELINE_FTP_GRIDFTP_SMOKE.md](docs/perf/BASELINE_FTP_GRIDFTP_SMOKE.md) | 普通 FTP / 系统包 GridFTP 轻量对比摸底，不属于正式 release gate |
+| [FTP_GRIDFTP_GRIDFLUX_COMPARISON.md](docs/perf/FTP_GRIDFTP_GRIDFLUX_COMPARISON.md) | 普通 FTP、原生 GridFTP、当前 GridFlux 三方吞吐对比 |
 | [ALPHA_LIMITATIONS.md](docs/release/ALPHA_LIMITATIONS.md) | 完整 alpha 限制清单与后续路线 |
 
 新接手请按 DESIGN → ROADMAP → ENGINEERING 顺序阅读。
 
 ## 项目状态
 
-**当前阶段：** Beta 1B-5 — storage/system writeback attribution complete; defaults unchanged
+**当前阶段：** Beta 1C + baseline smoke — RETR stability review complete; ordinary FTP baseline measured; beta performance closeout ready for gate/RC
 
 **技术栈：** C++20 · epoll 网络基线 · POSIX file IO 默认后端 · 可选 file-IO-only io_uring · CMake · Linux only
 
 **目标场景：** 专线 TB 级（主线）· 虚拟网络 · 广域网
 
-**下一步：** bounded/dirty_poll 保持 opt-in，不进入默认策略或 user-space queue 设计；Beta 1B-5 证据优先指向当前云盘/文件系统/page-cache writeback 天花板与环境限制，后续应转向硬件/多盘/direct I/O/更高规格<redacted>验证。默认策略仍保持 anonymous、`tls-mode=off`、`data-tls-mode=off`、POSIX backend、full final verify、`receiver_write_profile=default` 和现有 framed STOR/RETR 语义。
+**下一步：** 进入 Beta Gate / Beta RC 准备。Beta 1C RETR focused matrix 已通过，普通 FTP baseline 已完成轻量对比；GridFTP 系统包存在但本轮匿名/no-GSI baseline 未跑通。默认策略仍保持 anonymous、`tls-mode=off`、`data-tls-mode=off`、POSIX backend、full final verify、`receiver_write_profile=default` 和现有 framed STOR/RETR 语义；`verified_chunks`、io_uring、bounded/dirty_poll 均继续只作为 opt-in。
 
 ## AI 协作
 

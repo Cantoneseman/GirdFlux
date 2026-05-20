@@ -12,6 +12,8 @@ Beta 1B-5 attributes the STOR receiver write/writeback bottleneck against native
 - GridFlux STOR temp-write median: `20.940 Gbps`; temp-write wall share median `51.7%`.
 - Dirty/Writeback correlation: Pearson r `0.471` across `31` paired rows.
 
+Beta 1C follow-up: RETR stability is now reviewed with a focused `1GiB repeat=3` matrix on the same two cloud servers. The next report is `docs/perf/BETA1C_RETR_STABILITY.md`; no default policy or receiver writeback behavior changes are implied by this STOR attribution result.
+
 ## Inputs
 
 - `/root/projects/GridFlux/tools/perf/results/20260520T090359Z_storage-system-probe.csv`

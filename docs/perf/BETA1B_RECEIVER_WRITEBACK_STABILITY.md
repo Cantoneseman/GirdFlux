@@ -21,6 +21,10 @@ median/best `1.191/1.539 Gbps`, aligned STOR e2e median/best `1.552/1.793 Gbps`,
 and temp-write wall share median `72.8%`. The next Beta work should continue
 storage/system validation rather than move directly to user-space queue design.
 
+Beta 1C follow-up: bounded/dirty_poll remains opt-in only. RETR stability is
+now reviewed separately with POSIX/off/off as the primary matrix and only small
+TLS/data TLS required, io_uring, and verified_chunks subsets.
+
 ## Inputs
 
 - `tools/perf/results/20260520T071326Z_storage-bench.csv`

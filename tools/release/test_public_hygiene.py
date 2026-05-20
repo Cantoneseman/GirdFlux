@@ -26,6 +26,7 @@ def run(command: list[str], *, check: bool = True) -> subprocess.CompletedProces
 def write_fixture(root: Path) -> None:
     (root / "tools" / "release").mkdir(parents=True)
     (root / "src").mkdir()
+    (root / "docs" / "perf" / "figures").mkdir(parents=True)
     (root / "build-verify-20260515T163633Z").mkdir()
     (root / "cmake-build-debug" / "CMakeFiles").mkdir(parents=True)
 
@@ -45,6 +46,9 @@ def write_fixture(root: Path) -> None:
     (root / "src" / "leaked-key.pem").write_text(
         "-----BEGIN PRIVATE KEY-----\nredacted fixture\n-----END PRIVATE KEY-----\n",
         encoding="utf-8",
+    )
+    (root / "docs" / "perf" / "figures" / "chart.png").write_bytes(
+        b"\x89PNG\r\n\x1a\nfixture-png"
     )
     (root / "build-verify-20260515T163633Z" / "gridflux_unit_tests").write_bytes(
         b"\x7fELF fake binary with 10.0.0.10"
@@ -102,6 +106,7 @@ def main() -> int:
         assert_not_exists(public_repo / "cmake-build-debug")
         assert_not_exists(public_repo / "build.ninja")
         assert_not_exists(public_repo / "src" / "leaked-key.pem")
+        assert_exists(public_repo / "docs" / "perf" / "figures" / "chart.png")
         if any(path.name.startswith("build") for path in public_repo.rglob("*") if path.is_dir()):
             raise AssertionError("public export contains a build-like directory")
     print("public hygiene regression test passed")

@@ -36,6 +36,63 @@ Dirty/Writeback/Cached、`df`、`mount`、`lsblk` 和 iostat sidecar；aligned S
 矩阵固定 `receiver_write_profile=default`、`receiver_write_yield_policy=none`。
 报告写入 `docs/perf/BETA1B_STORAGE_SYSTEM_ATTRIBUTION.md`。
 
+## Beta 1C RETR Stability
+
+Beta 1C 新增 RETR 稳定性复核与 beta 性能收口工具。默认只跑当前两台云服务器上的
+`1GiB repeat=3` 聚焦矩阵；`256MiB/4GiB` 通过 `--bytes-list` opt-in。矩阵固定
+默认策略，POSIX/off/off 为主，TLS required/required、io_uring 和
+`verified_chunks` 只做最小小子集对照。
+
+```bash
+python3 tools/perf/run_beta1c_retr_stability.py \
+  --remote <remote> \
+  --server-host <server-host> \
+  --local-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real
+```
+
+报告写入 `docs/perf/BETA1C_RETR_STABILITY.md`，重点拆解 sender network send、
+source read、sender checksum、receiver download temp write、final verify、
+rename/commit、TLS/data TLS 开销和 connections scaling。
+
+## Baseline FTP / GridFTP Smoke
+
+`run_baseline_ftp_gridftp_smoke.py` 用于普通 FTP 与系统包 GridFTP 的轻量对比摸底。
+它不是 GridFlux release gate，不跑 full CTest / alpha gate / RC，也不改变 GridFlux
+默认策略。默认只测试 `256MiB` 和 `1GiB` upload/download，4GiB 必须显式
+`--include-4gib`。脚本会在结束时删除 `/tmp/gridflux-baseline-*` 并检查
+`vsftpd`、`globus-gridftp-server`、`globus-url-copy`、`ftp`、`lftp` 残留进程。
+
+```bash
+python3 tools/perf/run_baseline_ftp_gridftp_smoke.py \
+  --remote <remote> \
+  --server-host <server-host>
+```
+
+结果写入 `tools/perf/results/<timestamp>_baseline_env.txt`、
+`<timestamp>_ftp-baseline.csv`、`<timestamp>_gridftp-baseline.csv` 或
+`<timestamp>_gridftp-baseline-status.txt`，报告写入
+`docs/perf/BASELINE_FTP_GRIDFTP_SMOKE.md`。GridFTP 只尝试系统包；包不可用或需要
+GSI/证书体系时记录 unavailable，不源码编译。
+
+## FTP / GridFTP / GridFlux Three-Way Comparison
+
+`run_three_way_ftp_gridftp_gridflux.py` 用于两台云服务器间的三方吞吐对比：
+普通 FTP、原生 Globus GridFTP 和当前 GridFlux。默认测试 `256MiB`、`1GiB`，
+`repeat=2`，GridFTP parallelism `1/4/8` 对齐 GridFlux connections `1/4/8`，
+GridFlux 固定默认策略、TLS/data TLS `off/off`，checksum 覆盖 `crc32c/none`。
+
+```bash
+python3 tools/perf/run_three_way_ftp_gridftp_gridflux.py \
+  --remote root@<redacted> \
+  --server-host <redacted>
+```
+
+脚本从 `/root/.xtransfer_env` 或既有私有环境变量读取 SSH 密码，只通过环境传给
+`sshpass -e`，不会写入 CSV、日志或报告。报告写入
+`docs/perf/FTP_GRIDFTP_GRIDFLUX_COMPARISON.md`；结束时清理
+`/tmp/gridflux-three-way-*`、`/tmp/xtransfer-baseline-*` 和本轮启动的测试进程。
+
 ## Alpha Artifact Sync
 
 ```bash

@@ -457,3 +457,7 @@ The follow-up STOR writeback diagnosis completed a focused 1GiB/repeat=3 run wit
 - Result: storage summary `64` rows / `192` pass cases / `0` fail cases; STOR raw `120/120` pass; STOR summary `40` rows / `120` pass cases / `0` fail cases; hash mismatch `0`.
 
 Key result: STOR receiver temp write/writeback is still dominant. STOR row medians median `1.419 Gbps`, best `1.544 Gbps`, default-like crc32c/POSIX best `1.488 Gbps`; temp-write wall share median `86.7%`, max `95.7%`; data_receive wall share median `1.6%`; native storage write median `1.078 Gbps`, best `1.328 Gbps`. POSIX vs io_uring, file buffer/coalesced, preallocate, final_only, and verified_chunks did not show a stable default-worthy win. Beta 1B-3 should continue as opt-in receiver writeback/backpressure/profile work plus OS storage/writeback comparison, with defaults unchanged.
+
+## Beta 1C Follow-Up
+
+Beta 1B-5 completed storage/system attribution for the STOR writeback bottleneck and kept defaults unchanged. Beta 1C now returns to RETR stability on the same two-cloud-server environment, without 100G migration or a 100G test. The focused RETR runner defaults to `1GiB repeat=3`, keeps POSIX/off/off/full as the primary policy, and uses only small opt-in subsets for TLS/data TLS required, io_uring, and `verified_chunks`.

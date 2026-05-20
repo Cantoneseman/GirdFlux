@@ -52,6 +52,18 @@ def storage_system_args() -> argparse.Namespace:
     )
 
 
+def retr_stability_args() -> argparse.Namespace:
+    return argparse.Namespace(
+        remote="root@example",
+        server_host="192.0.2.1",
+        local_build_dir="/local/build",
+        remote_build_dir="/remote/build",
+        output_dir="tools/perf/results",
+        repeat=3,
+        case_timeout=900,
+    )
+
+
 def test_runner_command_dimensions() -> None:
     runner = load_module("tools/perf/run_beta1b_stor_writeback.py")
     specs = runner.matrix_step_specs(
@@ -181,6 +193,111 @@ def test_storage_system_probe_bytes_list_and_stor_commands() -> None:
     assert flag_value(tls, "--tls-modes") == "required"
     assert flag_value(tls, "--data-tls-modes") == "required"
     assert "--run-root-base" in off
+
+
+def test_retr_stability_runner_dimensions() -> None:
+    runner = load_module("tools/perf/run_beta1c_retr_stability.py")
+    assert runner.parse_int_list("268435456,1073741824,4294967296") == [
+        268435456,
+        1073741824,
+        4294967296,
+    ]
+    specs = runner.retr_stability_step_specs(
+        retr_stability_args(),
+        bytes_values=[1073741824],
+        repeat=3,
+        event_dir=Path("events"),
+    )
+    assert [spec.name for spec in specs] == [
+        "retr_stability_posix_off_1073741824",
+        "retr_stability_posix_tls_1073741824",
+        "retr_stability_iouring_off_1073741824",
+        "retr_stability_verified_chunks_1073741824",
+    ]
+    posix_off, posix_tls, iouring, verified = [spec.command for spec in specs]
+    assert flag_value(posix_off, "--directions") == "retr"
+    assert flag_value(posix_off, "--bytes") == "1073741824"
+    assert flag_value(posix_off, "--repeat") == "3"
+    assert flag_value(posix_off, "--tls-modes") == "off"
+    assert flag_value(posix_off, "--data-tls-modes") == "off"
+    assert flag_value(posix_off, "--file-io-backends") == "posix"
+    assert flag_value(posix_off, "--connections") == "1,4,8"
+    assert flag_value(posix_off, "--checksums") == "crc32c,none"
+    assert flag_value(posix_off, "--receiver-write-profiles") == "default"
+    assert flag_value(posix_off, "--receiver-write-yield-policies") == "none"
+    assert flag_value(posix_tls, "--tls-modes") == "required"
+    assert flag_value(posix_tls, "--data-tls-modes") == "required"
+    assert flag_value(posix_tls, "--connections") == "4"
+    assert flag_value(posix_tls, "--checksums") == "crc32c"
+    assert flag_value(iouring, "--file-io-backends") == "io_uring"
+    assert flag_value(iouring, "--tls-modes") == "off"
+    assert flag_value(iouring, "--data-tls-modes") == "off"
+    assert flag_value(iouring, "--connections") == "4"
+    assert flag_value(iouring, "--checksums") == "crc32c"
+    assert flag_value(verified, "--final-verify-policies") == "full,verified_chunks"
+    assert flag_value(verified, "--checksums") == "crc32c"
+    assert flag_value(verified, "--connections") == "4"
+
+
+def test_baseline_ftp_gridftp_smoke_helpers() -> None:
+    runner = load_module("tools/perf/run_baseline_ftp_gridftp_smoke.py")
+    assert runner.parse_size_list("256MiB,1GiB") == [268435456, 1073741824]
+    assert runner.parse_size_list("1GiB", include_4gib=True) == [1073741824, 4294967296]
+    assert {"protocol", "direction", "bytes", "mib_per_second", "gbps", "sha256_match"}.issubset(
+        set(runner.RESULT_FIELDS)
+    )
+    script = runner.package_status_script()
+    assert "globus-gridftp-server" in script
+    assert "globus-url-copy" in script
+    assert "vsftpd" in script
+    assert "lftp" in script
+
+
+def test_baseline_ftp_gridftp_report_table() -> None:
+    runner = load_module("tools/perf/run_baseline_ftp_gridftp_smoke.py")
+    row = {
+        "protocol": "ftp",
+        "direction": "upload",
+        "bytes": "268435456",
+        "elapsed_seconds": "3.000000",
+        "mib_per_second": "85.333",
+        "gbps": "0.716",
+        "tool": "lftp/vsftpd",
+        "parallelism": "1",
+        "sha256_match": "yes",
+        "status": "pass",
+        "notes": "",
+    }
+    assert "85.333" in runner.rows_table([row])
+    assert "near 80 MB/s" in runner.near_80mbps([row])
+
+
+def test_three_way_comparison_helpers() -> None:
+    runner = load_module("tools/perf/run_three_way_ftp_gridftp_gridflux.py")
+    assert runner.parse_size_list("256MiB,1GiB") == [268435456, 1073741824]
+    row_ok = runner.result_row(
+        protocol="gridflux",
+        direction="stor",
+        size_bytes=1024,
+        connections="4",
+        checksum="crc32c",
+        repeat=1,
+        elapsed=1.0,
+        source_sha="abc",
+        dest_sha="abc",
+        status="pass",
+        command_summary="matrix",
+    )
+    row_bad = dict(row_ok)
+    row_bad["repeat"] = "2"
+    row_bad["dest_sha256"] = "def"
+    row_bad["sha256_match"] = "no"
+    row_bad["status"] = "fail"
+    summary = runner.summary_rows([row_ok, row_bad])
+    assert summary[0]["sample_count"] == "1"
+    assert summary[0]["sha256_mismatch_count"] == "1"
+    assert summary[0]["fail_count"] == "1"
+    assert runner.sanitize("SSHPASS password token") == "<redacted-key> <redacted-key> <redacted-key>"
 
 
 def test_matrix_skips_invalid_coalesced_zero() -> None:
@@ -451,6 +568,54 @@ def test_storage_system_analyzer_fixture() -> None:
         assert "Default policy remains unchanged" in report
 
 
+def test_retr_stability_analyzer_fixture() -> None:
+    analyzer = load_module("tools/perf/analyze_beta1c_retr_stability.py")
+    with tempfile.TemporaryDirectory() as temp_text:
+        temp = Path(temp_text)
+        raw = temp / "retr.csv"
+        raw.write_text(
+            "direction,result,throughput_gbps,client_dirty_kb_after,client_writeback_kb_after\n"
+            "retr,pass,2.0,1000,20\n"
+            "retr,pass,2.2,2000,30\n",
+            encoding="utf-8",
+        )
+        summary = temp / "retr-summary.csv"
+        summary.write_text(
+            "direction,bytes,file_io_backend,tls_mode,data_tls_mode,connections,checksum_algorithm,final_verify_policy,pass_count,fail_count,throughput_gbps_median,throughput_gbps_p95,throughput_gbps_spread_pct,elapsed_median,sender_network_send_seconds_median,sender_source_read_seconds_median,sender_checksum_seconds_median,receiver_download_temp_write_seconds_median,receiver_final_verify_seconds_median,receiver_rename_commit_seconds_median\n"
+            "retr,1073741824,posix,off,off,1,crc32c,full,3,0,1.000000,1.100000,8.000000,4.000000,2.500000,0.400000,0.200000,0.600000,0.200000,0.010000\n"
+            "retr,1073741824,posix,off,off,4,crc32c,full,3,0,2.000000,2.100000,9.000000,3.000000,1.600000,0.300000,0.200000,0.500000,0.100000,0.010000\n"
+            "retr,1073741824,posix,off,off,8,crc32c,full,3,0,2.200000,2.300000,10.000000,2.800000,1.500000,0.300000,0.200000,0.500000,0.100000,0.010000\n"
+            "retr,1073741824,posix,off,off,4,none,full,3,0,2.100000,2.200000,7.000000,3.000000,1.500000,0.300000,0.000000,0.500000,0.100000,0.010000\n"
+            "retr,1073741824,posix,required,required,4,crc32c,full,3,0,1.600000,1.700000,8.000000,3.500000,2.000000,0.300000,0.200000,0.500000,0.100000,0.010000\n"
+            "retr,1073741824,io_uring,off,off,4,crc32c,full,3,0,2.050000,2.100000,8.000000,3.000000,1.500000,0.300000,0.200000,0.500000,0.100000,0.010000\n"
+            "retr,1073741824,posix,off,off,4,crc32c,verified_chunks,3,0,2.300000,2.400000,7.000000,2.800000,1.400000,0.300000,0.200000,0.400000,0.010000,0.010000\n",
+            encoding="utf-8",
+        )
+        output = temp / "report.md"
+        old_argv = sys.argv
+        try:
+            sys.argv = [
+                "analyze_beta1c_retr_stability.py",
+                "--matrix-raw-csv",
+                str(raw),
+                "--matrix-summary-csv",
+                str(summary),
+                "--output",
+                str(output),
+            ]
+            assert analyzer.main() == 0
+        finally:
+            sys.argv = old_argv
+        report = output.read_text(encoding="utf-8")
+        assert "Beta 1C RETR Stability" in report
+        assert "Connections Scaling" in report
+        assert "TLS/Data TLS Overhead" in report
+        assert "Final Verify Policy Opt-In" in report
+        assert "POSIX vs io_uring" in report
+        assert "Beta Gate / Beta RC" in report
+        assert "Default policy remains unchanged" in report
+
+
 def main() -> int:
     test_runner_command_dimensions()
     test_receiver_writeback_runner_dimensions()
@@ -463,6 +628,8 @@ def main() -> int:
     test_storage_system_probe_defaults()
     test_storage_system_probe_bytes_list_and_stor_commands()
     test_storage_system_analyzer_fixture()
+    test_retr_stability_runner_dimensions()
+    test_retr_stability_analyzer_fixture()
     print("beta1b stor writeback helper tests passed")
     return 0
 
