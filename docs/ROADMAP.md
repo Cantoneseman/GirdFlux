@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**阶段：** Beta 1B-4 — receiver writeback opt-in stability matrix complete; defaults unchanged
+**阶段：** Beta 1B-5 — storage/system writeback attribution complete; defaults unchanged
 
 **已完成：** 项目设计、技术选型、工程规范制定、CMake 工程骨架初始化、GoogleTest 工具链测试、本机与<redacted>二构建验证、GridFTP 源码学习经验整理入设计文档、Phase 1.0 多连接 TCP sink 与本机 loopback 验证、Phase 1.1 性能基线脚本与 loopback smoke matrix、Phase 1.2A offset-aware 单文件传输闭环、Phase 1.2B 文件传输健壮性、Phase 1.3A 文件性能基线自动化、Phase 2A manifest/range-based 断点续传核心、Phase 2B CRC32C chunk checksum 与损坏注入验证、Phase 2C CRC32C backend 自动选择、manifest 批量 flush、恢复统计与 checksum benchmark、Phase 3A GridFTP 风格控制面 STOR 上传与 REST/GFID resume 映射、Phase 3B GridFTP 风格控制面 framed RETR 完整下载、Phase 3C 下载端 manifest/verified_chunks 与 RETR REST/GFID resume、Phase 3D 控制面 SIZE/MDTM/CWD/CDUP/LIST/NLST 与测试工具收敛。
 
@@ -10,7 +10,7 @@
 
 **未开始：** 系统级文件传输调优、raw FTP stream STOR/RETR、GridFTP GSI、MLST/MLSD、网络 io_uring、生产级目录同步。
 
-**下一步：** 不扩大 receiver bounded/default 策略；优先转向磁盘、文件系统、云盘和 OS writeback 限制分析，继续保留 bounded/dirty_poll 为 opt-in 观察项。
+**下一步：** 不扩大 receiver bounded/default 策略；继续保留 bounded/dirty_poll 为 opt-in 观察项。Beta 1B-5 已将 STOR 写入瓶颈归因推进到 storage/system 层，后续优先验证磁盘/文件系统/云盘规格、direct I/O、多盘或更高规格<redacted>，而不是立即设计 user-space queue。
 
 ---
 

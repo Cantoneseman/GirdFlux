@@ -102,6 +102,27 @@ opt-in median `1.838 Gbps`; matched bounded wins and regressions were both
 This does not support a default change or immediate user-space queue design;
 the next Beta work should focus on storage and OS writeback limits.
 
+## Beta 1B-5 Follow-up: Storage/System Attribution
+
+Beta 1B-5 keeps the readiness conclusion unchanged and moves attribution below
+the receiver writeback opt-in layer. It adds:
+
+- runner: `tools/perf/run_beta1b_storage_system_probe.py`
+- analyzer: `tools/perf/analyze_beta1b_storage_system.py`
+- report: `docs/perf/BETA1B_STORAGE_SYSTEM_ATTRIBUTION.md`
+
+Default focused result:
+`tools/perf/results/20260520T075607Z_beta1b-storage-system-attribution.json`
+passed with storage probe fail `0`, fio unavailable `24`, aligned STOR
+`21/21` pass, grouped fail `0`, and hash mismatch `0`. The three default
+probe directories all resolved to the same `/` ext4 mount on `/dev/nvme0n1p3`.
+Native POSIX write median/best was `1.191/1.539 Gbps`; native read median/best
+was `79.070/82.125 Gbps`; aligned STOR e2e median/best was
+`1.552/1.793 Gbps`; STOR temp-write median was `2.054 Gbps`, with temp-write
+wall share median `72.8%`. This points away from receiver bounded/default
+policy changes and toward storage, filesystem, cloud-volume, page-cache, direct
+I/O, multi-disk, or higher-spec machine validation.
+
 ## Host / Link / Storage Baseline
 
 | side | category | tool | bytes | Gbps | result |

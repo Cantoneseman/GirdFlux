@@ -384,6 +384,8 @@ def beta_perf_tool_paths(root: Path) -> list[str]:
         "analyze_beta1b_stor_writeback.py",
         "analyze_beta1b_receiver_writeback.py",
         "analyze_beta1b_receiver_writeback_stability.py",
+        "run_beta1b_storage_system_probe.py",
+        "analyze_beta1b_storage_system.py",
         "test_beta1b_stor_writeback.py",
     ]:
         path = root / "tools" / "perf" / name
@@ -471,6 +473,7 @@ def collect_alpha_artifact_paths(
         "docs/perf/BETA1B_STOR_WRITEBACK_DIAGNOSIS.md",
         "docs/perf/BETA1B_RECEIVER_WRITEBACK_OPTIN.md",
         "docs/perf/BETA1B_RECEIVER_WRITEBACK_STABILITY.md",
+        "docs/perf/BETA1B_STORAGE_SYSTEM_ATTRIBUTION.md",
         "docs/perf/PHASE5B_TREE_DATASET_MATRIX.md",
         "docs/perf/PHASE5C_TREE_ALPHA_HARDENING.md",
         "docs/release/PHASE5D_ALPHA_DEMO.md",

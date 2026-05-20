@@ -20,19 +20,20 @@
 | [BETA1B_STOR_WRITEBACK_DIAGNOSIS.md](docs/perf/BETA1B_STOR_WRITEBACK_DIAGNOSIS.md) | Beta 1B-2 STOR receiver temp write/writeback focused A/B 诊断 |
 | [BETA1B_RECEIVER_WRITEBACK_OPTIN.md](docs/perf/BETA1B_RECEIVER_WRITEBACK_OPTIN.md) | Beta 1B-3 opt-in drain-budget receiver writeback/backpressure 诊断 |
 | [BETA1B_RECEIVER_WRITEBACK_STABILITY.md](docs/perf/BETA1B_RECEIVER_WRITEBACK_STABILITY.md) | Beta 1B-4 receiver writeback opt-in 稳定候选矩阵 |
+| [BETA1B_STORAGE_SYSTEM_ATTRIBUTION.md](docs/perf/BETA1B_STORAGE_SYSTEM_ATTRIBUTION.md) | Beta 1B-5 storage/system writeback 瓶颈归因 |
 | [ALPHA_LIMITATIONS.md](docs/release/ALPHA_LIMITATIONS.md) | 完整 alpha 限制清单与后续路线 |
 
 新接手请按 DESIGN → ROADMAP → ENGINEERING 顺序阅读。
 
 ## 项目状态
 
-**当前阶段：** Beta 1B-4 — receiver writeback opt-in stability matrix complete; defaults unchanged
+**当前阶段：** Beta 1B-5 — storage/system writeback attribution complete; defaults unchanged
 
 **技术栈：** C++20 · epoll 网络基线 · POSIX file IO 默认后端 · 可选 file-IO-only io_uring · CMake · Linux only
 
 **目标场景：** 专线 TB 级（主线）· 虚拟网络 · 广域网
 
-**下一步：** bounded/dirty_poll 保持 opt-in，不进入默认策略或 user-space queue 设计；优先分析磁盘、文件系统、云盘和 OS writeback 限制。默认策略仍保持 anonymous、`tls-mode=off`、`data-tls-mode=off`、POSIX backend、full final verify、`receiver_write_profile=default` 和现有 framed STOR/RETR 语义。
+**下一步：** bounded/dirty_poll 保持 opt-in，不进入默认策略或 user-space queue 设计；Beta 1B-5 证据优先指向当前云盘/文件系统/page-cache writeback 天花板与环境限制，后续应转向硬件/多盘/direct I/O/更高规格<redacted>验证。默认策略仍保持 anonymous、`tls-mode=off`、`data-tls-mode=off`、POSIX backend、full final verify、`receiver_write_profile=default` 和现有 framed STOR/RETR 语义。
 
 ## AI 协作
 

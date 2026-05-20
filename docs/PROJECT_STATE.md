@@ -1,6 +1,52 @@
 # GridFlux 项目状态记录
 
 
+## 2026-05-20 Beta 1B-5 storage/system writeback attribution
+
+### 实现范围
+
+- 新增 `tools/perf/run_beta1b_storage_system_probe.py`：
+  - 默认 `1GiB repeat=3`，`256MiB/4GiB` 通过 `--bytes-list` opt-in；
+  - 默认 probe project temp、`/tmp`、target root 所在目录；
+  - 使用 `gridflux-storage-bench` POSIX backend 作为项目 PosixFile 路径代表，fio 如可用作为外部对照，缺失记录 `unavailable`；
+  - 每个 case 采集 Dirty/Writeback/Cached before/after、`df`、`mount`、`lsblk`、iostat sidecar。
+- 扩展 `tools/perf/run_gridftp_private_matrix.py`：
+  - 新增 opt-in `--run-root-base`，默认空值时仍使用原有系统临时目录；
+  - Beta 1B-5 aligned STOR 固定 receiver write profile 为 `default/0/none`。
+- 新增 `tools/perf/analyze_beta1b_storage_system.py` 和 `docs/perf/BETA1B_STORAGE_SYSTEM_ATTRIBUTION.md`：
+  - 对比 native storage write/read、GridFlux STOR temp-write throughput 和 STOR end-to-end throughput；
+  - 报告 mount 同盘关系、Dirty/Writeback 相关性、preallocate、POSIX/io_uring、manifest/final verify/rename 阶段占比。
+- 更新 release gate artifact 收集，纳入 Beta 1B-5 runner、analyzer 和报告。
+
+### 默认策略
+
+Beta 1B-5 不改变默认传输策略：`auth-mode=anonymous`、`tls-mode=off`、`data-tls-mode=off`、`file_io_backend=posix`、`final_verify_policy=full`、`manifest_flush_policy=every_n_chunks`、`preallocate=off`、`posix_write_strategy=auto`、`receiver_write_profile=default`、`receiver_write_yield_policy=none`。不引入独立 user-space queue，不默认启用 bounded/dirty_poll。
+
+### 当前验证
+
+- 通过：`python3 -m py_compile tools/perf/run_beta1b_storage_system_probe.py tools/perf/analyze_beta1b_storage_system.py tools/perf/test_beta1b_stor_writeback.py tools/perf/run_gridftp_private_matrix.py tools/release/run_alpha_release_gate.py`。
+- 通过：`python3 tools/perf/test_beta1b_stor_writeback.py`。
+- 通过：1MiB storage probe smoke `tools/perf/results/20260520T075509Z_beta1b-storage-system-attribution.json`，storage probe fail `0`。
+- 通过：1MiB aligned STOR smoke `tools/perf/results/20260520T075541Z_beta1b-storage-system-attribution.json`，STOR `7/7` pass，hash mismatch `0`。
+- 通过：Beta 1B-5 focused runner `tools/perf/results/20260520T075607Z_beta1b-storage-system-attribution.json`，storage probe raw pass `144`、fail `0`、fio unavailable `24`，aligned STOR raw `21/21` pass，summary `7` rows / grouped fail `0`，hash mismatch `0`。
+- Focused raw/summary：
+  - storage probe：`tools/perf/results/20260520T075607Z_storage-system-probe.csv`、`tools/perf/results/20260520T075607Z_storage-system-probe-summary.csv`；
+  - STOR off/off：`tools/perf/results/20260520T080931Z_gridftp-private-matrix-smoke.csv`、`tools/perf/results/20260520T080931Z_gridftp-private-matrix-smoke-summary.csv`；
+  - STOR required/required subset：`tools/perf/results/20260520T081405Z_gridftp-private-matrix-smoke.csv`、`tools/perf/results/20260520T081405Z_gridftp-private-matrix-smoke-summary.csv`。
+- 关键结论：project temp、`/tmp`、target root 均在 `/dev/nvme0n1p3` 的 `/` ext4 mount；native POSIX write median/best `1.191/1.539 Gbps`，native read median/best `79.070/82.125 Gbps`；aligned STOR e2e median/best `1.552/1.793 Gbps`；STOR temp-write median `2.054 Gbps`，temp-write wall share median `72.8%`，data_receive wall share median `2.0%`；preallocate full 在 native storage write matched rows 上有收益但仍保持 opt-in；io_uring 没有稳定收益。
+- 通过：本机 Debug full CTest `184/184 passed`。
+- 通过：本机 real io_uring Release full CTest `184/184 passed`，`FileIoTest.IoUringContextReadWriteSmokeWhenAvailable` Passed。
+- 通过：<redacted>二 Debug full CTest `184/184 passed`。
+- 通过：<redacted>二 real io_uring Release full CTest `184/184 passed`，`FileIoTest.IoUringContextReadWriteSmokeWhenAvailable` Passed。
+- 通过：quick alpha gate `tools/perf/results/20260520T082022Z_alpha-release-gate.json`。
+- 通过：full alpha gate `tools/perf/results/20260520T082210Z_alpha-release-gate.json`。
+- 通过：Alpha RC `tools/perf/results/20260520T082955Z_alpha-release-candidate.json`。
+- 通过：RC artifact freshness checked `2317`，stale `0`；remote artifact post-report verify checked `2318`，missing `0`，mismatch `0`。
+- 通过：public export strict hygiene，`/tmp/gridflux-public-alpha-rc-20260520T082955Z`。
+- 通过：Alpha RC residual process check 本机/<redacted>二均为空。
+- Beta 1B-5 结论：当前不支持默认策略变更或 user-space queue 设计；后续应优先做磁盘、文件系统、云盘规格、page-cache/writeback、direct I/O、多盘或更高规格<redacted>验证。
+
+
 ## 2026-05-20 Beta 1B-4 receiver writeback opt-in stability matrix
 
 ### 实现范围

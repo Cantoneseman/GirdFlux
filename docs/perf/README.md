@@ -16,6 +16,26 @@ Phase 6B 起可使用 `--event-log <path>` 生成 JSONL 事件日志。性能脚
 CSV 为主，event log 用于单 case 排障：auth/path/manifest/checksum/changed-file
 等错误会映射到稳定 `error_code`。事件日志不得包含 token/password。
 
+## Beta 1B-5 Storage/System Attribution
+
+Beta 1B-5 新增 storage/system writeback 归因包，默认跑当前云服务器上的
+`1GiB repeat=3` 聚焦验证，不迁移 100G 环境，不改变默认策略。`gridflux-storage-bench`
+的 POSIX backend 作为项目 PosixFile 路径代表；`fio` 如可用作为外部对照，缺失时记录
+`unavailable`。
+
+```bash
+python3 tools/perf/run_beta1b_storage_system_probe.py \
+  --remote <remote> \
+  --server-host <server-host> \
+  --local-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real
+```
+
+默认 probe 覆盖 project temp、`/tmp` 和 target root 所在目录，采集
+Dirty/Writeback/Cached、`df`、`mount`、`lsblk` 和 iostat sidecar；aligned STOR
+矩阵固定 `receiver_write_profile=default`、`receiver_write_yield_policy=none`。
+报告写入 `docs/perf/BETA1B_STORAGE_SYSTEM_ATTRIBUTION.md`。
+
 ## Alpha Artifact Sync
 
 ```bash

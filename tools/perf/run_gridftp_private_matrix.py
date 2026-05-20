@@ -2004,6 +2004,11 @@ def main() -> int:
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--host-baseline-csv", default="")
     parser.add_argument("--storage-bench-csv", default="")
+    parser.add_argument(
+        "--run-root-base",
+        default="",
+        help="optional parent directory for per-case server roots; default uses a system temp directory",
+    )
     parser.add_argument("--max-chunks", type=int, default=8)
     parser.add_argument("--case-timeout", type=int, default=1800)
     parser.add_argument("--keep-files", action="store_true")
@@ -2018,7 +2023,11 @@ def main() -> int:
     summary_path = (
         output_dir / f"{run_id}_gridftp-private-matrix-{'full' if args.full else 'smoke'}-summary.csv"
     )
-    run_root = Path(tempfile.mkdtemp(prefix=f"gridflux-phase4a-{run_id}."))
+    if args.run_root_base:
+        run_root = Path(args.run_root_base) / f"gridflux-phase4a-{run_id}"
+        run_root.mkdir(parents=True, exist_ok=False)
+    else:
+        run_root = Path(tempfile.mkdtemp(prefix=f"gridflux-phase4a-{run_id}."))
     remove_run_root = not args.keep_files
     tls_tempdir: tempfile.TemporaryDirectory[str] | None = None
     args._tls_cert_file = ""

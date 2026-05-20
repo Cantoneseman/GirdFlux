@@ -14,6 +14,13 @@ Beta 1B-4 expands the opt-in drain-budget receiver writeback candidate matrix. I
 - Dirty/Writeback correlation: Pearson r `-0.069` across `65` raw rows.
 - Native storage write median for aligned receiver-side bench rows: `24.061 Gbps`.
 
+Beta 1B-5 follow-up: receiver bounded/dirty_poll remains opt-in only. The
+storage/system attribution package (`docs/perf/BETA1B_STORAGE_SYSTEM_ATTRIBUTION.md`)
+found the default probe directories on the same ext4 mount, native POSIX write
+median/best `1.191/1.539 Gbps`, aligned STOR e2e median/best `1.552/1.793 Gbps`,
+and temp-write wall share median `72.8%`. The next Beta work should continue
+storage/system validation rather than move directly to user-space queue design.
+
 ## Inputs
 
 - `tools/perf/results/20260520T071326Z_storage-bench.csv`
