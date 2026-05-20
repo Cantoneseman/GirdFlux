@@ -18,19 +18,20 @@
 | [BETA1A_100G_READINESS.md](docs/perf/BETA1A_100G_READINESS.md) | Beta 1A 私网性能专项与 100G readiness 诊断报告 |
 | [BETA1B_DATA_TLS_RESUME_AND_STOR_WRITE.md](docs/perf/BETA1B_DATA_TLS_RESUME_AND_STOR_WRITE.md) | Beta 1B data TLS resume blocker 修复与 STOR write/writeback 诊断 |
 | [BETA1B_STOR_WRITEBACK_DIAGNOSIS.md](docs/perf/BETA1B_STOR_WRITEBACK_DIAGNOSIS.md) | Beta 1B-2 STOR receiver temp write/writeback focused A/B 诊断 |
+| [BETA1B_RECEIVER_WRITEBACK_OPTIN.md](docs/perf/BETA1B_RECEIVER_WRITEBACK_OPTIN.md) | Beta 1B-3 opt-in drain-budget receiver writeback/backpressure 诊断 |
 | [ALPHA_LIMITATIONS.md](docs/release/ALPHA_LIMITATIONS.md) | 完整 alpha 限制清单与后续路线 |
 
 新接手请按 DESIGN → ROADMAP → ENGINEERING 顺序阅读。
 
 ## 项目状态
 
-**当前阶段：** Beta 1B-2 — STOR receiver temp write/writeback focused diagnostics completed and release-gated
+**当前阶段：** Beta 1B-3 — opt-in drain-budget receiver writeback/backpressure/profile implemented; focused validation complete
 
 **技术栈：** C++20 · epoll 网络基线 · POSIX file IO 默认后端 · 可选 file-IO-only io_uring · CMake · Linux only
 
 **目标场景：** 专线 TB 级（主线）· 虚拟网络 · 广域网
 
-**下一步：** Beta 1B-3 聚焦 opt-in receiver writeback/backpressure/profile 优化，不改变 anonymous、`tls-mode=off`、`data-tls-mode=off`、POSIX backend、full final verify 和现有 framed STOR/RETR 语义。
+**下一步：** 只把 Beta 1B-3 中稳定的 bounded budget/yield 候选扩大验证；`receiver_write_profile=bounded`、`receiver_max_pending_bytes` 和 `dirty_poll` 仍是 opt-in，不改变 anonymous、`tls-mode=off`、`data-tls-mode=off`、POSIX backend、full final verify 和现有 framed STOR/RETR 语义。
 
 ## AI 协作
 

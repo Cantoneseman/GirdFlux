@@ -7,11 +7,15 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -21,8 +25,10 @@
 #include "gridflux/core/io/connection_context.h"
 #include "gridflux/core/io/framed_data_socket.h"
 #include "gridflux/core/io/socket_utils.h"
+#include "gridflux/core/metrics/event_log.h"
 #include "gridflux/core/metrics/transfer_phase_stats.h"
 #include "gridflux/core/protocol/frame.h"
+#include "gridflux/core/session/receiver_writeback.h"
 #include "gridflux/core/session/transfer_session.h"
 #include "gridflux/core/session/transfer_session_config.h"
 #include "gridflux/storage/file_io.h"
@@ -54,6 +60,7 @@ struct FileServerConnection {
     bool sessionReady = false;
     bool finReceived = false;
     bool chunkActive = false;
+    bool budgetPauseRequested = false;
     std::uint64_t activeChunkId = 0;
     std::uint64_t activeChunkOffset = 0;
     std::uint64_t activeChunkNextOffset = 0;
@@ -81,6 +88,11 @@ struct TransferState {
     protocol::FrameStatusCode errorCode = protocol::FrameStatusCode::InternalError;
     bool outputOpen = false;
     bool counterStarted = false;
+    std::uint64_t receiverDrainWindowBytes = 0;
+    std::uint64_t receiverPendingBytesMax = 0;
+    std::uint64_t receiverBackpressureCount = 0;
+    std::uint64_t receiverBackpressureNanos = 0;
+    std::uint64_t receiverWriteYieldCount = 0;
 };
 
 common::Status systemStatus(const char* operation, int errorNumber) {
@@ -101,6 +113,111 @@ common::Status applyCommitSyncPolicy(const std::string& outputPath,
         return storage::PosixFile::fsyncParentDirectory(outputPath);
     }
     return common::Status::ok();
+}
+
+bool receiverWritebackBounded(const config::FileTransferOptions& options) noexcept {
+    return options.receiverWriteback.profile == session::ReceiverWriteProfile::Bounded;
+}
+
+std::uint64_t dirtyWritebackBytes() {
+    std::ifstream input("/proc/meminfo");
+    if (!input) {
+        return 0;
+    }
+
+    std::uint64_t dirtyKb = 0;
+    std::uint64_t writebackKb = 0;
+    std::string name;
+    std::uint64_t value = 0;
+    std::string unit;
+    while (input >> name >> value >> unit) {
+        if (name == "Dirty:") {
+            dirtyKb = value;
+        } else if (name == "Writeback:") {
+            writebackKb = value;
+        }
+        if (dirtyKb != 0 && writebackKb != 0) {
+            break;
+        }
+    }
+    return (dirtyKb + writebackKb) * 1024ULL;
+}
+
+void applyReceiverDrainBudget(FileServerConnection& connection, TransferState& transfer,
+                              const config::FileTransferOptions& options,
+                              std::uint64_t writtenBytes) {
+    if (!receiverWritebackBounded(options) || writtenBytes == 0) {
+        return;
+    }
+
+    transfer.receiverDrainWindowBytes += writtenBytes;
+    transfer.receiverPendingBytesMax =
+        std::max(transfer.receiverPendingBytesMax, transfer.receiverDrainWindowBytes);
+    if (transfer.receiverDrainWindowBytes < options.receiverWriteback.maxPendingBytes) {
+        return;
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    if (options.receiverWriteback.yieldPolicy == session::ReceiverWriteYieldPolicy::DirtyPoll &&
+        dirtyWritebackBytes() > options.receiverWriteback.maxPendingBytes) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        transfer.receiverWriteYieldCount += 1;
+    }
+    const auto end = std::chrono::steady_clock::now();
+    transfer.receiverBackpressureCount += 1;
+    transfer.receiverBackpressureNanos += static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
+    transfer.receiverDrainWindowBytes = 0;
+    connection.budgetPauseRequested = true;
+}
+
+double receiverBackpressureSeconds(const TransferState& transfer) noexcept {
+    return static_cast<double>(transfer.receiverBackpressureNanos) / 1000000000.0;
+}
+
+void appendReceiverWritebackStats(std::ostream& stream,
+                                  const config::FileTransferOptions& options,
+                                  const TransferState& transfer) {
+    stream << " receiver_write_profile="
+           << session::receiverWriteProfileName(options.receiverWriteback.profile)
+           << " receiver_max_pending_bytes=" << options.receiverWriteback.maxPendingBytes
+           << " receiver_write_yield_policy="
+           << session::receiverWriteYieldPolicyName(options.receiverWriteback.yieldPolicy)
+           << " receiver_pending_bytes_max=" << transfer.receiverPendingBytesMax
+           << " receiver_backpressure_count=" << transfer.receiverBackpressureCount
+           << " receiver_backpressure_seconds=" << receiverBackpressureSeconds(transfer)
+           << " receiver_write_yield_count=" << transfer.receiverWriteYieldCount;
+}
+
+void writeReceiverWritebackEvent(const config::FileTransferOptions& options,
+                                 const TransferState& transfer, double elapsedSeconds) {
+    if (options.eventLogPath.empty()) {
+        return;
+    }
+
+    metrics::EventRecord record;
+    record.component = "gridflux-file-server";
+    record.event = "receiver_writeback_summary";
+    record.transferId = transfer.transferId;
+    record.direction = "upload";
+    record.path = options.path;
+    record.result = "pass";
+    record.errorCode = metrics::ErrorCode::Ok;
+    record.elapsedSeconds = elapsedSeconds;
+    record.bytes = transfer.bytesWritten;
+    record.attributes = {
+        {"receiver_write_profile",
+         session::receiverWriteProfileName(options.receiverWriteback.profile)},
+        {"receiver_max_pending_bytes",
+         std::to_string(options.receiverWriteback.maxPendingBytes)},
+        {"receiver_write_yield_policy",
+         session::receiverWriteYieldPolicyName(options.receiverWriteback.yieldPolicy)},
+        {"receiver_pending_bytes_max", std::to_string(transfer.receiverPendingBytesMax)},
+        {"receiver_backpressure_count", std::to_string(transfer.receiverBackpressureCount)},
+        {"receiver_backpressure_seconds", std::to_string(receiverBackpressureSeconds(transfer))},
+        {"receiver_write_yield_count", std::to_string(transfer.receiverWriteYieldCount)},
+    };
+    (void)metrics::writeEventLog(options.eventLogPath, record);
 }
 
 common::Status sendAllNonBlocking(int fd, const std::uint8_t* data, std::size_t length,
@@ -558,7 +675,8 @@ common::Status processCompletedHeader(FileServerConnection& connection, Transfer
     return common::Status::ok();
 }
 
-common::Status processDataPayload(FileServerConnection& connection, TransferState& transfer) {
+common::Status processDataPayload(FileServerConnection& connection, TransferState& transfer,
+                                  const config::FileTransferOptions& options) {
     const protocol::FrameHeader& header = connection.currentHeader;
     if (!connection.chunkActive) {
         connection.chunkActive = true;
@@ -592,6 +710,7 @@ common::Status processDataPayload(FileServerConnection& connection, TransferStat
         connection.checksumComputer.update(connection.payloadBuffer.data(), header.payloadSize);
     }
     connection.activeChunkNextOffset += header.payloadSize;
+    applyReceiverDrainBudget(connection, transfer, options, header.payloadSize);
 
     connection.context.addBytesReceived(header.payloadSize);
     transfer.bytesWritten = transfer.session.bytesCompleted();
@@ -670,7 +789,7 @@ common::Status processCompletedPayload(FileServerConnection& connection, Transfe
     if (connection.currentHeader.type == protocol::FrameType::ChunkComplete) {
         return processChunkCompletePayload(connection, transfer);
     }
-    return processDataPayload(connection, transfer);
+    return processDataPayload(connection, transfer, options);
 }
 
 common::Status readFromConnection(FileServerConnection& connection, TransferState& transfer,
@@ -744,6 +863,10 @@ common::Status readFromConnection(FileServerConnection& connection, TransferStat
                 if (!status.isOk()) {
                     return status;
                 }
+                if (connection.budgetPauseRequested) {
+                    connection.budgetPauseRequested = false;
+                    break;
+                }
             }
             continue;
         }
@@ -809,6 +932,10 @@ common::Status readFromTlsConnection(FileServerConnection& connection, TransferS
         const common::Status status = processCompletedPayload(connection, transfer, options);
         if (!status.isOk()) {
             return status;
+        }
+        if (connection.budgetPauseRequested) {
+            connection.budgetPauseRequested = false;
+            return common::Status::ok();
         }
         if (connection.writer == nullptr && transfer.outputOpen) {
             connection.writer = std::make_unique<storage::BufferedFileWriter>(
@@ -1053,10 +1180,12 @@ common::Status runFileTransferServerOnListenerTls(const config::FileTransferOpti
               << storage::posixWriteStrategyName(
                      storage::effectivePosixWriteStrategy(options.fileIo))
               << " data_tls_mode=" << dataTlsModeName(options.dataTlsMode);
+    appendReceiverWritebackStats(std::cout, options, transfer);
     metrics::appendPhaseStats(std::cout, transfer.phaseStats);
     metrics::appendStorReceiverAliases(std::cout, transfer.phaseStats);
     storage::appendFileIoStats(std::cout, transfer.fileIoStats);
     std::cout << '\n' << std::flush;
+    writeReceiverWritebackEvent(options, transfer, transfer.counter.elapsedSeconds(end));
     return common::Status::ok();
 }
 
@@ -1336,10 +1465,12 @@ common::Status runFileTransferServerOnListener(const config::FileTransferOptions
               << storage::posixWriteStrategyName(
                      storage::effectivePosixWriteStrategy(options.fileIo))
               << " data_tls_mode=" << dataTlsModeName(options.dataTlsMode);
+    appendReceiverWritebackStats(std::cout, options, transfer);
     metrics::appendPhaseStats(std::cout, transfer.phaseStats);
     metrics::appendStorReceiverAliases(std::cout, transfer.phaseStats);
     storage::appendFileIoStats(std::cout, transfer.fileIoStats);
     std::cout << '\n' << std::flush;
+    writeReceiverWritebackEvent(options, transfer, transfer.counter.elapsedSeconds(end));
 
     return common::Status::ok();
 }

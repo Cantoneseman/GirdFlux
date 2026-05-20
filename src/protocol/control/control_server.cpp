@@ -497,8 +497,10 @@ common::Status runStor(core::io::TlsConnection* control, ControlSession& session
     fileOptions.manifestFlushIntervalChunks = controlOptions.manifestFlushIntervalChunks;
     fileOptions.finalVerifyPolicy = controlOptions.finalVerifyPolicy;
     fileOptions.commitSyncPolicy = controlOptions.commitSyncPolicy;
+    fileOptions.receiverWriteback = controlOptions.receiverWriteback;
     fileOptions.preallocateMode = controlOptions.preallocateMode;
     fileOptions.fileIo = controlOptions.fileIo;
+    fileOptions.eventLogPath = controlOptions.eventLogPath;
     fileOptions.dataTls = controlOptions.tls;
     fileOptions.dataTls.mode = controlOptions.dataTlsMode == core::io::DataTlsMode::Required
                                    ? core::io::TlsMode::Required

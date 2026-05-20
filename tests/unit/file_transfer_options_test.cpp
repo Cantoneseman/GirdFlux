@@ -10,6 +10,7 @@
 #include "gridflux/core/session/commit_sync_policy.h"
 #include "gridflux/core/session/final_verify_policy.h"
 #include "gridflux/core/session/manifest_flush_policy.h"
+#include "gridflux/core/session/receiver_writeback.h"
 #include "gridflux/storage/file_io.h"
 
 namespace {
@@ -45,6 +46,11 @@ TEST(FileTransferOptionsTest, AppliesServerDefaults) {
               gridflux::core::session::FinalVerifyPolicy::Full);
     EXPECT_EQ(result.value().commitSyncPolicy,
               gridflux::core::session::CommitSyncPolicy::None);
+    EXPECT_EQ(result.value().receiverWriteback.profile,
+              gridflux::core::session::ReceiverWriteProfile::Default);
+    EXPECT_EQ(result.value().receiverWriteback.maxPendingBytes, 0U);
+    EXPECT_EQ(result.value().receiverWriteback.yieldPolicy,
+              gridflux::core::session::ReceiverWriteYieldPolicy::None);
     EXPECT_EQ(result.value().preallocateMode, gridflux::storage::PreallocateMode::Off);
     EXPECT_EQ(result.value().fileIo.backend, gridflux::storage::FileIoBackendKind::Posix);
     EXPECT_EQ(result.value().fileIo.bufferSize, 0U);
@@ -164,7 +170,9 @@ TEST(FileTransferOptionsTest, ParsesServerFlags) {
                "--resume", "--checksum", "crc32c", "--checksum-backend", "software",
                "--manifest-flush-policy", "final_only", "--manifest-flush-interval-chunks", "32",
                "--final-verify-policy", "verified_chunks", "--commit-sync-policy",
-               "fsync_file_and_dir", "--preallocate", "full", "--file-io-buffer-size", "2097152",
+               "fsync_file_and_dir", "--receiver-write-profile", "bounded",
+               "--receiver-max-pending-bytes", "67108864", "--receiver-write-yield-policy",
+               "dirty_poll", "--preallocate", "full", "--file-io-buffer-size", "2097152",
                "--file-io-backend", "io_uring", "--file-io-queue-depth", "8",
                "--file-io-batch-size", "2", "--file-io-advice", "dontneed",
                "--posix-write-strategy", "coalesced", "--event-log",
@@ -184,6 +192,11 @@ TEST(FileTransferOptionsTest, ParsesServerFlags) {
               gridflux::core::session::FinalVerifyPolicy::VerifiedChunks);
     EXPECT_EQ(result.value().commitSyncPolicy,
               gridflux::core::session::CommitSyncPolicy::FsyncFileAndDir);
+    EXPECT_EQ(result.value().receiverWriteback.profile,
+              gridflux::core::session::ReceiverWriteProfile::Bounded);
+    EXPECT_EQ(result.value().receiverWriteback.maxPendingBytes, 67108864U);
+    EXPECT_EQ(result.value().receiverWriteback.yieldPolicy,
+              gridflux::core::session::ReceiverWriteYieldPolicy::DirtyPoll);
     EXPECT_EQ(result.value().preallocateMode, gridflux::storage::PreallocateMode::Full);
     EXPECT_EQ(result.value().fileIo.backend, gridflux::storage::FileIoBackendKind::IoUring);
     EXPECT_EQ(result.value().fileIo.bufferSize, 2097152U);
@@ -257,6 +270,18 @@ TEST(FileTransferOptionsTest, RejectsServerOnlyFlagsForClient) {
                         "fsync_file"},
                        gridflux::config::FileTransferRole::Client)
                      .isOk());
+    EXPECT_FALSE(parse({"gridflux-file-client", "--input", "/tmp/in", "--receiver-write-profile",
+                        "bounded"},
+                       gridflux::config::FileTransferRole::Client)
+                     .isOk());
+    EXPECT_FALSE(parse({"gridflux-file-client", "--input", "/tmp/in",
+                        "--receiver-max-pending-bytes", "67108864"},
+                       gridflux::config::FileTransferRole::Client)
+                     .isOk());
+    EXPECT_FALSE(parse({"gridflux-file-client", "--input", "/tmp/in",
+                        "--receiver-write-yield-policy", "dirty_poll"},
+                       gridflux::config::FileTransferRole::Client)
+                     .isOk());
     EXPECT_FALSE(parse({"gridflux-file-client", "--input", "/tmp/in", "--preallocate", "full"},
                        gridflux::config::FileTransferRole::Client)
                      .isOk());
@@ -298,6 +323,27 @@ TEST(FileTransferOptionsTest, RejectsInvalidNumericOptions) {
                      .isOk());
     EXPECT_FALSE(parse({"gridflux-file-server", "--output", "/tmp/out", "--commit-sync-policy",
                         "sync_everything"},
+                       gridflux::config::FileTransferRole::Server)
+                     .isOk());
+    EXPECT_FALSE(parse({"gridflux-file-server", "--output", "/tmp/out",
+                        "--receiver-write-profile", "queue"},
+                       gridflux::config::FileTransferRole::Server)
+                     .isOk());
+    EXPECT_FALSE(parse({"gridflux-file-server", "--output", "/tmp/out",
+                        "--receiver-write-profile", "bounded"},
+                       gridflux::config::FileTransferRole::Server)
+                     .isOk());
+    EXPECT_FALSE(parse({"gridflux-file-server", "--output", "/tmp/out",
+                        "--receiver-max-pending-bytes", "67108864"},
+                       gridflux::config::FileTransferRole::Server)
+                     .isOk());
+    EXPECT_FALSE(parse({"gridflux-file-server", "--output", "/tmp/out",
+                        "--receiver-write-yield-policy", "dirty_poll"},
+                       gridflux::config::FileTransferRole::Server)
+                     .isOk());
+    EXPECT_FALSE(parse({"gridflux-file-server", "--output", "/tmp/out",
+                        "--receiver-write-profile", "bounded",
+                        "--receiver-max-pending-bytes", "1099511627777"},
                        gridflux::config::FileTransferRole::Server)
                      .isOk());
     EXPECT_FALSE(parse({"gridflux-file-server", "--output", "/tmp/out", "--preallocate", "yes"},

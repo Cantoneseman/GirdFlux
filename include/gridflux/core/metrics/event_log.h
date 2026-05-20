@@ -4,6 +4,8 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "gridflux/common/status.h"
 #include "gridflux/core/metrics/error_code.h"
@@ -21,6 +23,7 @@ struct EventRecord {
     std::string message;
     double elapsedSeconds = 0.0;
     std::uint64_t bytes = 0;
+    std::vector<std::pair<std::string, std::string>> attributes;
 };
 
 class EventLogger {

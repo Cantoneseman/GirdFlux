@@ -212,6 +212,28 @@ common::Result<ControlServerOptions> parseControlServerOptions(int argc, const c
                 return parsed.status();
             }
             options.commitSyncPolicy = parsed.value();
+        } else if (option == "--receiver-write-profile") {
+            auto parsed = core::session::parseReceiverWriteProfile(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.receiverWriteback.profile = parsed.value();
+        } else if (option == "--receiver-max-pending-bytes") {
+            auto parsed = parseUnsigned(value, "--receiver-max-pending-bytes");
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            if (parsed.value() > kMaxChunkSize) {
+                return common::Status::invalidArgument(
+                    "--receiver-max-pending-bytes must be in range 0..1099511627776");
+            }
+            options.receiverWriteback.maxPendingBytes = parsed.value();
+        } else if (option == "--receiver-write-yield-policy") {
+            auto parsed = core::session::parseReceiverWriteYieldPolicy(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.receiverWriteback.yieldPolicy = parsed.value();
         } else if (option == "--preallocate") {
             auto parsed = storage::parsePreallocateMode(value);
             if (!parsed.isOk()) {
@@ -335,6 +357,11 @@ common::Result<ControlServerOptions> parseControlServerOptions(int argc, const c
     if (hasFileIoQueueDepth && !hasFileIoBatchSize) {
         options.fileIo.batchSize = options.fileIo.queueDepth;
     }
+    const common::Status receiverWritebackStatus =
+        core::session::validateReceiverWritebackConfig(options.receiverWriteback);
+    if (!receiverWritebackStatus.isOk()) {
+        return receiverWritebackStatus;
+    }
     const common::Status fileIoStatus = storage::validateFileIoConfig(options.fileIo);
     if (!fileIoStatus.isOk()) {
         return fileIoStatus;
@@ -380,6 +407,9 @@ std::string controlServerUsage(const char* programName) {
               "[--manifest-flush-interval-chunks <N>] "
               "[--final-verify-policy full|verified_chunks] "
               "[--commit-sync-policy none|fsync_file|fsync_file_and_dir] "
+              "[--receiver-write-profile default|bounded] "
+              "[--receiver-max-pending-bytes <bytes>] "
+              "[--receiver-write-yield-policy none|dirty_poll] "
               "[--preallocate off|full] "
               "[--file-io-backend posix|io_uring] [--file-io-buffer-size <bytes>] "
               "[--file-io-queue-depth <N>] [--file-io-batch-size <N>] "

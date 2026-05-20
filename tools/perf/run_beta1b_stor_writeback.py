@@ -176,6 +176,48 @@ def storage_command(args: argparse.Namespace, bytes_value: str, repeat: int) -> 
     )
 
 
+def receiver_writeback_storage_command(
+    args: argparse.Namespace, bytes_value: str, repeat: int
+) -> StepSpec:
+    return StepSpec(
+        "storage_bench",
+        [
+            sys.executable,
+            "tools/benchmark/run_storage_bench.py",
+            "--side",
+            "local",
+            "--build-dir",
+            args.local_build_dir,
+            "--output-dir",
+            args.output_dir,
+            "--bytes",
+            bytes_value,
+            "--modes",
+            "write",
+            "--buffer-sizes",
+            "262144",
+            "--preallocates",
+            "off",
+            "--file-io-backends",
+            "posix",
+            "--file-io-buffer-sizes",
+            "0",
+            "--file-io-queue-depths",
+            "1",
+            "--file-io-batch-sizes",
+            "1",
+            "--file-io-advices",
+            "off",
+            "--posix-write-strategies",
+            "auto",
+            "--iterations",
+            str(repeat),
+            "--timeout",
+            str(args.case_timeout),
+        ],
+    )
+
+
 def matrix_common(
     args: argparse.Namespace,
     *,
@@ -341,6 +383,53 @@ def matrix_step_specs(
     ]
 
 
+def receiver_writeback_matrix_step_specs(
+    args: argparse.Namespace,
+    *,
+    bytes_value: str,
+    repeat: int,
+    event_dir: Path,
+    storage_csv: str,
+) -> list[StepSpec]:
+    common = matrix_common(
+        args,
+        bytes_value=bytes_value,
+        repeat=repeat,
+        event_dir=event_dir,
+        storage_csv=storage_csv,
+    )
+    return [
+        StepSpec(
+            "stor_receiver_writeback_optin",
+            [
+                *common,
+                "--connections",
+                "1,4,8",
+                "--checksums",
+                "crc32c,none",
+                "--file-io-backends",
+                "posix",
+                "--file-io-buffer-sizes",
+                "0",
+                "--posix-write-strategies",
+                "auto",
+                "--preallocates",
+                "off",
+                "--manifest-flush-policies",
+                "every_n_chunks",
+                "--final-verify-policies",
+                "full",
+                "--receiver-write-profiles",
+                "default,bounded",
+                "--receiver-max-pending-bytes-list",
+                "0,67108864,268435456",
+                "--receiver-write-yield-policies",
+                "none,dirty_poll",
+            ],
+        )
+    ]
+
+
 def analyze_command(
     *,
     storage_raw: str,
@@ -366,6 +455,31 @@ def analyze_command(
     return StepSpec("analyze_beta1b_stor_writeback", command)
 
 
+def analyze_receiver_writeback_command(
+    *,
+    storage_raw: str,
+    storage_summary: str,
+    matrix_raws: list[str],
+    matrix_summaries: list[str],
+    report_path: Path,
+) -> StepSpec:
+    command = [
+        sys.executable,
+        "tools/perf/analyze_beta1b_receiver_writeback.py",
+        "--output",
+        str(report_path),
+    ]
+    if storage_raw:
+        command.extend(["--storage-raw-csv", storage_raw])
+    if storage_summary:
+        command.extend(["--storage-summary-csv", storage_summary])
+    for raw in matrix_raws:
+        command.extend(["--matrix-raw-csv", raw])
+    for summary in matrix_summaries:
+        command.extend(["--matrix-summary-csv", summary])
+    return StepSpec("analyze_beta1b_receiver_writeback", command)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run Beta 1B-2 STOR write/writeback diagnostics.")
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -380,6 +494,11 @@ def main() -> int:
     parser.add_argument("--repeat", type=int, default=0)
     parser.add_argument("--case-timeout", type=int, default=900)
     parser.add_argument("--skip-storage-bench", action="store_true")
+    parser.add_argument(
+        "--receiver-writeback-optin",
+        action="store_true",
+        help="run the Beta 1B-3 opt-in drain-budget receiver writeback matrix",
+    )
     args = parser.parse_args()
 
     if args.repeat < 0:
@@ -390,11 +509,16 @@ def main() -> int:
     output_dir = ROOT / args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     run_id = compact_timestamp()
-    log_dir = output_dir / f"{run_id}_beta1b-stor-writeback"
+    run_slug = "beta1b-receiver-writeback-optin" if args.receiver_writeback_optin else "beta1b-stor-writeback"
+    log_dir = output_dir / f"{run_id}_{run_slug}"
     event_dir = log_dir / "events"
     event_dir.mkdir(parents=True, exist_ok=True)
-    summary_json = output_dir / f"{run_id}_beta1b-stor-writeback.json"
-    report_path = ROOT / "docs" / "perf" / "BETA1B_STOR_WRITEBACK_DIAGNOSIS.md"
+    summary_json = output_dir / f"{run_id}_{run_slug}.json"
+    report_path = ROOT / "docs" / "perf" / (
+        "BETA1B_RECEIVER_WRITEBACK_OPTIN.md"
+        if args.receiver_writeback_optin
+        else "BETA1B_STOR_WRITEBACK_DIAGNOSIS.md"
+    )
 
     env = run_env(args.remote)
     steps: list[dict[str, object]] = []
@@ -402,20 +526,36 @@ def main() -> int:
     storage_summary = ""
 
     if not args.skip_storage_bench:
-        storage_step = run_step(storage_command(args, bytes_value, repeat), log_dir, env=env)
+        storage_spec = (
+            receiver_writeback_storage_command(args, bytes_value, repeat)
+            if args.receiver_writeback_optin
+            else storage_command(args, bytes_value, repeat)
+        )
+        storage_step = run_step(storage_spec, log_dir, env=env)
         steps.append(storage_step)
         storage_raw = extract_path(str(storage_step.get("stdout", "")), "csv")
         storage_summary = extract_path(str(storage_step.get("stdout", "")), "summary_csv")
 
     matrix_raws: list[str] = []
     matrix_summaries: list[str] = []
-    for spec in matrix_step_specs(
-        args,
-        bytes_value=bytes_value,
-        repeat=repeat,
-        event_dir=event_dir,
-        storage_csv=storage_raw,
-    ):
+    specs = (
+        receiver_writeback_matrix_step_specs(
+            args,
+            bytes_value=bytes_value,
+            repeat=repeat,
+            event_dir=event_dir,
+            storage_csv=storage_raw,
+        )
+        if args.receiver_writeback_optin
+        else matrix_step_specs(
+            args,
+            bytes_value=bytes_value,
+            repeat=repeat,
+            event_dir=event_dir,
+            storage_csv=storage_raw,
+        )
+    )
+    for spec in specs:
         step = run_step(spec, log_dir, env=env)
         steps.append(step)
         raw = extract_path(str(step.get("stdout", "")), "csv")
@@ -425,17 +565,24 @@ def main() -> int:
         if summary:
             matrix_summaries.append(summary)
 
-    analyze_step = run_step(
-        analyze_command(
+    analyze_spec = (
+        analyze_receiver_writeback_command(
             storage_raw=storage_raw,
             storage_summary=storage_summary,
             matrix_raws=matrix_raws,
             matrix_summaries=matrix_summaries,
             report_path=report_path,
-        ),
-        log_dir,
-        env=env,
+        )
+        if args.receiver_writeback_optin
+        else analyze_command(
+            storage_raw=storage_raw,
+            storage_summary=storage_summary,
+            matrix_raws=matrix_raws,
+            matrix_summaries=matrix_summaries,
+            report_path=report_path,
+        )
     )
+    analyze_step = run_step(analyze_spec, log_dir, env=env)
     steps.append(analyze_step)
 
     storage_cases = 0
@@ -456,6 +603,7 @@ def main() -> int:
     result = {
         "timestamp": timestamp_utc(),
         "mode": "smoke" if args.smoke else "focused",
+        "receiver_writeback_optin": args.receiver_writeback_optin,
         "result": "pass" if not failures and grouped_failures == 0 and mismatches == 0 else "fail",
         "bytes": bytes_value,
         "repeat": repeat,

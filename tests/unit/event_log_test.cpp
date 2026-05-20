@@ -23,27 +23,30 @@ TEST(EventLogTest, WritesEscapedJsonlAndCreatesParentDirectory) {
     const auto path = root / "nested" / "events.jsonl";
     auto logger = gridflux::core::metrics::EventLogger::open(path.string());
     ASSERT_TRUE(logger.isOk()) << logger.status().message();
-    auto status = logger.value().write(gridflux::core::metrics::EventRecord{
-        "component",
-        "event",
-        "abc",
+	    auto status = logger.value().write(gridflux::core::metrics::EventRecord{
+	        "component",
+	        "event",
+	        "abc",
         "upload",
         "path with \"quote\"",
         "fail",
-        gridflux::core::metrics::ErrorCode::ProtocolError,
-        "line\nmessage",
-        1.25,
-        42});
+	        gridflux::core::metrics::ErrorCode::ProtocolError,
+	        "line\nmessage",
+	        1.25,
+	        42,
+	        {{"receiver_write_profile", "bounded"}, {"receiver_backpressure_count", "4"}}});
     ASSERT_TRUE(status.isOk()) << status.message();
     std::ifstream input(path);
     std::ostringstream buffer;
     buffer << input.rdbuf();
     const std::string text = buffer.str();
     EXPECT_NE(text.find("\"error_code\":\"protocol_error\""), std::string::npos);
-    EXPECT_NE(text.find("path with \\\"quote\\\""), std::string::npos);
-    EXPECT_NE(text.find("line\\nmessage"), std::string::npos);
-    std::filesystem::remove_all(root);
-}
+	    EXPECT_NE(text.find("path with \\\"quote\\\""), std::string::npos);
+	    EXPECT_NE(text.find("line\\nmessage"), std::string::npos);
+	    EXPECT_NE(text.find("\"attributes\""), std::string::npos);
+	    EXPECT_NE(text.find("\"receiver_write_profile\":\"bounded\""), std::string::npos);
+	    std::filesystem::remove_all(root);
+	}
 
 TEST(EventLogTest, RejectsDirectoryAsLogPath) {
     const auto root = tempPath("gridflux-event-log-directory");

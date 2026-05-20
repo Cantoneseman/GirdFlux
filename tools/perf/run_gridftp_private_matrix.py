@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -146,6 +147,9 @@ CSV_FIELDS = [
     "file_io_advice",
     "posix_write_strategy",
     "posix_write_strategy_effective",
+    "receiver_write_profile",
+    "receiver_max_pending_bytes",
+    "receiver_write_yield_policy",
     "tls_mode",
     "data_tls_mode",
     "repeat_index",
@@ -162,6 +166,10 @@ CSV_FIELDS = [
     "final_verify_policy_effective",
     *STAGE_FIELDS,
     *PHASE_ALIAS_FIELDS,
+    "receiver_pending_bytes_max",
+    "receiver_backpressure_count",
+    "receiver_backpressure_seconds",
+    "receiver_write_yield_count",
     *[f"sender_{field}" for field in ROLE_METRIC_FIELDS],
     *[f"sender_{field}" for field in STAGE_FIELDS],
     *[f"sender_{field}" for field in PHASE_ALIAS_FIELDS],
@@ -237,6 +245,9 @@ class Case:
     file_io_batch_size: int
     file_io_advice: str
     posix_write_strategy: str
+    receiver_write_profile: str
+    receiver_max_pending_bytes: int
+    receiver_write_yield_policy: str
     tls_mode: str
     data_tls_mode: str
     repeat_index: int
@@ -681,6 +692,12 @@ def start_control_server(
         case.file_io_advice,
         "--posix-write-strategy",
         case.posix_write_strategy,
+        "--receiver-write-profile",
+        case.receiver_write_profile,
+        "--receiver-max-pending-bytes",
+        str(case.receiver_max_pending_bytes),
+        "--receiver-write-yield-policy",
+        case.receiver_write_yield_policy,
         "--event-log",
         str(server_event_log),
     ]
@@ -1111,6 +1128,9 @@ def initial_row(args: argparse.Namespace, case: Case, env: EnvironmentSnapshot, 
         "file_io_advice": case.file_io_advice,
         "posix_write_strategy": case.posix_write_strategy,
         "posix_write_strategy_effective": "",
+        "receiver_write_profile": case.receiver_write_profile,
+        "receiver_max_pending_bytes": str(case.receiver_max_pending_bytes),
+        "receiver_write_yield_policy": case.receiver_write_yield_policy,
         "tls_mode": case.tls_mode,
         "data_tls_mode": case.data_tls_mode,
         "repeat_index": str(case.repeat_index),
@@ -1125,6 +1145,10 @@ def initial_row(args: argparse.Namespace, case: Case, env: EnvironmentSnapshot, 
         "commit_sync_policy": case.commit_sync_policy,
         "final_verify_policy": case.final_verify_policy,
         "final_verify_policy_effective": "",
+        "receiver_pending_bytes_max": "",
+        "receiver_backpressure_count": "",
+        "receiver_backpressure_seconds": "",
+        "receiver_write_yield_count": "",
         "host_baseline_csv": args.host_baseline_csv or "",
         "storage_bench_csv": args.storage_bench_csv or "",
         "source_sha256": "",
@@ -1225,6 +1249,19 @@ def fill_metrics(row: dict[str, str], direction: str, server_text: str, client_t
     row["posix_write_strategy_effective"] = metrics.get(
         "posix_write_strategy_effective", row["posix_write_strategy_effective"]
     )
+    row["receiver_write_profile"] = metrics.get(
+        "receiver_write_profile", row["receiver_write_profile"]
+    )
+    row["receiver_max_pending_bytes"] = metrics.get(
+        "receiver_max_pending_bytes", row["receiver_max_pending_bytes"]
+    )
+    row["receiver_write_yield_policy"] = metrics.get(
+        "receiver_write_yield_policy", row["receiver_write_yield_policy"]
+    )
+    row["receiver_pending_bytes_max"] = metrics.get("receiver_pending_bytes_max", "")
+    row["receiver_backpressure_count"] = metrics.get("receiver_backpressure_count", "")
+    row["receiver_backpressure_seconds"] = metrics.get("receiver_backpressure_seconds", "")
+    row["receiver_write_yield_count"] = metrics.get("receiver_write_yield_count", "")
     for field in STAGE_FIELDS + PHASE_ALIAS_FIELDS:
         row[field] = metric_value(metrics, field)
 
@@ -1276,6 +1313,9 @@ SUMMARY_GROUP_FIELDS = [
     "file_io_advice",
     "posix_write_strategy",
     "posix_write_strategy_effective",
+    "receiver_write_profile",
+    "receiver_max_pending_bytes",
+    "receiver_write_yield_policy",
     "tls_mode",
     "data_tls_mode",
     "manifest_flush_policy",
@@ -1296,6 +1336,10 @@ SUMMARY_METRIC_FIELDS = [
     *[f"receiver_{field}" for field in ROLE_METRIC_FIELDS],
     *[f"receiver_{field}" for field in STAGE_FIELDS],
     *[f"receiver_{field}" for field in PHASE_ALIAS_FIELDS],
+    "receiver_pending_bytes_max",
+    "receiver_backpressure_count",
+    "receiver_backpressure_seconds",
+    "receiver_write_yield_count",
     "server_dirty_kb_before",
     "server_writeback_kb_before",
     "server_cached_kb_before",
@@ -1361,6 +1405,12 @@ def is_valid_write_strategy_case(strategy: str, file_io_buffer_size: int) -> boo
     return not (strategy == "coalesced" and file_io_buffer_size == 0)
 
 
+def is_valid_receiver_writeback_case(profile: str, max_pending_bytes: int, yield_policy: str) -> bool:
+    if profile == "default":
+        return max_pending_bytes == 0 and yield_policy == "none"
+    return profile == "bounded" and max_pending_bytes > 0
+
+
 def summarize_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     groups: dict[tuple[str, ...], list[dict[str, str]]] = {}
     for row in rows:
@@ -1381,6 +1431,9 @@ def summarize_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
             row["file_io_advice"],
             row["posix_write_strategy"],
             row["posix_write_strategy_effective"],
+            row["receiver_write_profile"],
+            row["receiver_max_pending_bytes"],
+            row["receiver_write_yield_policy"],
             row["tls_mode"],
             row["data_tls_mode"],
             row["manifest_flush_policy"],
@@ -1509,16 +1562,54 @@ def capture_environment_sidecars(
     return server_env_log, client_env_log
 
 
+def case_token(value: str) -> str:
+    tokens = {
+        "crc32c": "crc32c",
+        "none": "n",
+        "off": "off",
+        "required": "req",
+        "full": "full",
+        "verified_chunks": "vc",
+        "every_n_chunks": "enc",
+        "final_only": "fo",
+        "fsync_file": "fsf",
+        "fsync_file_and_dir": "fsfd",
+        "posix": "posix",
+        "io_uring": "uring",
+        "sequential": "seq",
+        "random": "rnd",
+        "auto": "auto",
+        "direct": "dir",
+        "coalesced": "coal",
+        "default": "def",
+        "bounded": "bnd",
+        "dirty_poll": "dp",
+    }
+    return tokens.get(value, value)
+
+
+def budget_token(value: int) -> str:
+    if value == 0:
+        return "0"
+    mib = 1024 * 1024
+    if value % mib == 0:
+        return f"{value // mib}m"
+    return str(value)
+
+
 def run_case(args: argparse.Namespace, case: Case, run_root: Path, env: EnvironmentSnapshot) -> dict[str, str]:
     case_id = (
-        f"case{case.index:04d}_r{case.repeat_index:02d}_{case.direction}_bytes{case.total_bytes}_"
-        f"c{case.connections}_chunk{case.chunk_size}_buf{case.buffer_size}_{case.checksum}_"
-        f"pre{case.preallocate}_fv{case.final_verify_policy}_"
-        f"mfp{case.manifest_flush_policy}_mfi{case.manifest_flush_interval_chunks}_"
-        f"csp{case.commit_sync_policy}_"
-        f"fiobuf{case.file_io_buffer_size}_fioqd{case.file_io_queue_depth}_"
-        f"fiobs{case.file_io_batch_size}_fioadv{case.file_io_advice}_pws{case.posix_write_strategy}_"
-        f"tls{case.tls_mode}_dtls{case.data_tls_mode}"
+        f"c{case.index:04d}r{case.repeat_index:02d}_{case.direction}_b{case.total_bytes}_"
+        f"c{case.connections}_k{case.chunk_size}_nb{case.buffer_size}_{case_token(case.checksum)}_"
+        f"pre{case_token(case.preallocate)}_fv{case_token(case.final_verify_policy)}_"
+        f"mf{case_token(case.manifest_flush_policy)}{case.manifest_flush_interval_chunks}_"
+        f"cs{case_token(case.commit_sync_policy)}_"
+        f"fio{case_token(case.file_io_backend)}{case.file_io_buffer_size}_"
+        f"q{case.file_io_queue_depth}x{case.file_io_batch_size}_"
+        f"adv{case_token(case.file_io_advice)}_pws{case_token(case.posix_write_strategy)}_"
+        f"rw{case_token(case.receiver_write_profile)}{budget_token(case.receiver_max_pending_bytes)}"
+        f"{case_token(case.receiver_write_yield_policy)}_"
+        f"tls{case_token(case.tls_mode)}_dtls{case_token(case.data_tls_mode)}"
     )
     case_root = run_root / case_id
     server_root = case_root / "server-root"
@@ -1702,6 +1793,21 @@ def generate_cases(args: argparse.Namespace) -> list[Case]:
         {"auto", "direct", "coalesced"},
         "posix write strategy",
     )
+    receiver_write_profiles = parse_choice_list(
+        getattr(args, "receiver_write_profiles", "default"),
+        {"default", "bounded"},
+        "receiver write profile",
+    )
+    receiver_max_pending_bytes_values = parse_int_list(
+        getattr(args, "receiver_max_pending_bytes_list", "0")
+    )
+    if any(value < 0 or value > 1099511627776 for value in receiver_max_pending_bytes_values):
+        raise SystemExit("--receiver-max-pending-bytes-list values must be in range 0..1099511627776")
+    receiver_write_yield_policies = parse_choice_list(
+        getattr(args, "receiver_write_yield_policies", "none"),
+        {"none", "dirty_poll"},
+        "receiver write yield policy",
+    )
     final_verify_policies = parse_choice_list(
         args.final_verify_policies or args.final_verify_policy,
         {"full", "verified_chunks"},
@@ -1714,67 +1820,95 @@ def generate_cases(args: argparse.Namespace) -> list[Case]:
 
     cases: list[Case] = []
     index = 0
-    for direction in directions:
-        for total_bytes in byte_values:
-            for connection in connections:
-                for chunk_size in chunk_sizes:
-                    for buffer_size in buffer_sizes:
-                        for checksum in checksums:
-                            for preallocate in preallocates:
-                                for manifest_flush_policy in manifest_flush_policies:
-                                    for manifest_flush_interval in manifest_flush_intervals:
-                                        for commit_sync_policy in commit_sync_policies:
-                                            for file_io_backend in file_io_backends:
-                                                for file_io_buffer_size in file_io_buffer_sizes:
-                                                    for posix_write_strategy in posix_write_strategies:
-                                                        if not is_valid_write_strategy_case(
-                                                            posix_write_strategy,
-                                                            file_io_buffer_size,
-                                                        ):
-                                                            continue
-                                                        for file_io_queue_depth in file_io_queue_depths:
-                                                            batch_sizes = (
-                                                                file_io_batch_sizes
-                                                                if file_io_batch_sizes is not None
-                                                                else [file_io_queue_depth]
-                                                            )
-                                                            for file_io_batch_size in batch_sizes:
-                                                                for file_io_advice in file_io_advices:
-                                                                    for final_verify_policy in final_verify_policies:
-                                                                        for tls_mode in tls_modes:
-                                                                            for data_tls_mode in data_tls_modes:
-                                                                                if (
-                                                                                    tls_mode == "off"
-                                                                                    and data_tls_mode == "required"
-                                                                                ):
-                                                                                    continue
-                                                                                for repeat_index in range(args.repeat):
-                                                                                    cases.append(
-                                                                                        Case(
-                                                                                            index=index,
-                                                                                            direction=direction,
-                                                                                            total_bytes=total_bytes,
-                                                                                            connections=connection,
-                                                                                            chunk_size=chunk_size,
-                                                                                            buffer_size=buffer_size,
-                                                                                            checksum=checksum,
-                                                                                            preallocate=preallocate,
-                                                                                            manifest_flush_policy=manifest_flush_policy,
-                                                                                            manifest_flush_interval_chunks=manifest_flush_interval,
-                                                                                            commit_sync_policy=commit_sync_policy,
-                                                                                            final_verify_policy=final_verify_policy,
-                                                                                            file_io_backend=file_io_backend,
-                                                                                            file_io_buffer_size=file_io_buffer_size,
-                                                                                            file_io_queue_depth=file_io_queue_depth,
-                                                                                            file_io_batch_size=file_io_batch_size,
-                                                                                            file_io_advice=file_io_advice,
-                                                                                            posix_write_strategy=posix_write_strategy,
-                                                                                            tls_mode=tls_mode,
-                                                                                            data_tls_mode=data_tls_mode,
-                                                                                            repeat_index=repeat_index,
-                                                                                        )
-                                                                                    )
-                                                                                    index += 1
+    for (
+        direction,
+        total_bytes,
+        connection,
+        chunk_size,
+        buffer_size,
+        checksum,
+        preallocate,
+        manifest_flush_policy,
+        manifest_flush_interval,
+        commit_sync_policy,
+        file_io_backend,
+        file_io_buffer_size,
+        posix_write_strategy,
+        receiver_write_profile,
+        receiver_max_pending_bytes,
+        receiver_write_yield_policy,
+        file_io_queue_depth,
+        file_io_advice,
+        final_verify_policy,
+        tls_mode,
+        data_tls_mode,
+    ) in itertools.product(
+        directions,
+        byte_values,
+        connections,
+        chunk_sizes,
+        buffer_sizes,
+        checksums,
+        preallocates,
+        manifest_flush_policies,
+        manifest_flush_intervals,
+        commit_sync_policies,
+        file_io_backends,
+        file_io_buffer_sizes,
+        posix_write_strategies,
+        receiver_write_profiles,
+        receiver_max_pending_bytes_values,
+        receiver_write_yield_policies,
+        file_io_queue_depths,
+        file_io_advices,
+        final_verify_policies,
+        tls_modes,
+        data_tls_modes,
+    ):
+        if not is_valid_write_strategy_case(posix_write_strategy, file_io_buffer_size):
+            continue
+        if not is_valid_receiver_writeback_case(
+            receiver_write_profile,
+            receiver_max_pending_bytes,
+            receiver_write_yield_policy,
+        ):
+            continue
+        if tls_mode == "off" and data_tls_mode == "required":
+            continue
+        batch_sizes = (
+            file_io_batch_sizes if file_io_batch_sizes is not None else [file_io_queue_depth]
+        )
+        for file_io_batch_size in batch_sizes:
+            for repeat_index in range(args.repeat):
+                cases.append(
+                    Case(
+                        index=index,
+                        direction=direction,
+                        total_bytes=total_bytes,
+                        connections=connection,
+                        chunk_size=chunk_size,
+                        buffer_size=buffer_size,
+                        checksum=checksum,
+                        preallocate=preallocate,
+                        manifest_flush_policy=manifest_flush_policy,
+                        manifest_flush_interval_chunks=manifest_flush_interval,
+                        commit_sync_policy=commit_sync_policy,
+                        final_verify_policy=final_verify_policy,
+                        file_io_backend=file_io_backend,
+                        file_io_buffer_size=file_io_buffer_size,
+                        file_io_queue_depth=file_io_queue_depth,
+                        file_io_batch_size=file_io_batch_size,
+                        file_io_advice=file_io_advice,
+                        posix_write_strategy=posix_write_strategy,
+                        receiver_write_profile=receiver_write_profile,
+                        receiver_max_pending_bytes=receiver_max_pending_bytes,
+                        receiver_write_yield_policy=receiver_write_yield_policy,
+                        tls_mode=tls_mode,
+                        data_tls_mode=data_tls_mode,
+                        repeat_index=repeat_index,
+                    )
+                )
+                index += 1
     return cases
 
 
@@ -1845,6 +1979,21 @@ def main() -> int:
         default="auto",
         help="comma list: auto,direct,coalesced",
     )
+    parser.add_argument(
+        "--receiver-write-profiles",
+        default="default",
+        help="comma list: default,bounded",
+    )
+    parser.add_argument(
+        "--receiver-max-pending-bytes-list",
+        default="0",
+        help="comma list, 0 only valid for receiver write profile default",
+    )
+    parser.add_argument(
+        "--receiver-write-yield-policies",
+        default="none",
+        help="comma list: none,dirty_poll",
+    )
     parser.add_argument("--tls-modes", default="off", help="comma list: off,required")
     parser.add_argument("--data-tls-modes", default="off", help="comma list: off,required")
     parser.add_argument(
@@ -1902,6 +2051,8 @@ def main() -> int:
                 f"connections={case.connections} chunk={case.chunk_size} buffer={case.buffer_size} "
                 f"checksum={case.checksum} manifest_flush={case.manifest_flush_policy}/"
                 f"{case.manifest_flush_interval_chunks} commit_sync={case.commit_sync_policy} "
+                f"receiver_write={case.receiver_write_profile}/"
+                f"{case.receiver_max_pending_bytes}/{case.receiver_write_yield_policy} "
                 f"tls={case.tls_mode}/{case.data_tls_mode}",
                 flush=True,
             )

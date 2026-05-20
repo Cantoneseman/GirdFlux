@@ -158,6 +158,18 @@ common::Status writeEventLog(const std::string& path, const EventRecord& record)
     output << "\"message\":\"" << jsonEscape(sanitizeMessage(record.message)) << "\",";
     output << "\"elapsed_seconds\":" << record.elapsedSeconds << ",";
     output << "\"bytes\":" << record.bytes;
+    if (!record.attributes.empty()) {
+        output << ",\"attributes\":{";
+        bool first = true;
+        for (const auto& [key, value] : record.attributes) {
+            if (!first) {
+                output << ",";
+            }
+            first = false;
+            output << "\"" << jsonEscape(key) << "\":\"" << jsonEscape(value) << "\"";
+        }
+        output << "}";
+    }
     output << "}\n";
     if (!output) {
         return common::Status::runtimeError("event log write failed: " + path);

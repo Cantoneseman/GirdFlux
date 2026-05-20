@@ -1103,3 +1103,64 @@ Beta 1B-2 focused execution from 2026-05-19:
 - Result: storage summary `64` rows / `192` pass cases / `0` fail cases; STOR raw `120/120` pass; STOR summary `40` rows / `120` pass cases / `0` fail cases; hash mismatch `0`.
 - Key medians: STOR row medians median `1.419 Gbps`, best `1.544 Gbps`, default-like crc32c/POSIX best `1.488 Gbps`; temp-write wall share median `86.7%`, max `95.7%`; data_receive median `1.6%`; native storage write median `1.078 Gbps`, best `1.328 Gbps`.
 - Recommendation: no default policy change; continue Beta 1B-3 as opt-in receiver writeback/backpressure/profile work plus OS storage/writeback comparison.
+
+## Beta 1B-3 Receiver Writeback Opt-In
+
+Beta 1B-3 adds a drain-budget receiver writeback experiment. Defaults remain
+unchanged: `receiver_write_profile=default`, `receiver_max_pending_bytes=0`,
+and `receiver_write_yield_policy=none`.
+
+The bounded profile is opt-in only:
+
+- `--receiver-write-profile bounded`
+- `--receiver-max-pending-bytes <bytes>`
+- `--receiver-write-yield-policy none|dirty_poll`
+
+`dirty_poll` reuses the same `receiver_max_pending_bytes` budget as the
+Dirty+Writeback threshold. Beta 1B-3 intentionally does not add a separate
+threshold flag; if the data shows value, that can be considered later.
+
+Smoke:
+
+```bash
+python3 tools/perf/run_beta1b_stor_writeback.py \
+  --smoke \
+  --receiver-writeback-optin \
+  --remote <remote> \
+  --server-host <server-host> \
+  --local-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --output-dir tools/perf/results
+```
+
+Focused run:
+
+```bash
+python3 tools/perf/run_beta1b_stor_writeback.py \
+  --focused \
+  --receiver-writeback-optin \
+  --bytes 1073741824 \
+  --repeat 3 \
+  --remote <remote> \
+  --server-host <server-host> \
+  --local-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --remote-build-dir /root/projects/GridFlux/build-io-uring-real \
+  --output-dir tools/perf/results \
+  --case-timeout 900
+```
+
+The focused opt-in matrix covers only STOR/POSIX with connections `1,4,8`,
+checksum `crc32c,none`, baseline `default+0+none`, and bounded budgets
+`64MiB/256MiB` with `none|dirty_poll`. It writes
+`tools/perf/results/<timestamp>_beta1b-receiver-writeback-optin.json`, raw and
+summary CSVs, event logs, server/client logs, env sidecars, and
+`docs/perf/BETA1B_RECEIVER_WRITEBACK_OPTIN.md`.
+
+Beta 1B-3 focused execution from 2026-05-19:
+
+- Wrapper: `tools/perf/results/20260519T165059Z_beta1b-receiver-writeback-optin.json`
+- Storage raw/summary: `tools/perf/results/20260519T165059Z_storage-bench.csv`, `tools/perf/results/20260519T165059Z_storage-bench-summary.csv`
+- STOR raw/summary: `tools/perf/results/20260519T165123Z_gridftp-private-matrix-smoke.csv`, `tools/perf/results/20260519T165123Z_gridftp-private-matrix-smoke-summary.csv`
+- Result: storage raw `4` pass / `0` fail; STOR raw `90/90` pass; summary `30` rows / grouped fail `0`; hash mismatch `0`.
+- Key medians: STOR summary median `1.711 Gbps`, best summary median `1.841 Gbps`, baseline median `1.724 Gbps`, opt-in median `1.701 Gbps`; temp-write wall share median `83.6%`; data_receive median `1.9%`; aligned POSIX/default native storage write median `0.938 Gbps`.
+- Recommendation: keep bounded receiver writeback and `dirty_poll` opt-in; expand only the stable candidate rows before considering an independent user-space queue.

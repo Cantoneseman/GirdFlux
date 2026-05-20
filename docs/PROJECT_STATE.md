@@ -1,6 +1,54 @@
 # GridFlux 项目状态记录
 
 
+## 2026-05-20 Beta 1B-3 opt-in receiver writeback/backpressure/profile
+
+### 实现范围
+
+- 新增 opt-in receiver writeback 配置：
+  - `--receiver-write-profile default|bounded`，默认 `default`；
+  - `--receiver-max-pending-bytes <bytes>`，默认 `0`，`bounded` 时必须大于 `0`；
+  - `--receiver-write-yield-policy none|dirty_poll`，默认 `none`。
+- 默认 `default/0/none` 不进入 drain-budget 检查、不读取 `/proc/meminfo`、不 yield，只增加零值/默认值可观测字段。
+- `bounded` 使用 drain-budget 形态：DATA payload 仍同步写入 temp file；当当前 drain window 达到 `receiver_max_pending_bytes` 后，停止继续 drain 当前 socket 并返回外层 poll/epoll 轮询；不引入独立 user-space queue 或线程池。
+- `dirty_poll` 仅作为 bounded opt-in，在 budget boundary 读取 `/proc/meminfo` Dirty+Writeback，并复用 `receiver_max_pending_bytes` 作为阈值预算；Beta 1B-3 不新增单独 threshold flag。
+- 新增统计并进入 key=value log、event log attributes、raw/summary CSV：
+  - `receiver_pending_bytes_max`
+  - `receiver_backpressure_count`
+  - `receiver_backpressure_seconds`
+  - `receiver_write_yield_count`
+- 扩展 `tools/perf/run_gridftp_private_matrix.py`：
+  - 新增 receiver profile / max pending / yield policy 矩阵维度；
+  - raw/summary CSV 纳入新增配置和统计字段；
+  - focused runner 可组合 baseline `default+0+none` 与 bounded `64MiB/256MiB`、`none|dirty_poll`。
+- 扩展 `tools/perf/run_beta1b_stor_writeback.py --receiver-writeback-optin`，新增 `tools/perf/analyze_beta1b_receiver_writeback.py` 和 `docs/perf/BETA1B_RECEIVER_WRITEBACK_OPTIN.md`。
+
+### 默认策略
+
+Beta 1B-3 不改变默认传输策略：`auth-mode=anonymous`、`tls-mode=off`、`data-tls-mode=off`、`file_io_backend=posix`、`final_verify_policy=full`、`manifest_flush_policy=every_n_chunks`、`preallocate=off`、`posix_write_strategy=auto`。`receiver_write_profile=bounded`、`dirty_poll`、`io_uring`、`preallocate full`、`final_only` 和 `verified_chunks` 均保持 opt-in。
+
+### 当前验证
+
+- 通过：`python3 -m py_compile tools/perf/run_gridftp_private_matrix.py tools/perf/run_beta1b_stor_writeback.py tools/perf/analyze_beta1b_stor_writeback.py tools/perf/analyze_beta1b_receiver_writeback.py tools/perf/test_beta1b_stor_writeback.py tools/release/run_alpha_release_gate.py`。
+- 通过：`python3 tools/perf/test_beta1b_stor_writeback.py`。
+- 通过：`python3 tools/perf/test_beta1a_helpers.py`。
+- 通过：`cmake --build build -j2`。
+- 通过：`./build/gridflux_unit_tests --gtest_filter='EventLogTest.*:FileTransferOptionsTest.*:ControlOptionsTest.*'`，25/25 passed。
+- 通过：`ctest --test-dir build -R 'gridflux_beta1a_perf_helper_behavior|gridflux_beta1b_stor_writeback_helper_behavior' --output-on-failure`，2/2 passed。
+- 通过：本机 Debug full CTest `184/184 passed`。
+- 通过：本机 real io_uring Release full CTest `184/184 passed`，`FileIoTest.IoUringContextReadWriteSmokeWhenAvailable` Passed。
+- 通过：<redacted>二 Debug full CTest `184/184 passed`。
+- 通过：<redacted>二 real io_uring Release full CTest `184/184 passed`，`FileIoTest.IoUringContextReadWriteSmokeWhenAvailable` Passed。
+- 通过：Beta 1B-3 smoke opt-in runner `tools/perf/results/20260519T164929Z_beta1b-receiver-writeback-optin.json`，STOR raw `30/30` pass，hash mismatch `0`。
+- 通过：Beta 1B-3 focused opt-in runner `tools/perf/results/20260519T165059Z_beta1b-receiver-writeback-optin.json`，storage raw `4` pass / `0` fail，STOR raw `90/90` pass，summary `30` rows / grouped fail `0`，hash mismatch `0`。
+- Focused raw/summary：
+  - storage：`tools/perf/results/20260519T165059Z_storage-bench.csv`、`tools/perf/results/20260519T165059Z_storage-bench-summary.csv`；
+  - STOR：`tools/perf/results/20260519T165123Z_gridftp-private-matrix-smoke.csv`、`tools/perf/results/20260519T165123Z_gridftp-private-matrix-smoke-summary.csv`；
+  - report：`docs/perf/BETA1B_RECEIVER_WRITEBACK_OPTIN.md`。
+- 关键结论：STOR median throughput across summary rows `1.711 Gbps`，best summary median `1.841 Gbps`；baseline median `1.724 Gbps`，opt-in median `1.701 Gbps`；temp-write wall share median `83.6%`，data_receive wall share median `1.9%`；native storage aligned POSIX/default write median `0.938 Gbps`；Dirty/Writeback 与 raw throughput Pearson r `0.928`。
+- Beta 1B-3 结论：`bounded` drain-budget 能在部分 matched rows 降低 temp-write share 或 spread，但也有 `4` 个 matched opt-in rows 出现超过 `5%` 的 median throughput regression。建议继续保留 opt-in，并只挑选稳定候选进入更大矩阵；默认策略仍不变，user-space queue 暂不进入本阶段。
+
+
 ## 2026-05-19 Beta 1B-2 STOR receiver temp write/writeback focused diagnostics
 
 ### 实现范围

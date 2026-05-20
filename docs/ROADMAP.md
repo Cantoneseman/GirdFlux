@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**阶段：** Beta 1B-2 — STOR receiver temp write/writeback focused diagnostics completed and release-gated
+**阶段：** Beta 1B-3 — opt-in drain-budget receiver writeback/backpressure/profile implemented; focused validation complete
 
 **已完成：** 项目设计、技术选型、工程规范制定、CMake 工程骨架初始化、GoogleTest 工具链测试、本机与<redacted>二构建验证、GridFTP 源码学习经验整理入设计文档、Phase 1.0 多连接 TCP sink 与本机 loopback 验证、Phase 1.1 性能基线脚本与 loopback smoke matrix、Phase 1.2A offset-aware 单文件传输闭环、Phase 1.2B 文件传输健壮性、Phase 1.3A 文件性能基线自动化、Phase 2A manifest/range-based 断点续传核心、Phase 2B CRC32C chunk checksum 与损坏注入验证、Phase 2C CRC32C backend 自动选择、manifest 批量 flush、恢复统计与 checksum benchmark、Phase 3A GridFTP 风格控制面 STOR 上传与 REST/GFID resume 映射、Phase 3B GridFTP 风格控制面 framed RETR 完整下载、Phase 3C 下载端 manifest/verified_chunks 与 RETR REST/GFID resume、Phase 3D 控制面 SIZE/MDTM/CWD/CDUP/LIST/NLST 与测试工具收敛。
 
@@ -10,7 +10,7 @@
 
 **未开始：** 系统级文件传输调优、raw FTP stream STOR/RETR、GridFTP GSI、MLST/MLSD、网络 io_uring、生产级目录同步。
 
-**下一步：** 进入 Beta 1B-3，仅做 opt-in receiver writeback/backpressure/profile 优化和 OS storage/writeback 对照，不改变 anonymous、`tls-mode=off`、`data-tls-mode=off`、POSIX backend、full final verify 和现有 framed STOR/RETR 语义。
+**下一步：** 基于 Beta 1B-3 focused 数据，只挑选稳定的 bounded budget/yield 候选进入更大矩阵；`receiver_write_profile=bounded`、`receiver_max_pending_bytes` 和 `receiver_write_yield_policy=dirty_poll` 均保持 opt-in，默认策略不变。
 
 ---
 
@@ -405,6 +405,16 @@
 - Beta 1B-2 只做诊断和 opt-in A/B，不改变 STOR/RETR framed data path、checksum、manifest、resume、final verify 或默认策略。
 
 状态：已完成并通过 release gate。Focused runner `tools/perf/results/20260519T124750Z_beta1b-stor-writeback.json` 为 pass；storage summary `64` rows / `192` pass cases / `0` fail cases，STOR raw `120/120` pass，summary `40` rows / `120` pass cases，hash mismatch `0`。本机和<redacted>二 Debug / real io_uring Release full CTest 均为 `184/184 passed`，真实 io_uring smoke Passed。quick gate `tools/perf/results/20260519T135514Z_alpha-release-gate.json`、full gate `tools/perf/results/20260519T135651Z_alpha-release-gate.json` 和 Alpha RC `tools/perf/results/20260519T140445Z_alpha-release-candidate.json` 均 pass；RC artifact sync/final verify checked `1638`，missing `0`，mismatch `0`；public export strict hygiene pass。关键 median：STOR row medians median `1.419 Gbps`，最佳 `1.544 Gbps`，default-like crc32c/POSIX 最佳 `1.488 Gbps`；temp-write wall share median `86.7%`、max `95.7%`；data_receive median `1.6%`；native storage write median `1.078 Gbps`、best `1.328 Gbps`。结论：STOR receiver temp write/writeback 主导，但 opt-in knobs 未显示稳定默认收益；Beta 1B-3 应聚焦 receiver writeback/backpressure/profile 的 opt-in 优化和 OS storage/writeback 对照，不改变默认策略。
+
+**Beta 1B-3 opt-in receiver writeback/backpressure/profile**
+
+- 新增 `receiver_write_profile=default|bounded`、`receiver_max_pending_bytes` 和 `receiver_write_yield_policy=none|dirty_poll`。默认 `default/0/none` 保持旧 receive/write path；`bounded` 仅作为 opt-in。
+- 先采用 drain-budget 形态：DATA payload 仍同步写入 temp file；当 bounded drain window 达到 budget 后，退出当前 socket drain，回到 outer poll/epoll 轮询，不引入独立 user-space queue 或线程池。
+- `dirty_poll` 只在 bounded budget boundary 读取 `/proc/meminfo`，Dirty+Writeback 阈值直接复用 `receiver_max_pending_bytes`，不新增单独 threshold flag。
+- 新增 receiver writeback 统计：`receiver_pending_bytes_max`、`receiver_backpressure_count`、`receiver_backpressure_seconds`、`receiver_write_yield_count`，进入 key=value log、event log attributes、raw/summary CSV。
+- 扩展 `tools/perf/run_beta1b_stor_writeback.py --receiver-writeback-optin` 和新增 `tools/perf/analyze_beta1b_receiver_writeback.py` / `docs/perf/BETA1B_RECEIVER_WRITEBACK_OPTIN.md`，focused matrix 只覆盖 STOR、POSIX、connections `1,4,8`、checksum `crc32c,none`、baseline default 和 bounded 64MiB/256MiB with `none|dirty_poll`。
+
+状态：实现已落地并完成 focused 验证。Focused runner `tools/perf/results/20260519T165059Z_beta1b-receiver-writeback-optin.json` 为 pass；storage raw `4` pass / `0` fail，STOR raw `90/90` pass，summary `30` rows / grouped fail `0`，hash mismatch `0`。本机和<redacted>二 Debug / real io_uring Release full CTest 均为 `184/184 passed`，真实 io_uring smoke Passed。关键 median：STOR summary median `1.711 Gbps`，best summary median `1.841 Gbps`，baseline median `1.724 Gbps`，opt-in median `1.701 Gbps`；temp-write wall share median `83.6%`，data_receive median `1.9%`；aligned POSIX/default native storage write median `0.938 Gbps`。结论：bounded drain-budget 只在部分 matched rows 改善 temp-share/spread，同时有 `4` 个 matched opt-in rows 超过 `5%` throughput regression；继续保留 opt-in、默认不变，后续只扩大稳定候选，不提前引入 user-space queue。
 
 **后续候选**
 

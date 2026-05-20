@@ -59,6 +59,26 @@ def test_runner_command_dimensions() -> None:
     assert "full,verified_chunks" in commands["stor_final_verify_opt_in"]
 
 
+def test_receiver_writeback_runner_dimensions() -> None:
+    runner = load_module("tools/perf/run_beta1b_stor_writeback.py")
+    specs = runner.receiver_writeback_matrix_step_specs(
+        runner_args(),
+        bytes_value="268435456",
+        repeat=1,
+        event_dir=Path("events"),
+        storage_csv="storage.csv",
+    )
+    assert [spec.name for spec in specs] == ["stor_receiver_writeback_optin"]
+    command = specs[0].command
+    assert "--directions" in command and "stor" in command
+    assert "--file-io-backends" in command and "posix" in command
+    assert "--connections" in command and "1,4,8" in command
+    assert "--checksums" in command and "crc32c,none" in command
+    assert "--receiver-write-profiles" in command and "default,bounded" in command
+    assert "--receiver-max-pending-bytes-list" in command and "0,67108864,268435456" in command
+    assert "--receiver-write-yield-policies" in command and "none,dirty_poll" in command
+
+
 def test_matrix_skips_invalid_coalesced_zero() -> None:
     matrix = load_module("tools/perf/run_gridftp_private_matrix.py")
     args = argparse.Namespace(
@@ -82,6 +102,9 @@ def test_matrix_skips_invalid_coalesced_zero() -> None:
         file_io_batch_sizes="",
         file_io_advices="off",
         posix_write_strategies="auto,direct,coalesced",
+        receiver_write_profiles="default,bounded",
+        receiver_max_pending_bytes_list="0,67108864",
+        receiver_write_yield_policies="none,dirty_poll",
         final_verify_policy="full",
         final_verify_policies="full",
         tls_modes="off",
@@ -91,6 +114,19 @@ def test_matrix_skips_invalid_coalesced_zero() -> None:
     cases = matrix.generate_cases(args)
     assert all(not (case.posix_write_strategy == "coalesced" and case.file_io_buffer_size == 0) for case in cases)
     assert any(case.posix_write_strategy == "coalesced" and case.file_io_buffer_size == 262144 for case in cases)
+    assert any(
+        case.receiver_write_profile == "bounded"
+        and case.receiver_max_pending_bytes == 67108864
+        and case.receiver_write_yield_policy == "dirty_poll"
+        for case in cases
+    )
+    assert all(
+        not (
+            case.receiver_write_profile == "default"
+            and (case.receiver_max_pending_bytes != 0 or case.receiver_write_yield_policy != "none")
+        )
+        for case in cases
+    )
 
 
 def test_env_sidecar_parser() -> None:
@@ -148,11 +184,61 @@ def test_analyzer_fixture() -> None:
         assert "Beta 1B-3" in report
 
 
+def test_receiver_writeback_analyzer_fixture() -> None:
+    analyzer = load_module("tools/perf/analyze_beta1b_receiver_writeback.py")
+    with tempfile.TemporaryDirectory() as temp_text:
+        temp = Path(temp_text)
+        storage = temp / "storage-summary.csv"
+        storage.write_text(
+            "side,operation,bytes,buffer_size,preallocate,file_io_backend,file_io_buffer_size,file_io_queue_depth,file_io_batch_size,file_io_advice,posix_write_strategy,posix_write_strategy_effective,case_count,pass_count,fail_count,throughput_gbps_median\n"
+            "local,write,268435456,262144,off,posix,0,1,1,off,auto,direct,1,1,0,2.000000\n",
+            encoding="utf-8",
+        )
+        raw = temp / "matrix.csv"
+        raw.write_text(
+            "direction,result,throughput_gbps,receiver_write_profile,receiver_max_pending_bytes,receiver_write_yield_policy,server_dirty_kb_after,server_writeback_kb_after\n"
+            "stor,pass,1.000000,default,0,none,1000,0\n"
+            "stor,pass,1.050000,bounded,67108864,dirty_poll,2000,4\n",
+            encoding="utf-8",
+        )
+        summary = temp / "matrix-summary.csv"
+        summary.write_text(
+            "mode,direction,bytes,connections,chunk_size,buffer_size,checksum_algorithm,checksum_backend,preallocate,file_io_backend,file_io_buffer_size,file_io_queue_depth,file_io_batch_size,file_io_advice,posix_write_strategy,posix_write_strategy_effective,receiver_write_profile,receiver_max_pending_bytes,receiver_write_yield_policy,tls_mode,data_tls_mode,manifest_flush_policy,manifest_flush_interval_chunks,commit_sync_policy,final_verify_policy,final_verify_policy_effective,repeat_count,pass_count,fail_count,throughput_gbps_median,throughput_gbps_p95,throughput_gbps_spread_pct,elapsed_median,receiver_temp_write_seconds_median,receiver_data_receive_seconds_median,receiver_backpressure_count_median,receiver_backpressure_seconds_median,receiver_write_yield_count_median\n"
+            "smoke,stor,268435456,4,4194304,262144,crc32c,auto,off,posix,0,1,1,off,auto,direct,default,0,none,off,off,every_n_chunks,16,none,full,full,1,1,0,1.000000,1.000000,10.000000,2.000000,1.600000,0.050000,0,0,0\n"
+            "smoke,stor,268435456,4,4194304,262144,crc32c,auto,off,posix,0,1,1,off,auto,direct,bounded,67108864,dirty_poll,off,off,every_n_chunks,16,none,full,full,1,1,0,1.050000,1.050000,8.000000,2.000000,1.400000,0.050000,4,0.004,1\n",
+            encoding="utf-8",
+        )
+        output = temp / "report.md"
+        old_argv = sys.argv
+        try:
+            sys.argv = [
+                "analyze_beta1b_receiver_writeback.py",
+                "--storage-summary-csv",
+                str(storage),
+                "--matrix-raw-csv",
+                str(raw),
+                "--matrix-summary-csv",
+                str(summary),
+                "--output",
+                str(output),
+            ]
+            assert analyzer.main() == 0
+        finally:
+            sys.argv = old_argv
+        report = output.read_text(encoding="utf-8")
+        assert "Beta 1B Receiver Writeback Opt-In" in report
+        assert "Bounded profile temp-write wall-share" in report
+        assert "Dirty/Writeback correlation" in report
+        assert "default remains unchanged" in report
+
+
 def main() -> int:
     test_runner_command_dimensions()
+    test_receiver_writeback_runner_dimensions()
     test_matrix_skips_invalid_coalesced_zero()
     test_env_sidecar_parser()
     test_analyzer_fixture()
+    test_receiver_writeback_analyzer_fixture()
     print("beta1b stor writeback helper tests passed")
     return 0
 

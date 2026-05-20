@@ -47,6 +47,33 @@ small opt-in STOR A/B batches for backend/connections, POSIX write
 strategy/file buffer, preallocate/manifest flush, and crc32c-only final verify
 policy.
 
+## Beta 1B-3 Follow-up: Receiver Writeback Opt-In
+
+Beta 1B-3 keeps the Beta 1A readiness conclusion unchanged and narrows the
+next experiment to receiver-side writeback/backpressure. It adds only opt-in
+controls: `receiver_write_profile=bounded`, `receiver_max_pending_bytes`, and
+`receiver_write_yield_policy=dirty_poll`.
+
+`receiver_write_profile=default` remains the old receive/write path. The
+bounded profile uses a drain budget rather than an independent user-space queue
+or worker pool. `dirty_poll` reuses `receiver_max_pending_bytes` as the
+Dirty+Writeback budget threshold; no separate threshold flag is introduced for
+Beta 1B-3.
+
+New artifacts:
+
+- runner mode: `tools/perf/run_beta1b_stor_writeback.py --receiver-writeback-optin`
+- analyzer: `tools/perf/analyze_beta1b_receiver_writeback.py`
+- report: `docs/perf/BETA1B_RECEIVER_WRITEBACK_OPTIN.md`
+
+Focused result: `tools/perf/results/20260519T165059Z_beta1b-receiver-writeback-optin.json`
+passed with STOR raw `90/90` pass and hash mismatch `0`. Summary median
+throughput was `1.711 Gbps`, baseline median `1.724 Gbps`, opt-in median
+`1.701 Gbps`; temp-write wall share median remained high at `83.6%`, while
+data_receive stayed small at `1.9%`. Bounded drain-budget produced selective
+temp-share/spread improvements, but `4` matched opt-in rows regressed median
+throughput by more than `5%`; default policy therefore remains unchanged.
+
 ## Host / Link / Storage Baseline
 
 | side | category | tool | bytes | Gbps | result |

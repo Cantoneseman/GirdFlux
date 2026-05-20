@@ -8,6 +8,7 @@
 #include "gridflux/core/session/commit_sync_policy.h"
 #include "gridflux/core/session/final_verify_policy.h"
 #include "gridflux/core/session/manifest_flush_policy.h"
+#include "gridflux/core/session/receiver_writeback.h"
 #include "gridflux/core/io/tls_socket.h"
 #include "gridflux/storage/file_io.h"
 #include "gridflux/storage/preallocate_mode.h"
@@ -37,6 +38,7 @@ struct FileTransferOptions {
     std::uint64_t manifestFlushIntervalChunks = 16;
     core::session::FinalVerifyPolicy finalVerifyPolicy = core::session::FinalVerifyPolicy::Full;
     core::session::CommitSyncPolicy commitSyncPolicy = core::session::CommitSyncPolicy::None;
+    core::session::ReceiverWritebackConfig receiverWriteback;
     storage::PreallocateMode preallocateMode = storage::PreallocateMode::Off;
     storage::FileIoConfig fileIo;
     core::io::TlsConfig dataTls;

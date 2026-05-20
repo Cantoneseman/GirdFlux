@@ -208,6 +208,51 @@ common::Result<FileTransferOptions> parseFileTransferOptions(int argc, const cha
             continue;
         }
 
+        if (option == "--receiver-write-profile") {
+            if (role != FileTransferRole::Server) {
+                return common::Status::invalidArgument("--receiver-write-profile is server-only");
+            }
+            auto parsed = core::session::parseReceiverWriteProfile(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.receiverWriteback.profile = parsed.value();
+            index += 2;
+            continue;
+        }
+
+        if (option == "--receiver-max-pending-bytes") {
+            if (role != FileTransferRole::Server) {
+                return common::Status::invalidArgument(
+                    "--receiver-max-pending-bytes is server-only");
+            }
+            auto parsed = parseUnsigned(value, "--receiver-max-pending-bytes");
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            if (parsed.value() > kMaxChunkSize) {
+                return common::Status::invalidArgument(
+                    "--receiver-max-pending-bytes must be in range 0..1099511627776");
+            }
+            options.receiverWriteback.maxPendingBytes = parsed.value();
+            index += 2;
+            continue;
+        }
+
+        if (option == "--receiver-write-yield-policy") {
+            if (role != FileTransferRole::Server) {
+                return common::Status::invalidArgument(
+                    "--receiver-write-yield-policy is server-only");
+            }
+            auto parsed = core::session::parseReceiverWriteYieldPolicy(value);
+            if (!parsed.isOk()) {
+                return parsed.status();
+            }
+            options.receiverWriteback.yieldPolicy = parsed.value();
+            index += 2;
+            continue;
+        }
+
         if (option == "--preallocate") {
             if (role != FileTransferRole::Server) {
                 return common::Status::invalidArgument("--preallocate is server-only");
@@ -438,6 +483,11 @@ common::Result<FileTransferOptions> parseFileTransferOptions(int argc, const cha
     if (hasFileIoQueueDepth && !hasFileIoBatchSize) {
         options.fileIo.batchSize = options.fileIo.queueDepth;
     }
+    const common::Status receiverWritebackStatus =
+        core::session::validateReceiverWritebackConfig(options.receiverWriteback);
+    if (!receiverWritebackStatus.isOk()) {
+        return receiverWritebackStatus;
+    }
     const common::Status fileIoStatus = storage::validateFileIoConfig(options.fileIo);
     if (!fileIoStatus.isOk()) {
         return fileIoStatus;
@@ -471,6 +521,9 @@ std::string fileTransferUsage(const char* programName, FileTransferRole role) {
            "[--manifest-flush-interval-chunks <N>] "
            "[--final-verify-policy <full|verified_chunks>] "
            "[--commit-sync-policy <none|fsync_file|fsync_file_and_dir>] "
+           "[--receiver-write-profile <default|bounded>] "
+           "[--receiver-max-pending-bytes <bytes>] "
+           "[--receiver-write-yield-policy <none|dirty_poll>] "
            "[--preallocate <off|full>] "
                "[--file-io-backend <posix|io_uring>] [--file-io-buffer-size <bytes>] "
                "[--file-io-queue-depth <N>] [--file-io-batch-size <N>] "

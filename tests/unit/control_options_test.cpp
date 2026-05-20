@@ -17,6 +17,8 @@ using gridflux::checksum::ChecksumBackend;
 using gridflux::core::session::CommitSyncPolicy;
 using gridflux::core::session::FinalVerifyPolicy;
 using gridflux::core::session::ManifestFlushPolicy;
+using gridflux::core::session::ReceiverWriteProfile;
+using gridflux::core::session::ReceiverWriteYieldPolicy;
 using gridflux::protocol::control::ControlListEntry;
 using gridflux::protocol::control::ControlPathKind;
 using gridflux::protocol::control::AuthMode;
@@ -50,6 +52,9 @@ TEST(ControlOptionsTest, ParsesDefaultsAndRequiredRoot) {
     EXPECT_EQ(parsed.value().manifestFlushIntervalChunks, 16U);
     EXPECT_EQ(parsed.value().finalVerifyPolicy, FinalVerifyPolicy::Full);
     EXPECT_EQ(parsed.value().commitSyncPolicy, CommitSyncPolicy::None);
+    EXPECT_EQ(parsed.value().receiverWriteback.profile, ReceiverWriteProfile::Default);
+    EXPECT_EQ(parsed.value().receiverWriteback.maxPendingBytes, 0U);
+    EXPECT_EQ(parsed.value().receiverWriteback.yieldPolicy, ReceiverWriteYieldPolicy::None);
     EXPECT_EQ(parsed.value().preallocateMode, gridflux::storage::PreallocateMode::Off);
     EXPECT_EQ(parsed.value().fileIo.backend, gridflux::storage::FileIoBackendKind::Posix);
     EXPECT_EQ(parsed.value().fileIo.bufferSize, 0U);
@@ -266,6 +271,12 @@ TEST(ControlOptionsTest, ParsesExplicitOptions) {
                           "verified_chunks",
                           "--commit-sync-policy",
                           "fsync_file",
+                          "--receiver-write-profile",
+                          "bounded",
+                          "--receiver-max-pending-bytes",
+                          "67108864",
+                          "--receiver-write-yield-policy",
+                          "dirty_poll",
                           "--preallocate",
                           "full",
                           "--file-io-backend",
@@ -298,6 +309,9 @@ TEST(ControlOptionsTest, ParsesExplicitOptions) {
     EXPECT_EQ(parsed.value().manifestFlushIntervalChunks, 32U);
     EXPECT_EQ(parsed.value().finalVerifyPolicy, FinalVerifyPolicy::VerifiedChunks);
     EXPECT_EQ(parsed.value().commitSyncPolicy, CommitSyncPolicy::FsyncFile);
+    EXPECT_EQ(parsed.value().receiverWriteback.profile, ReceiverWriteProfile::Bounded);
+    EXPECT_EQ(parsed.value().receiverWriteback.maxPendingBytes, 67108864U);
+    EXPECT_EQ(parsed.value().receiverWriteback.yieldPolicy, ReceiverWriteYieldPolicy::DirtyPoll);
     EXPECT_EQ(parsed.value().preallocateMode, gridflux::storage::PreallocateMode::Full);
     EXPECT_EQ(parsed.value().fileIo.backend, gridflux::storage::FileIoBackendKind::IoUring);
     EXPECT_EQ(parsed.value().fileIo.bufferSize, 1048576U);
@@ -335,6 +349,27 @@ TEST(ControlOptionsTest, RejectsInvalidOptions) {
     const char* badCommitSync[] = {"gridflux-gridftp-server", "--root", "/tmp",
                                    "--commit-sync-policy", "sync_everything"};
     EXPECT_FALSE(parseControlServerOptions(5, badCommitSync).isOk());
+
+    const char* badReceiverProfile[] = {"gridflux-gridftp-server", "--root", "/tmp",
+                                        "--receiver-write-profile", "queue"};
+    EXPECT_FALSE(parseControlServerOptions(5, badReceiverProfile).isOk());
+
+    const char* boundedWithoutBudget[] = {"gridflux-gridftp-server", "--root", "/tmp",
+                                          "--receiver-write-profile", "bounded"};
+    EXPECT_FALSE(parseControlServerOptions(5, boundedWithoutBudget).isOk());
+
+    const char* defaultWithBudget[] = {"gridflux-gridftp-server", "--root", "/tmp",
+                                       "--receiver-max-pending-bytes", "67108864"};
+    EXPECT_FALSE(parseControlServerOptions(5, defaultWithBudget).isOk());
+
+    const char* dirtyPollWithoutBounded[] = {"gridflux-gridftp-server", "--root", "/tmp",
+                                             "--receiver-write-yield-policy", "dirty_poll"};
+    EXPECT_FALSE(parseControlServerOptions(5, dirtyPollWithoutBounded).isOk());
+
+    const char* badReceiverBudget[] = {"gridflux-gridftp-server", "--root", "/tmp",
+                                       "--receiver-write-profile", "bounded",
+                                       "--receiver-max-pending-bytes", "1099511627777"};
+    EXPECT_FALSE(parseControlServerOptions(7, badReceiverBudget).isOk());
 
     const char* badPreallocate[] = {"gridflux-gridftp-server", "--root", "/tmp",
                                     "--preallocate", "yes"};

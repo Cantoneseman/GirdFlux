@@ -108,6 +108,7 @@ add_library(gridflux_core STATIC
     src/core/session/commit_sync_policy.cpp
     src/core/session/final_verify_policy.cpp
     src/core/session/manifest_flush_policy.cpp
+    src/core/session/receiver_writeback.cpp
     src/core/session/transfer_session.cpp
     src/core/tree/tree_manifest.cpp
     src/core/tree/tree_scan.cpp
