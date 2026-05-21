@@ -123,3 +123,11 @@ Use these only for diagnostics:
 No opt-in knob produced a stable, cross-direction, cross-workload improvement
 without regressions. The default path remains conservative, reliable, and easy
 to reason about while Beta Gate / Beta RC packages the current evidence.
+
+## Beta 1E Freeze Boundary
+
+Beta 1E freezes the current cloud-server Beta candidate with long soak and
+freeze checks. It is not a 100G certification. Before 100G migration, collect
+independent `iperf3`, `gridflux-storage-bench`, memory sink, and CRC32C
+benchmark baselines; on the 100G hosts, run 10GiB GridFlux smoke before 100GiB
+repeat tests.

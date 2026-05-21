@@ -1,6 +1,34 @@
 # GridFlux 项目状态记录
 
 
+## 2026-05-21 Beta 1E long stability and pre-migration freeze
+
+### 实现范围
+
+- 新增 `tools/test/run_beta_long_soak.py`：
+  - 编排现有 STOR、RETR、STOR resume、RETR resume、tree upload/download、token auth、control TLS 和 data TLS smoke；
+  - 支持 `--profile tiny|small|standard`、`--duration-seconds`、`--iterations`、`--include-token`、`--include-tls`、`--include-data-tls`、`--json-output` 和 `--event-log-dir`；
+  - 输出 pass/fail、first failure、error code counts、总字节、case logs 和 event log paths。
+- 新增 `tools/release/run_beta_freeze_check.py`：
+  - 检查最新 Beta Gate、Beta RC、artifact final verify、public hygiene、关键文档、默认策略和两机残留进程；
+  - 输出 `tools/perf/results/<timestamp>_beta-freeze-check.json` 和 `docs/release/BETA_FREEZE.md`。
+- Beta Gate/RC 轻量集成 Beta 1E：
+  - Beta Gate 默认不跑 standard soak；
+  - 可选 `--run-long-soak-short` 和 `--run-freeze-check`；
+  - Beta RC 可通过 `--soak-json` / `--require-soak` 记录并要求 standard soak。
+
+### 默认策略
+
+Beta 1E 不改变默认传输策略：`auth-mode=anonymous`、`tls-mode=off`、`data-tls-mode=off`、`file_io_backend=posix`、`final_verify_policy=full`、`manifest_flush_policy=every_n_chunks`、`preallocate=off`、`posix_write_strategy=auto`、`receiver_write_profile=default`、`receiver_write_yield_policy=none`。
+
+### 迁移边界
+
+- 当前 Beta 是两台云服务器环境下的候选版，不是 100G 认证版。
+- 搬到 100G 前必须先跑 `iperf3`、`gridflux-storage-bench`、memory sink 和 CRC32C benchmark。
+- 100G 上先跑 10GiB smoke，再跑 100GiB repeat。
+- `bounded/dirty_poll`、io_uring、`verified_chunks`、`preallocate=full` 均继续只作为 opt-in。
+
+
 ## 2026-05-21 Beta 1D Beta Gate / Beta RC closeout
 
 ### 实现范围

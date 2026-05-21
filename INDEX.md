@@ -30,18 +30,19 @@
 | [BETA_LIMITATIONS.md](docs/release/BETA_LIMITATIONS.md) | Beta 限制清单、默认策略和 100G 前置边界 |
 | [BETA_RELEASE_GATE.md](docs/release/BETA_RELEASE_GATE.md) | Beta gate 验收报告 |
 | [BETA_RELEASE_CANDIDATE.md](docs/release/BETA_RELEASE_CANDIDATE.md) | Beta RC 收口报告 |
+| [BETA_FREEZE.md](docs/release/BETA_FREEZE.md) | Beta 1E 长时间稳定性与迁移前冻结说明 |
 
 新接手请按 DESIGN → ROADMAP → ENGINEERING 顺序阅读。
 
 ## 项目状态
 
-**当前阶段：** Beta 1D — Beta Gate / Beta RC 收口中
+**当前阶段：** Beta 1E — 长时间稳定性与迁移前冻结
 
 **技术栈：** C++20 · epoll 网络基线 · POSIX file IO 默认后端 · 可选 file-IO-only io_uring · CMake · Linux only
 
 **目标场景：** 专线 TB 级（主线）· 虚拟网络 · 广域网
 
-**下一步：** 运行并固化 Beta Gate / Beta RC。Beta 1C RETR focused matrix 已通过，三方 FTP / native GridFTP / GridFlux 对比已完成，Beta 1B storage/system 归因已收口；当前不迁移 100G、不改默认策略。`verified_chunks`、io_uring、bounded/dirty_poll、preallocate full 均继续只作为 opt-in。
+**下一步：** 跑 Beta long soak standard、Beta freeze check、Beta Gate 和 Beta RC，冻结当前云服务器 Beta 候选版。当前不迁移 100G、不做 100G 测试、不改默认策略；迁移前必须先完成 `iperf3`、storage bench、memory sink 和 CRC32C benchmark，100G 上先跑 10GiB smoke 再跑 100GiB repeat。`verified_chunks`、io_uring、bounded/dirty_poll、preallocate full 均继续只作为 opt-in。
 
 ## AI 协作
 

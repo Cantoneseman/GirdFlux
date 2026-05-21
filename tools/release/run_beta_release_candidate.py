@@ -56,6 +56,34 @@ def latest_result(root: Path, pattern: str) -> Path | None:
     return beta_gate.latest_by_mtime(sorted((root / "tools" / "perf" / "results").glob(pattern)))
 
 
+def latest_beta_long_soak(root: Path) -> Path | None:
+    results = root / "tools" / "perf" / "results"
+    return beta_gate.latest_by_mtime(
+        sorted(results.glob("*_beta-long-soak*.json"))
+        + sorted(results.glob("*_beta-release-gate/beta-long-soak-short.json"))
+    )
+
+
+def summarize_beta_long_soak(path_text: str | Path | None) -> dict[str, object]:
+    if not path_text:
+        return {"path": "", "present": False, "passed": False}
+    path = Path(path_text)
+    payload = read_json(path)
+    if not payload:
+        return {"path": str(path), "present": False, "passed": False}
+    fail_count = int(payload.get("fail_count", 0) or 0)
+    return {
+        "path": str(path),
+        "present": True,
+        "passed": str(payload.get("result", "")).lower() == "pass" and fail_count == 0,
+        "profile": payload.get("profile", ""),
+        "iterations": payload.get("iterations", 0),
+        "pass_count": payload.get("pass_count", 0),
+        "fail_count": fail_count,
+        "elapsed_seconds": payload.get("elapsed_seconds", 0.0),
+    }
+
+
 def as_float(value: str) -> float:
     try:
         return float(value)
@@ -151,6 +179,7 @@ def write_candidate_markdown(path: Path, report: dict[str, object]) -> None:
     sync = report.get("artifact_sync_summary", {})
     verify = report.get("artifact_verify_summary", {})
     perf = report.get("key_performance_numbers", {})
+    soak = report.get("beta_long_soak", {})
     lines = [
         "# GridFlux Beta Release Candidate",
         "",
@@ -180,6 +209,20 @@ def write_candidate_markdown(path: Path, report: dict[str, object]) -> None:
     lines.extend(["", "## Known Bottlenecks", ""])
     for item in known_bottlenecks():
         lines.append(f"- {item}")
+    lines.extend(["", "## Beta 1E Long Soak", ""])
+    if isinstance(soak, dict) and soak:
+        lines.extend(
+            [
+                f"- Path: `{soak.get('path', '')}`",
+                f"- Present: `{soak.get('present', '')}`",
+                f"- Passed: `{soak.get('passed', '')}`",
+                f"- Profile: `{soak.get('profile', '')}`",
+                f"- Iterations: `{soak.get('iterations', '')}`",
+                f"- Fail count: `{soak.get('fail_count', '')}`",
+            ]
+        )
+    else:
+        lines.append("- No long soak JSON recorded.")
     lines.extend(["", "## Artifact Closure", ""])
     if isinstance(artifact, dict):
         lines.extend(
@@ -227,6 +270,7 @@ def candidate_artifact_paths(
     candidate_json: Path,
     candidate_markdown: Path,
     gate_json: Path,
+    soak_json: Path | None = None,
 ) -> list[str]:
     paths = set(
         beta_gate.collect_beta_artifact_paths(
@@ -237,6 +281,16 @@ def candidate_artifact_paths(
     )
     paths.add(alpha.relative_to_root(str(candidate_json), root))
     paths.add(alpha.relative_to_root(str(candidate_markdown), root))
+    if soak_json and soak_json.is_file():
+        paths.add(alpha.relative_to_root(str(soak_json), root))
+        payload = read_json(soak_json)
+        for field in ["event_log_paths", "case_log_paths", "server_log_paths", "client_log_paths"]:
+            values = payload.get(field, [])
+            if isinstance(values, list):
+                for value in values:
+                    normalized = alpha.normalize_artifact_path(str(value), root)
+                    if normalized:
+                        paths.add(normalized)
     for path in [
         root / "tools" / "release" / "run_beta_release_candidate.py",
         root / "docs" / "release" / "BETA_RELEASE_CANDIDATE.md",
@@ -259,6 +313,7 @@ def finalize_report(
     report: dict[str, object],
     steps: list[alpha.StepResult],
     require_remote_artifacts: bool,
+    require_soak: bool = False,
 ) -> dict[str, object]:
     failures = [step.name for step in steps if step.status != "pass"]
     gate = report.get("beta_release_gate", {})
@@ -272,6 +327,10 @@ def finalize_report(
             value = report.get(key, {})
             if isinstance(value, dict) and value and value.get("status") != "pass":
                 failures.append(key)
+    if require_soak:
+        soak = report.get("beta_long_soak", {})
+        if not isinstance(soak, dict) or not soak.get("passed", False):
+            failures.append("beta_long_soak")
     report["steps"] = [asdict(step) for step in steps]
     report.update(summarize_steps(steps))
     report["failures"] = failures
@@ -288,6 +347,8 @@ def main() -> int:
     parser.add_argument("--remote-root", default="/root/projects/GridFlux")
     parser.add_argument("--server-host", default="<redacted>")
     parser.add_argument("--results-dir", default="tools/perf/results")
+    parser.add_argument("--soak-json", default="")
+    parser.add_argument("--require-soak", action="store_true")
     args = parser.parse_args()
 
     root = alpha.repo_root()
@@ -342,6 +403,10 @@ def main() -> int:
         **extract_three_way_performance(root),
         **extract_beta_report_numbers(root),
     }
+    soak_path = Path(args.soak_json) if args.soak_json else latest_beta_long_soak(root)
+    soak_summary = summarize_beta_long_soak(soak_path)
+    if soak_summary.get("path"):
+        soak_summary["path"] = alpha.relative_to_root(str(soak_summary["path"]), root)
     report: dict[str, object] = {
         "timestamp": alpha.timestamp_utc(),
         "source_tree_hash": source_hash,
@@ -357,6 +422,7 @@ def main() -> int:
             "residual_process_check": gate_payload.get("residual_process_check", {}),
         },
         "key_performance_numbers": key_numbers,
+        "beta_long_soak": soak_summary,
         "known_bottlenecks": known_bottlenecks(),
         "artifact_manifest": {},
         "artifact_manifest_freshness": {},
@@ -369,7 +435,7 @@ def main() -> int:
         "failures": [],
         "passed": False,
     }
-    report = finalize_report(report=report, steps=steps, require_remote_artifacts=False)
+    report = finalize_report(report=report, steps=steps, require_remote_artifacts=False, require_soak=args.require_soak)
     write_candidate_markdown(markdown_path, report)
     json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -378,6 +444,7 @@ def main() -> int:
         candidate_json=json_path,
         candidate_markdown=markdown_path,
         gate_json=Path(gate_json),
+        soak_json=Path(soak_path) if soak_path else None,
     )
     alpha.write_alpha_artifact_manifest(
         path=manifest_path,
@@ -392,7 +459,7 @@ def main() -> int:
         "remote_required": bool(args.remote),
     }
     report["artifact_manifest_freshness"] = alpha.check_alpha_artifact_manifest_freshness(manifest_path, root)
-    report = finalize_report(report=report, steps=steps, require_remote_artifacts=False)
+    report = finalize_report(report=report, steps=steps, require_remote_artifacts=False, require_soak=args.require_soak)
     write_candidate_markdown(markdown_path, report)
     json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -401,6 +468,7 @@ def main() -> int:
         candidate_json=json_path,
         candidate_markdown=markdown_path,
         gate_json=Path(gate_json),
+        soak_json=Path(soak_path) if soak_path else None,
     )
     alpha.write_alpha_artifact_manifest(
         path=manifest_path,
@@ -463,7 +531,12 @@ def main() -> int:
         report["artifact_sync_summary"] = read_json(sync_json)
         report["artifact_verify_summary"] = read_json(verify_json)
 
-    report = finalize_report(report=report, steps=steps, require_remote_artifacts=bool(args.remote))
+    report = finalize_report(
+        report=report,
+        steps=steps,
+        require_remote_artifacts=bool(args.remote),
+        require_soak=args.require_soak,
+    )
     write_candidate_markdown(markdown_path, report)
     json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -472,6 +545,7 @@ def main() -> int:
         candidate_json=json_path,
         candidate_markdown=markdown_path,
         gate_json=Path(gate_json),
+        soak_json=Path(soak_path) if soak_path else None,
     )
     alpha.write_alpha_artifact_manifest(
         path=manifest_path,
@@ -532,7 +606,12 @@ def main() -> int:
             steps.extend([post_sync, post_verify])
             report["artifact_sync_summary"] = read_json(post_sync_json)
             report["artifact_verify_summary"] = read_json(post_verify_json)
-    report = finalize_report(report=report, steps=steps, require_remote_artifacts=bool(args.remote))
+    report = finalize_report(
+        report=report,
+        steps=steps,
+        require_remote_artifacts=bool(args.remote),
+        require_soak=args.require_soak,
+    )
     write_candidate_markdown(markdown_path, report)
     json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 

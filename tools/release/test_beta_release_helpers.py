@@ -10,6 +10,7 @@ from pathlib import Path
 
 import run_alpha_release_gate
 import run_beta_release_candidate
+import run_beta_freeze_check
 import run_beta_release_gate
 
 
@@ -68,7 +69,10 @@ def test_beta_artifact_collection_includes_beta_docs_and_sidecars() -> None:
         write(root / "docs" / "perf" / "BETA_PERFORMANCE_SUMMARY.md", "summary\n")
         write(root / "docs" / "release" / "BETA_RELEASE_GATE.md", "gate\n")
         write(root / "docs" / "release" / "BETA_LIMITATIONS.md", "limits\n")
+        write(root / "docs" / "release" / "BETA_FREEZE.md", "freeze\n")
         write(root / "tools" / "release" / "run_beta_release_gate.py", "print('gate')\n")
+        write(root / "tools" / "release" / "run_beta_freeze_check.py", "print('freeze')\n")
+        write(root / "tools" / "test" / "run_beta_long_soak.py", "print('soak')\n")
         write(root / "tools" / "perf" / "plot_three_way_comparison.py", "print('plot')\n")
         csv_path = root / "tools" / "perf" / "results" / "beta1c.csv"
         csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -96,7 +100,10 @@ def test_beta_artifact_collection_includes_beta_docs_and_sidecars() -> None:
         for expected in {
             "docs/perf/BETA_PERFORMANCE_SUMMARY.md",
             "docs/release/BETA_LIMITATIONS.md",
+            "docs/release/BETA_FREEZE.md",
             "tools/release/run_beta_release_gate.py",
+            "tools/release/run_beta_freeze_check.py",
+            "tools/test/run_beta_long_soak.py",
             "tools/perf/plot_three_way_comparison.py",
             "tools/perf/results/beta1c.csv",
             "tools/perf/results/server.log",
@@ -169,6 +176,47 @@ def test_candidate_parses_beta_gate_paths_and_summary() -> None:
         raise AssertionError(f"unexpected step summary: {summary}")
 
 
+def test_candidate_soak_summary_and_require_soak_failure() -> None:
+    with tempfile.TemporaryDirectory(prefix="gridflux-beta-soak-summary.") as temp:
+        root = Path(temp)
+        soak = root / "tools" / "perf" / "results" / "20260521T000000Z_beta-long-soak.json"
+        write(
+            soak,
+            json.dumps(
+                {
+                    "result": "pass",
+                    "profile": "standard",
+                    "iterations": 2,
+                    "pass_count": 18,
+                    "fail_count": 0,
+                }
+            )
+            + "\n",
+        )
+        summary = run_beta_release_candidate.summarize_beta_long_soak(soak)
+        if not summary["passed"] or summary["profile"] != "standard":
+            raise AssertionError(f"unexpected soak summary: {summary}")
+        report = {"beta_release_gate": {"passed": True}, "beta_long_soak": {"passed": False}}
+        finalized = run_beta_release_candidate.finalize_report(
+            report=report,
+            steps=[],
+            require_remote_artifacts=False,
+            require_soak=True,
+        )
+        if finalized["passed"] or "beta_long_soak" not in finalized["failures"]:
+            raise AssertionError(f"require-soak did not fail: {finalized}")
+
+
+def test_freeze_check_parses_artifact_verify_and_docs() -> None:
+    payload = {"status": "pass", "missing": 0, "mismatch": 0, "failures": 0}
+    if not run_beta_freeze_check.artifact_verify_pass(payload):
+        raise AssertionError("artifact final verify pass was not accepted")
+    bad = dict(payload)
+    bad["mismatch"] = 1
+    if run_beta_freeze_check.artifact_verify_pass(bad):
+        raise AssertionError("artifact final verify mismatch was accepted")
+
+
 def main() -> int:
     test_default_strategy_includes_receiver_defaults()
     test_iouring_smoke_parser_requires_passed_line()
@@ -176,6 +224,8 @@ def main() -> int:
     test_beta_artifact_collection_includes_beta_docs_and_sidecars()
     test_candidate_extracts_three_way_best_values()
     test_candidate_parses_beta_gate_paths_and_summary()
+    test_candidate_soak_summary_and_require_soak_failure()
+    test_freeze_check_parses_artifact_verify_and_docs()
     print("beta release helper tests passed")
     return 0
 

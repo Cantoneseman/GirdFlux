@@ -1311,3 +1311,29 @@ Beta 1B-4 stability execution from 2026-05-20:
 - Result: storage raw `4` pass / `0` fail; STOR raw `195/195` pass; summary `65` rows / grouped fail `0`; hash mismatch `0`.
 - Key medians: STOR summary median `1.849 Gbps`, best summary median `2.183 Gbps`, baseline median `1.890 Gbps`, opt-in median `1.838 Gbps`; temp-write wall share median `74.2%`; data_receive median `2.5%`; native storage aligned write median `0.926 Gbps`.
 - Recommendation: keep bounded/dirty_poll opt-in only; do not change defaults or start user-space queue design from this evidence. Shift near-term Beta work toward disk, filesystem, cloud-volume, and OS writeback analysis.
+
+## Beta 1E Freeze And 100G Preflight
+
+Beta 1E does not add new performance dimensions. It freezes the current
+cloud-server Beta RC with a standard long soak and a freeze checker:
+
+```bash
+python3 tools/test/run_beta_long_soak.py \
+  --build-dir build \
+  --profile standard \
+  --iterations 1 \
+  --json-output tools/perf/results/<timestamp>_beta-long-soak.json
+
+python3 tools/release/run_beta_freeze_check.py --remote <remote>
+```
+
+The default strategy remains `auth-mode=anonymous`, `tls-mode=off`,
+`data-tls-mode=off`, `file_io_backend=posix`,
+`final_verify_policy=full`, `manifest_flush_policy=every_n_chunks`,
+`preallocate=off`, `posix_write_strategy=auto`,
+`receiver_write_profile=default`, and `receiver_write_yield_policy=none`.
+
+Before any 100G migration, collect `iperf3`, `gridflux-storage-bench`, memory
+sink, and CRC32C benchmark baselines. On 100G hardware, run 10GiB smoke before
+100GiB repeat tests. The current Beta is a cloud-server candidate, not a 100G
+certification.

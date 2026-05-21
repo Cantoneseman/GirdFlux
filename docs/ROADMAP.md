@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**阶段：** Beta 1D — Beta Gate / Beta RC 收口中
+**阶段：** Beta 1E — 长时间稳定性与迁移前冻结
 
 **已完成：** 项目设计、技术选型、工程规范制定、CMake 工程骨架初始化、GoogleTest 工具链测试、本机与<redacted>二构建验证、GridFTP 源码学习经验整理入设计文档、Phase 1.0 多连接 TCP sink 与本机 loopback 验证、Phase 1.1 性能基线脚本与 loopback smoke matrix、Phase 1.2A offset-aware 单文件传输闭环、Phase 1.2B 文件传输健壮性、Phase 1.3A 文件性能基线自动化、Phase 2A manifest/range-based 断点续传核心、Phase 2B CRC32C chunk checksum 与损坏注入验证、Phase 2C CRC32C backend 自动选择、manifest 批量 flush、恢复统计与 checksum benchmark、Phase 3A GridFTP 风格控制面 STOR 上传与 REST/GFID resume 映射、Phase 3B GridFTP 风格控制面 framed RETR 完整下载、Phase 3C 下载端 manifest/verified_chunks 与 RETR REST/GFID resume、Phase 3D 控制面 SIZE/MDTM/CWD/CDUP/LIST/NLST 与测试工具收敛。
 
@@ -10,7 +10,7 @@
 
 **未开始：** 系统级文件传输调优、raw FTP stream STOR/RETR、GridFTP GSI、MLST/MLSD、网络 io_uring、生产级目录同步。
 
-**下一步：** 运行并固化 Beta Gate / Beta RC。Beta 1C RETR focused matrix 已通过，Beta 1B storage/system writeback 归因已收口，FTP / native GridFTP / GridFlux 三方对比已完成；结论是不改变默认策略、不默认启用 verified_chunks/io_uring/bounded/dirty_poll/preallocate full。如继续优化，应先进入 100G 迁移前置检查或更高规格存储/网络验证，而不是扩新功能。
+**下一步：** 跑 Beta long soak standard、Beta freeze check、Beta Gate 和 Beta RC，冻结当前云服务器 Beta 候选版。Beta 1C RETR focused matrix 已通过，Beta 1B storage/system writeback 归因已收口，FTP / native GridFTP / GridFlux 三方对比已完成；结论是不改变默认策略、不默认启用 verified_chunks/io_uring/bounded/dirty_poll/preallocate full。当前不迁移 100G、不做 100G 测试；迁移前必须先完成 `iperf3`、storage bench、memory sink 和 CRC32C benchmark，100G 上先跑 10GiB smoke 再跑 100GiB repeat。
 
 ---
 
@@ -441,6 +441,22 @@
 - 新增 `tools/perf/analyze_beta1c_retr_stability.py` 和 `docs/perf/BETA1C_RETR_STABILITY.md`，复用现有 sender/receiver 阶段字段，报告 median/best/p95/spread、sender network send、source read、checksum、receiver temp write、final verify、rename/commit、TLS/data TLS overhead、connections scaling 和 POSIX vs io_uring。
 
 状态：已完成并通过 release gate。Focused runner `tools/perf/results/20260520T100107Z_beta1c-retr-stability.json` 为 pass；RETR raw `30/30` pass，summary `10` rows / grouped fail `0`，hash mismatch `0`。本机和<redacted>二 Debug / real io_uring Release full CTest 均为 `184/184 passed`，真实 io_uring smoke Passed。quick gate、full gate 和 Alpha RC 均 pass；RC artifact freshness stale `0`，artifact verify missing `0`、mismatch `0`；public export strict hygiene pass。关键 median：RETR summary median/best `3.457/4.675 Gbps`，median p95/spread `4.439 Gbps/88.8%`；sender network-send aggregate ratio median `233.8%`，receiver download temp-write aggregate ratio median `171.9%`；TLS/data TLS required delta `-11.1%`；verified_chunks delta `-1.8%`；io_uring 小子集 delta `+20.5%`。结论：RETR correctness/stability gate 通过但波动仍高；不改变默认策略，可进入 Beta Gate / Beta RC 准备。
+
+**Beta 1D Beta Gate / Beta RC closeout**
+
+- 新增 `tools/release/run_beta_release_gate.py`，串联本机/<redacted>二 Debug full CTest、real io_uring Release CTest、io_uring smoke、quick/full alpha gate、Alpha RC、Beta 1C RETR smoke、Beta 1B storage/system freshness、public hygiene、artifact sync/verify 和残留进程检查。
+- 新增 `tools/release/run_beta_release_candidate.py`，支持 `--gate-json` 复用已通过 gate，输出 Beta RC JSON/Markdown/artifact manifest。
+- 新增 `docs/release/BETA_LIMITATIONS.md`、`docs/perf/BETA_PERFORMANCE_SUMMARY.md` 和 `docs/perf/100G_MIGRATION_CHECKLIST.md`。
+
+状态：已完成。Beta Gate 和 Beta RC 均通过，当前 Beta RC 是云服务器环境下的候选包，不是 100G 认证包。默认策略保持 `auth-mode=anonymous`、`tls-mode=off`、`data-tls-mode=off`、`file_io_backend=posix`、`final_verify_policy=full`、`manifest_flush_policy=every_n_chunks`、`preallocate=off`、`posix_write_strategy=auto`、`receiver_write_profile=default`、`receiver_write_yield_policy=none`。
+
+**Beta 1E long stability and pre-migration freeze**
+
+- 新增 `tools/test/run_beta_long_soak.py`，standard profile 覆盖 STOR、RETR、STOR resume、RETR resume、tree upload/download、token auth、control TLS 和 data TLS smoke。
+- 新增 `tools/release/run_beta_freeze_check.py` 和 `docs/release/BETA_FREEZE.md`，检查最新 Beta Gate、Beta RC、artifact final verify、public hygiene、关键文档、默认策略和两机残留进程。
+- Beta Gate 默认不跑 standard soak，只提供 `--run-long-soak-short` / `--run-freeze-check` 可选入口；Beta RC 支持 `--soak-json` / `--require-soak` 记录并要求 standard soak。
+
+状态：实现中。Beta 1E 只做冻结和稳定性收口，不新增传输功能，不迁移 100G，不做 100G 测试。100G 迁移前必须先完成 `iperf3`、storage bench、memory sink 和 CRC32C benchmark；100G 上先跑 10GiB smoke，再跑 100GiB repeat。
 
 **Baseline FTP / GridFTP smoke comparison**
 

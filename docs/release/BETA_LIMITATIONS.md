@@ -1,7 +1,8 @@
 # GridFlux Beta Limitations
 
-Beta RC is a closeout for the current two-cloud-server validation path. It is
-not a production certification and it is not a 100G result.
+Beta RC is a closeout for the current two-cloud-server validation path. Beta
+1E freezes that cloud-server candidate before migration work. It is not a
+production certification and it is not a 100G result.
 
 ## Environment Limits
 
@@ -65,4 +66,6 @@ The following remain opt-in diagnostics only:
 
 Before claiming 100G readiness, run the 100G migration checklist in
 `docs/perf/100G_MIGRATION_CHECKLIST.md` on a dedicated 100G-capable environment
-with independent TCP, storage, CPU, TLS, checksum, and GridFlux evidence.
+with independent TCP, storage, memory sink, CRC32C, CPU, TLS, checksum, and
+GridFlux evidence. The first GridFlux run on 100G should be a 10GiB smoke; only
+after that should 100GiB repeat tests run.

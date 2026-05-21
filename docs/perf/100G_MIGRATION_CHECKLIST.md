@@ -3,6 +3,28 @@
 This checklist prepares the next validation environment. It does not migrate the
 current beta run and it does not claim 100G readiness.
 
+## Beta Freeze Boundary
+
+The current Beta RC is a two-cloud-server candidate, not a 100G-certified
+release. Keep the conservative default strategy during migration preparation:
+
+- `auth-mode=anonymous`
+- `tls-mode=off`
+- `data-tls-mode=off`
+- `file_io_backend=posix`
+- `final_verify_policy=full`
+- `manifest_flush_policy=every_n_chunks`
+- `preallocate=off`
+- `posix_write_strategy=auto`
+- `receiver_write_profile=default`
+- `receiver_write_yield_policy=none`
+
+Before moving GridFlux to a 100G environment, collect four independent
+baselines on the target hosts: `iperf3`, `gridflux-storage-bench`, memory sink,
+and `gridflux-checksum-bench` CRC32C throughput. Do not start 100GiB repeat
+tests until these baselines explain the available network, storage, memory, and
+checksum headroom.
+
 ## Required Environment Inputs
 
 For each 100G-capable server, record:
@@ -45,6 +67,26 @@ Run storage bench on each target directory before STOR/RETR:
 - optional `fio` if already available
 
 Record Dirty/Writeback/Cached, `df`, `mount`, `lsblk`, and iostat sidecars.
+
+## Memory And Checksum Baselines
+
+Run memory sink before file tests to separate network framing from disk effects:
+
+- GridFlux memory sink server/client with parallelism `1`, `4`, `8`, `16`
+- same private IP pair and NIC route intended for file tests
+- record CPU utilization and achieved Gbps
+
+Run CRC32C benchmark before checksum-enabled transfers:
+
+- `gridflux-checksum-bench` with `auto`, `hardware`, and `software` if
+  available
+- sizes at least `1GiB` equivalent total work, repeated enough to smooth noise
+- record selected backend and GiB/s or Gbps equivalent
+
+If memory sink is far below `iperf3`, inspect GridFlux network framing, socket
+buffers, CPU scheduling, and interrupt/RSS placement before storage tests. If
+CRC32C is below desired transfer throughput, checksum can become a first-order
+limit on 100G even though it was not the main cloud-server bottleneck.
 
 Target interpretation:
 

@@ -38,6 +38,7 @@ BETA_DOCS = [
     "docs/release/BETA_RELEASE_GATE.md",
     "docs/release/BETA_RELEASE_CANDIDATE.md",
     "docs/release/BETA_LIMITATIONS.md",
+    "docs/release/BETA_FREEZE.md",
     "docs/perf/BETA_PERFORMANCE_SUMMARY.md",
     "docs/perf/100G_MIGRATION_CHECKLIST.md",
     "docs/perf/BETA1A_100G_READINESS.md",
@@ -54,7 +55,10 @@ BETA_DOCS = [
 BETA_TOOLS = [
     "tools/release/run_beta_release_gate.py",
     "tools/release/run_beta_release_candidate.py",
+    "tools/release/run_beta_freeze_check.py",
     "tools/release/test_beta_release_helpers.py",
+    "tools/test/run_beta_long_soak.py",
+    "tools/test/test_beta_long_soak.py",
     "tools/perf/run_beta1b_storage_system_probe.py",
     "tools/perf/analyze_beta1b_storage_system.py",
     "tools/perf/run_beta1c_retr_stability.py",
@@ -237,6 +241,49 @@ def summarize_beta1c_smoke(wrapper: dict[str, object]) -> dict[str, object]:
     }
 
 
+def summarize_beta_long_soak(path: Path | None) -> dict[str, object]:
+    payload = read_json_if_exists(path) if path else {}
+    if not payload:
+        return {"path": str(path) if path else "", "present": False, "passed": False}
+    fail_count = int(payload.get("fail_count", 0) or 0)
+    passed = str(payload.get("result", "")).lower() == "pass" and fail_count == 0
+    return {
+        "path": alpha.relative_to_root(str(path), alpha.repo_root()) if path else "",
+        "present": True,
+        "passed": passed,
+        "profile": payload.get("profile", ""),
+        "iterations": payload.get("iterations", 0),
+        "pass_count": payload.get("pass_count", 0),
+        "fail_count": fail_count,
+        "elapsed_seconds": payload.get("elapsed_seconds", 0.0),
+    }
+
+
+def summarize_beta_freeze_check(path: Path | None) -> dict[str, object]:
+    payload = read_json_if_exists(path) if path else {}
+    if not payload:
+        return {"path": str(path) if path else "", "present": False, "passed": False}
+    return {
+        "path": alpha.relative_to_root(str(path), alpha.repo_root()) if path else "",
+        "present": True,
+        "passed": bool(payload.get("passed", False)),
+        "failures": payload.get("failures", []),
+    }
+
+
+def latest_beta1e_references(root: Path) -> dict[str, object]:
+    results = root / "tools" / "perf" / "results"
+    soak = latest_by_mtime(
+        sorted(results.glob("*_beta-long-soak*.json"))
+        + sorted(results.glob("*_beta-release-gate/beta-long-soak-short.json"))
+    )
+    freeze = latest_by_mtime(sorted(results.glob("*_beta-freeze-check.json")))
+    return {
+        "long_soak": summarize_beta_long_soak(soak),
+        "freeze_check": summarize_beta_freeze_check(freeze),
+    }
+
+
 def collect_result_artifacts(root: Path, patterns: list[str], *, latest_only: bool = True) -> set[str]:
     results_dir = root / "tools" / "perf" / "results"
     result: set[str] = set()
@@ -298,6 +345,11 @@ def collect_beta_artifact_paths(
                 "*_plain-ftp-three-way.csv",
                 "*_native-gridftp-three-way.csv",
                 "*_gridflux-three-way.csv",
+                "*_beta-long-soak*.json",
+                "*_beta-freeze-check.json",
+                "*_beta-release-gate/beta-long-soak-short.json",
+                "*_beta-release-gate/beta-long-soak-short/*.log",
+                "*_beta-release-gate/beta-long-soak-short-events/*.jsonl",
             ],
             latest_only=True,
         )
@@ -323,6 +375,7 @@ def write_beta_gate_markdown(path: Path, report: dict[str, object]) -> None:
     verify = report.get("artifact_verify_summary", {})
     residual = report.get("residual_process_check", {})
     beta1c = report.get("beta1c_retr_smoke", {})
+    beta1e = report.get("beta1e_references", {})
     lines = [
         "# GridFlux Beta Release Gate",
         "",
@@ -367,6 +420,24 @@ def write_beta_gate_markdown(path: Path, report: dict[str, object]) -> None:
     storage = report.get("beta1b_storage_system_check", {})
     if isinstance(storage, dict) and storage:
         lines.append(f"- Beta 1B storage/system check: `{storage.get('status', '')}`")
+    lines.extend(["", "## Beta 1E Freeze/Soak References", ""])
+    if isinstance(beta1e, dict):
+        soak = beta1e.get("long_soak", {})
+        freeze = beta1e.get("freeze_check", {})
+        if isinstance(soak, dict):
+            lines.append(
+                "- Latest long soak: "
+                f"path=`{soak.get('path', '')}` "
+                f"profile=`{soak.get('profile', '')}` "
+                f"pass=`{soak.get('passed', '')}` "
+                f"fail_count=`{soak.get('fail_count', '')}`"
+            )
+        if isinstance(freeze, dict):
+            lines.append(
+                "- Latest freeze check: "
+                f"path=`{freeze.get('path', '')}` "
+                f"pass=`{freeze.get('passed', '')}`"
+            )
     lines.extend(["", "## Nested Alpha Gates", ""])
     for name in ["quick_alpha_gate", "full_alpha_gate", "alpha_release_candidate"]:
         nested = report.get(name, {})
@@ -473,6 +544,8 @@ def main() -> int:
     parser.add_argument("--server-host", default="<redacted>")
     parser.add_argument("--results-dir", default="tools/perf/results")
     parser.add_argument("--run-storage-smoke", action="store_true")
+    parser.add_argument("--run-long-soak-short", action="store_true")
+    parser.add_argument("--run-freeze-check", action="store_true")
     args = parser.parse_args()
 
     if not args.remote or not args.server_host:
@@ -680,6 +753,52 @@ def main() -> int:
             storage_step = beta1b_storage_freshness(root, log_dir)
         steps.append(storage_step)
 
+        beta1e_refs = latest_beta1e_references(root)
+        if args.run_long_soak_short:
+            long_soak_json = log_dir / "beta-long-soak-short.json"
+            long_soak_step = alpha.run_step(
+                "beta_long_soak_short",
+                [
+                    sys.executable,
+                    "tools/test/run_beta_long_soak.py",
+                    "--build-dir",
+                    args.build_dir,
+                    "--profile",
+                    "tiny",
+                    "--iterations",
+                    "1",
+                    "--json-output",
+                    str(long_soak_json),
+                    "--event-log-dir",
+                    str(log_dir / "beta-long-soak-short-events"),
+                    "--results-dir",
+                    str(log_dir / "beta-long-soak-short"),
+                ],
+                log_dir,
+                cwd=root,
+            )
+            steps.append(long_soak_step)
+            beta1e_refs["long_soak"] = summarize_beta_long_soak(long_soak_json)
+        if args.run_freeze_check:
+            freeze_step = alpha.run_step(
+                "beta_freeze_check_reference",
+                [
+                    sys.executable,
+                    "tools/release/run_beta_freeze_check.py",
+                    "--remote",
+                    args.remote,
+                    "--results-dir",
+                    args.results_dir,
+                ],
+                log_dir,
+                cwd=root,
+            )
+            steps.append(freeze_step)
+            freeze_paths = parse_output_paths(step_log_text(freeze_step), ["beta_freeze_json"])
+            beta1e_refs["freeze_check"] = summarize_beta_freeze_check(
+                Path(freeze_paths.get("beta_freeze_json", "")) if freeze_paths.get("beta_freeze_json") else None
+            )
+
         hygiene_step = alpha.run_step(
             "public_export_strict_hygiene",
             [
@@ -721,6 +840,7 @@ def main() -> int:
             "alpha_release_candidate": alpha_rc,
             "beta1c_retr_smoke": summarize_beta1c_smoke(beta1c_wrapper),
             "beta1b_storage_system_check": asdict(storage_step),
+            "beta1e_references": beta1e_refs,
             "hygiene": asdict(hygiene_step),
             "artifact_manifest": {},
             "artifact_manifest_freshness": {},

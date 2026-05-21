@@ -171,8 +171,28 @@ Outputs:
 - JSON report: `tools/perf/results/<timestamp>_beta-release-candidate.json`
 - Artifact manifest: `tools/perf/results/<timestamp>_beta-release-candidate-artifacts.json`
 
-Beta RC is not a 100G certification. See `docs/release/BETA_LIMITATIONS.md` and
-`docs/perf/100G_MIGRATION_CHECKLIST.md`.
+Beta 1E adds a migration-before-freeze layer without making the default gate
+slow. Run the standard soak explicitly, then require it when packaging the RC:
+
+```bash
+python3 tools/test/run_beta_long_soak.py \
+  --build-dir build \
+  --profile standard \
+  --iterations 1 \
+  --json-output tools/perf/results/<timestamp>_beta-long-soak.json
+
+python3 tools/release/run_beta_freeze_check.py --remote <remote>
+
+python3 tools/release/run_beta_release_candidate.py \
+  --gate-json tools/perf/results/<timestamp>_beta-release-gate.json \
+  --soak-json tools/perf/results/<timestamp>_beta-long-soak.json \
+  --require-soak \
+  --remote <remote> \
+  --remote-root /root/projects/GridFlux
+```
+
+Beta RC is not a 100G certification. See `docs/release/BETA_LIMITATIONS.md`,
+`docs/release/BETA_FREEZE.md`, and `docs/perf/100G_MIGRATION_CHECKLIST.md`.
 
 ## Public Hygiene
 
