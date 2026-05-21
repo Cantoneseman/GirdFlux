@@ -390,6 +390,7 @@ def beta_perf_tool_paths(root: Path) -> list[str]:
         "analyze_beta1c_retr_stability.py",
         "run_baseline_ftp_gridftp_smoke.py",
         "run_three_way_ftp_gridftp_gridflux.py",
+        "plot_three_way_comparison.py",
         "test_beta1b_stor_writeback.py",
     ]:
         path = root / "tools" / "perf" / name
@@ -479,6 +480,8 @@ def collect_alpha_artifact_paths(
         "docs/perf/BETA1B_RECEIVER_WRITEBACK_STABILITY.md",
         "docs/perf/BETA1B_STORAGE_SYSTEM_ATTRIBUTION.md",
         "docs/perf/BETA1C_RETR_STABILITY.md",
+        "docs/perf/BETA_PERFORMANCE_SUMMARY.md",
+        "docs/perf/100G_MIGRATION_CHECKLIST.md",
         "docs/perf/BASELINE_FTP_GRIDFTP_SMOKE.md",
         "docs/perf/FTP_GRIDFTP_GRIDFLUX_COMPARISON.md",
         "docs/perf/PHASE5B_TREE_DATASET_MATRIX.md",

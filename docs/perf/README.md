@@ -93,6 +93,19 @@ python3 tools/perf/run_three_way_ftp_gridftp_gridflux.py \
 `docs/perf/FTP_GRIDFTP_GRIDFLUX_COMPARISON.md`；结束时清理
 `/tmp/gridflux-three-way-*`、`/tmp/xtransfer-baseline-*` 和本轮启动的测试进程。
 
+## Beta Performance Summary And 100G Preparation
+
+Beta 1D 将 Beta 1A/1B/1C 的性能结论收口到
+`docs/perf/BETA_PERFORMANCE_SUMMARY.md`。该报告汇总当前云服务器 host TCP、
+storage baseline、FTP / native GridFTP / GridFlux 三方对比、STOR writeback
+归因、RETR 稳定性、TLS/data TLS、checksum 和 io_uring 结论。默认策略不变，
+所有性能 knob 仍为 opt-in。
+
+`docs/perf/100G_MIGRATION_CHECKLIST.md` 只记录迁移前置检查和测试顺序，不执行
+100G 迁移或 100G 测试。进入 100G 环境前，应先独立跑 `iperf3`、storage
+write/read baseline，再按 10GiB smoke、100GiB repeat 的顺序扩大 GridFlux
+验证。
+
 ## Alpha Artifact Sync
 
 ```bash

@@ -54,6 +54,8 @@ SAFE_SUFFIXES = {
     ".cmake",
     ".clang-tidy",
     ".gitignore",
+    ".png",
+    ".svg",
 }
 SENSITIVE_PARTS = {"AGENTS.md", ".env", ".env.local", ".envrc", "id_rsa", "id_dsa", "id_ed25519"}
 SENSITIVE_WORDS = {"password", "passwd", "secret", "token", "cookie", "credential"}
@@ -125,7 +127,7 @@ def validate_local_artifact_file(path: Path, relative_path: str) -> None:
         raise ValueError(f"artifact is not a regular file: {relative_path}")
     if path.suffix and path.suffix not in SAFE_SUFFIXES:
         raise ValueError(f"unknown artifact suffix is not allowed: {relative_path}")
-    if is_probably_binary(path):
+    if is_probably_binary(path) and path.suffix not in {".png"}:
         raise ValueError(f"unknown binary artifact is not allowed: {relative_path}")
 
 
@@ -147,6 +149,8 @@ def artifact_type_for(path: str) -> str:
     if path.startswith("docs/release/"):
         return "release_doc"
     if path.startswith("docs/"):
+        if path.startswith("docs/perf/figures/"):
+            return "perf_figure"
         return "doc"
     if path.startswith("tools/release/"):
         return "release_tool"

@@ -106,3 +106,11 @@ Beta 1C follow-up: RETR stability is now reviewed with a focused `1GiB repeat=3`
 - No independent user-space queue.
 - No default bounded/dirty_poll.
 - No QUIC, FEC, RDMA, or GSI work.
+
+## Beta 1D Closeout Reference
+
+Beta 1D reuses this storage/system attribution as the STOR writeback reference
+for Beta Gate / Beta RC. The gate performs freshness or tiny smoke validation
+instead of rerunning a heavy storage matrix by default. See
+`docs/release/BETA_RELEASE_GATE.md`, `docs/release/BETA_RELEASE_CANDIDATE.md`,
+and `docs/perf/BETA_PERFORMANCE_SUMMARY.md`.

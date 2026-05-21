@@ -426,4 +426,8 @@ if(GRIDFLUX_BUILD_TESTS)
         NAME gridflux_beta1b_stor_writeback_helper_behavior
         COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/perf/test_beta1b_stor_writeback.py
     )
+    add_test(
+        NAME gridflux_beta_release_helper_behavior
+        COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/release/test_beta_release_helpers.py
+    )
 endif()

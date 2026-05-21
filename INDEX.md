@@ -22,21 +22,26 @@
 | [BETA1B_RECEIVER_WRITEBACK_STABILITY.md](docs/perf/BETA1B_RECEIVER_WRITEBACK_STABILITY.md) | Beta 1B-4 receiver writeback opt-in 稳定候选矩阵 |
 | [BETA1B_STORAGE_SYSTEM_ATTRIBUTION.md](docs/perf/BETA1B_STORAGE_SYSTEM_ATTRIBUTION.md) | Beta 1B-5 storage/system writeback 瓶颈归因 |
 | [BETA1C_RETR_STABILITY.md](docs/perf/BETA1C_RETR_STABILITY.md) | Beta 1C RETR 稳定性复核与 beta 性能收口 |
+| [BETA_PERFORMANCE_SUMMARY.md](docs/perf/BETA_PERFORMANCE_SUMMARY.md) | Beta 性能总览：host/storage、三方对比、STOR/RETR、TLS/checksum/io_uring 结论 |
+| [100G_MIGRATION_CHECKLIST.md](docs/perf/100G_MIGRATION_CHECKLIST.md) | 100G 迁移前置检查清单，不执行迁移或 100G 测试 |
 | [BASELINE_FTP_GRIDFTP_SMOKE.md](docs/perf/BASELINE_FTP_GRIDFTP_SMOKE.md) | 普通 FTP / 系统包 GridFTP 轻量对比摸底，不属于正式 release gate |
 | [FTP_GRIDFTP_GRIDFLUX_COMPARISON.md](docs/perf/FTP_GRIDFTP_GRIDFLUX_COMPARISON.md) | 普通 FTP、原生 GridFTP、当前 GridFlux 三方吞吐对比 |
 | [ALPHA_LIMITATIONS.md](docs/release/ALPHA_LIMITATIONS.md) | 完整 alpha 限制清单与后续路线 |
+| [BETA_LIMITATIONS.md](docs/release/BETA_LIMITATIONS.md) | Beta 限制清单、默认策略和 100G 前置边界 |
+| [BETA_RELEASE_GATE.md](docs/release/BETA_RELEASE_GATE.md) | Beta gate 验收报告 |
+| [BETA_RELEASE_CANDIDATE.md](docs/release/BETA_RELEASE_CANDIDATE.md) | Beta RC 收口报告 |
 
 新接手请按 DESIGN → ROADMAP → ENGINEERING 顺序阅读。
 
 ## 项目状态
 
-**当前阶段：** Beta 1C + baseline smoke — RETR stability review complete; ordinary FTP baseline measured; beta performance closeout ready for gate/RC
+**当前阶段：** Beta 1D — Beta Gate / Beta RC 收口中
 
 **技术栈：** C++20 · epoll 网络基线 · POSIX file IO 默认后端 · 可选 file-IO-only io_uring · CMake · Linux only
 
 **目标场景：** 专线 TB 级（主线）· 虚拟网络 · 广域网
 
-**下一步：** 进入 Beta Gate / Beta RC 准备。Beta 1C RETR focused matrix 已通过，普通 FTP baseline 已完成轻量对比；GridFTP 系统包存在但本轮匿名/no-GSI baseline 未跑通。默认策略仍保持 anonymous、`tls-mode=off`、`data-tls-mode=off`、POSIX backend、full final verify、`receiver_write_profile=default` 和现有 framed STOR/RETR 语义；`verified_chunks`、io_uring、bounded/dirty_poll 均继续只作为 opt-in。
+**下一步：** 运行并固化 Beta Gate / Beta RC。Beta 1C RETR focused matrix 已通过，三方 FTP / native GridFTP / GridFlux 对比已完成，Beta 1B storage/system 归因已收口；当前不迁移 100G、不改默认策略。`verified_chunks`、io_uring、bounded/dirty_poll、preallocate full 均继续只作为 opt-in。
 
 ## AI 协作
 

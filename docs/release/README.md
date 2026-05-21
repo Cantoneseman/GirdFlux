@@ -132,6 +132,48 @@ Outputs:
 The RC is the recommended final alpha handoff command. It is not a production
 certification: see `docs/release/ALPHA_LIMITATIONS.md`.
 
+## Beta Release Gate And Candidate
+
+Beta 1D adds a Beta-level closeout wrapper. It keeps the same transfer defaults
+and does not run a default heavy 4GiB repeat=3 full matrix. Existing Beta
+1A/1B/1C reports remain the source of truth for heavy performance findings; the
+Beta gate adds release-quality CTest, alpha gate/RC, Beta smoke/freshness,
+artifact, public hygiene, and residual-process closure.
+
+```bash
+GRIDFLUX_SSH_PASSWORD='***' python3 tools/release/run_beta_release_gate.py \
+  --build-dir build \
+  --io-uring-build-dir build-io-uring-real \
+  --remote <remote> \
+  --remote-root /root/projects/GridFlux \
+  --server-host <server-host> \
+  --results-dir tools/perf/results
+```
+
+Outputs:
+
+- Markdown report: `docs/release/BETA_RELEASE_GATE.md`
+- JSON report: `tools/perf/results/<timestamp>_beta-release-gate.json`
+- Artifact manifest: `tools/perf/results/<timestamp>_beta-artifacts.json`
+
+The Beta RC wrapper can either run the gate or reuse an already-passing gate:
+
+```bash
+python3 tools/release/run_beta_release_candidate.py \
+  --gate-json tools/perf/results/<timestamp>_beta-release-gate.json \
+  --remote <remote> \
+  --remote-root /root/projects/GridFlux
+```
+
+Outputs:
+
+- Markdown report: `docs/release/BETA_RELEASE_CANDIDATE.md`
+- JSON report: `tools/perf/results/<timestamp>_beta-release-candidate.json`
+- Artifact manifest: `tools/perf/results/<timestamp>_beta-release-candidate-artifacts.json`
+
+Beta RC is not a 100G certification. See `docs/release/BETA_LIMITATIONS.md` and
+`docs/perf/100G_MIGRATION_CHECKLIST.md`.
+
 ## Public Hygiene
 
 `AGENTS.md` is private and must not enter public exports. Public publishing must

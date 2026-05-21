@@ -1,6 +1,32 @@
 # GridFlux 项目状态记录
 
 
+## 2026-05-21 Beta 1D Beta Gate / Beta RC closeout
+
+### 实现范围
+
+- 新增 `tools/release/run_beta_release_gate.py`：
+  - 串联本机 Debug full CTest、本机 real io_uring Release full CTest 与 io_uring smoke；
+  - 串联<redacted>二 Debug full CTest、<redacted>二 real io_uring Release full CTest 与 io_uring smoke；
+  - 串联 quick alpha gate、full alpha gate、Alpha RC、Beta 1C RETR smoke、Beta 1B storage/system freshness check、public export strict hygiene、Beta artifact manifest/freshness/sync/verify 和两机残留进程检查。
+- 新增 `tools/release/run_beta_release_candidate.py`：
+  - 默认可调用 Beta Gate；
+  - 支持 `--gate-json` 复用已通过的 gate，避免重复跑完整回归；
+  - 输出 Beta RC JSON、Markdown 和 artifact manifest。
+- 新增 `docs/release/BETA_LIMITATIONS.md`、`docs/perf/BETA_PERFORMANCE_SUMMARY.md`、`docs/perf/100G_MIGRATION_CHECKLIST.md`。
+- 新增 `tools/release/test_beta_release_helpers.py` 并注册 CTest helper。
+
+### 默认策略
+
+Beta 1D 不改变默认传输策略：`auth-mode=anonymous`、`tls-mode=off`、`data-tls-mode=off`、`file_io_backend=posix`、`final_verify_policy=full`、`manifest_flush_policy=every_n_chunks`、`preallocate=off`、`posix_write_strategy=auto`、`receiver_write_profile=default`、`receiver_write_yield_policy=none`。
+
+### 当前计划
+
+- Beta Gate 输出 `tools/perf/results/<timestamp>_beta-release-gate.json`、`docs/release/BETA_RELEASE_GATE.md` 和 `tools/perf/results/<timestamp>_beta-artifacts.json`。
+- Beta RC 输出 `tools/perf/results/<timestamp>_beta-release-candidate.json`、`docs/release/BETA_RELEASE_CANDIDATE.md` 和 `tools/perf/results/<timestamp>_beta-release-candidate-artifacts.json`。
+- Beta RC 是当前两台云服务器验证的候选包，不是 100G 认证；100G 迁移只记录准备清单，不在 Beta 1D 执行。
+
+
 ## 2026-05-20 FTP / GridFTP / GridFlux three-way throughput comparison
 
 ### 实现范围

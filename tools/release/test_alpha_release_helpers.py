@@ -192,6 +192,15 @@ def test_remote_artifact_sync_local_verify_and_sync() -> None:
         write(local / "tools" / "perf" / "results" / "matrix.csv", "result,server_log\npass,tools/perf/results/server.log\n")
         write(local / "tools" / "perf" / "results" / "server.log", "server-v1\n")
         write(local / "tools" / "perf" / "results" / "events.jsonl", "{\"event\":\"ok\"}\n")
+        png = (
+            b"\x89PNG\r\n\x1a\n"
+            b"\x00\x00\x00\rIHDR"
+            b"\x00\x00\x00\x01\x00\x00\x00\x01"
+            b"\x08\x02\x00\x00\x00\x90wS\xde"
+            b"\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        (local / "docs" / "perf" / "figures").mkdir(parents=True, exist_ok=True)
+        (local / "docs" / "perf" / "figures" / "chart.png").write_bytes(png)
         manifest_path = local / "tools" / "perf" / "results" / "alpha-artifacts.json"
         manifest = {
             "timestamp": "2026-05-18T00:00:00Z",
@@ -210,10 +219,15 @@ def test_remote_artifact_sync_local_verify_and_sync() -> None:
                 sync_remote_artifacts.manifest_entry_for(
                     local, "tools/perf/results/events.jsonl", required=True
                 ).__dict__,
+                sync_remote_artifacts.manifest_entry_for(
+                    local, "docs/perf/figures/chart.png", required=True
+                ).__dict__,
             ],
         }
-        if manifest["artifacts"][-1]["type"] != "event_log":
-            raise AssertionError(f"jsonl artifact was not classified as event log: {manifest['artifacts'][-1]}")
+        if manifest["artifacts"][-2]["type"] != "event_log":
+            raise AssertionError(f"jsonl artifact was not classified as event log: {manifest['artifacts'][-2]}")
+        if manifest["artifacts"][-1]["type"] != "perf_figure":
+            raise AssertionError(f"png artifact was not classified as perf figure: {manifest['artifacts'][-1]}")
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 

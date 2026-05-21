@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**阶段：** Beta 1C + baseline smoke — RETR stability review complete; ordinary FTP baseline measured; beta performance closeout ready for gate/RC
+**阶段：** Beta 1D — Beta Gate / Beta RC 收口中
 
 **已完成：** 项目设计、技术选型、工程规范制定、CMake 工程骨架初始化、GoogleTest 工具链测试、本机与<redacted>二构建验证、GridFTP 源码学习经验整理入设计文档、Phase 1.0 多连接 TCP sink 与本机 loopback 验证、Phase 1.1 性能基线脚本与 loopback smoke matrix、Phase 1.2A offset-aware 单文件传输闭环、Phase 1.2B 文件传输健壮性、Phase 1.3A 文件性能基线自动化、Phase 2A manifest/range-based 断点续传核心、Phase 2B CRC32C chunk checksum 与损坏注入验证、Phase 2C CRC32C backend 自动选择、manifest 批量 flush、恢复统计与 checksum benchmark、Phase 3A GridFTP 风格控制面 STOR 上传与 REST/GFID resume 映射、Phase 3B GridFTP 风格控制面 framed RETR 完整下载、Phase 3C 下载端 manifest/verified_chunks 与 RETR REST/GFID resume、Phase 3D 控制面 SIZE/MDTM/CWD/CDUP/LIST/NLST 与测试工具收敛。
 
@@ -10,7 +10,7 @@
 
 **未开始：** 系统级文件传输调优、raw FTP stream STOR/RETR、GridFTP GSI、MLST/MLSD、网络 io_uring、生产级目录同步。
 
-**下一步：** 进入 Beta Gate / Beta RC 准备。Beta 1C RETR focused matrix 已通过，普通 FTP baseline smoke 已完成，GridFTP 系统包存在但匿名/no-GSI baseline 未跑通；结论是不改变默认策略、不默认启用 verified_chunks/io_uring/bounded/dirty_poll。如继续优化 RETR，应聚焦 sender network-send 稳定性、connections scaling 波动和 receiver download temp-write 压力。
+**下一步：** 运行并固化 Beta Gate / Beta RC。Beta 1C RETR focused matrix 已通过，Beta 1B storage/system writeback 归因已收口，FTP / native GridFTP / GridFlux 三方对比已完成；结论是不改变默认策略、不默认启用 verified_chunks/io_uring/bounded/dirty_poll/preallocate full。如继续优化，应先进入 100G 迁移前置检查或更高规格存储/网络验证，而不是扩新功能。
 
 ---
 

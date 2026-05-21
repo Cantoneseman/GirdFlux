@@ -1,8 +1,8 @@
 # GridFlux Alpha Release Gate
 
-- Timestamp: `2026-05-20T17:06:58Z`
+- Timestamp: `2026-05-20T18:24:27Z`
 - Mode: `full`
-- Source tree hash: `ef082d6969608eb223ac0ff7b3c0ade0654fa99e344602f01e928ef7a066d4a1`
+- Source tree hash: `89200a44b77bf7e9e175158797c9f9207a97a14fed25c055bc56f24f82b01552`
 - Result: `pass`
 - Total steps: `33`
 - Passed steps: `33`
@@ -12,59 +12,59 @@
 
 | Step | Status | Error Code | Seconds | Log |
 |------|--------|------------|---------|-----|
-| `build_debug` | `pass` | `ok` | `0.06` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/build_debug.log` |
-| `ctest_debug` | `pass` | `ok` | `32.91` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/ctest_debug.log` |
-| `ctest_iouring` | `pass` | `ok` | `32.76` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/ctest_iouring.log` |
-| `ctest_iouring_smoke` | `pass` | `ok` | `0.01` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/ctest_iouring_smoke.log` |
-| `public_export_hygiene` | `pass` | `ok` | `0.53` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/public_export_hygiene.log` |
-| `stor_smoke` | `pass` | `ok` | `0.13` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/stor_smoke.log` |
-| `retr_smoke` | `pass` | `ok` | `0.34` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/retr_smoke.log` |
-| `stor_resume_smoke` | `pass` | `ok` | `0.23` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/stor_resume_smoke.log` |
-| `retr_resume_smoke` | `pass` | `ok` | `0.25` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/retr_resume_smoke.log` |
-| `metadata_smoke` | `pass` | `ok` | `0.12` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/metadata_smoke.log` |
-| `list_smoke` | `pass` | `ok` | `0.21` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/list_smoke.log` |
-| `token_auth_smoke` | `pass` | `ok` | `0.22` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/token_auth_smoke.log` |
-| `tls_control_smoke` | `pass` | `ok` | `0.63` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/tls_control_smoke.log` |
-| `data_tls_smoke` | `pass` | `ok` | `1.70` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/data_tls_smoke.log` |
-| `tree_upload_smoke` | `pass` | `ok` | `0.33` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/tree_upload_smoke.log` |
-| `tree_download_smoke` | `pass` | `ok` | `0.47` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/tree_download_smoke.log` |
-| `tree_resume_smoke` | `pass` | `ok` | `0.74` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/tree_resume_smoke.log` |
-| `tree_parallel_smoke` | `pass` | `ok` | `0.94` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/tree_parallel_smoke.log` |
-| `tree_changed_file_smoke` | `pass` | `ok` | `4.20` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/tree_changed_file_smoke.log` |
-| `tree_edge_cases_smoke` | `pass` | `ok` | `8.49` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/tree_edge_cases_smoke.log` |
-| `tree_manifest_corrupt_smoke` | `pass` | `ok` | `0.20` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/tree_manifest_corrupt_smoke.log` |
-| `alpha_demo_local` | `pass` | `ok` | `3.24` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/alpha_demo_local.log` |
-| `tree_private_smoke` | `pass` | `ok` | `4.27` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/tree_private_smoke.log` |
-| `alpha_demo_private` | `pass` | `ok` | `6.17` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/alpha_demo_private.log` |
-| `private_token_auth_smoke` | `pass` | `ok` | `0.18` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/private_token_auth_smoke.log` |
-| `private_tls_control_smoke` | `pass` | `ok` | `0.97` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/private_tls_control_smoke.log` |
-| `private_data_tls_smoke` | `pass` | `ok` | `1.90` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/private_data_tls_smoke.log` |
-| `alpha_soak_smoke` | `pass` | `ok` | `6.53` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/alpha_soak_smoke.log` |
-| `private_baseline_matrix` | `pass` | `ok` | `341.65` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/private_baseline_matrix.log` |
-| `remote_artifact_sync` | `pass` | `ok` | `0.99` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/remote_artifact_sync.log` |
-| `remote_artifact_sync_check` | `pass` | `ok` | `0.43` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/remote_artifact_sync_check.log` |
-| `remote_artifact_final_sync` | `pass` | `ok` | `0.96` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/remote_artifact_final_sync.log` |
-| `remote_artifact_final_verify` | `pass` | `ok` | `0.44` | `/root/projects/GridFlux/tools/perf/results/20260520T165925Z_alpha-release-gate/remote_artifact_final_verify.log` |
+| `build_debug` | `pass` | `ok` | `0.10` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/build_debug.log` |
+| `ctest_debug` | `pass` | `ok` | `33.11` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/ctest_debug.log` |
+| `ctest_iouring` | `pass` | `ok` | `32.90` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/ctest_iouring.log` |
+| `ctest_iouring_smoke` | `pass` | `ok` | `0.01` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/ctest_iouring_smoke.log` |
+| `public_export_hygiene` | `pass` | `ok` | `0.54` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/public_export_hygiene.log` |
+| `stor_smoke` | `pass` | `ok` | `0.17` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/stor_smoke.log` |
+| `retr_smoke` | `pass` | `ok` | `0.35` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/retr_smoke.log` |
+| `stor_resume_smoke` | `pass` | `ok` | `0.23` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/stor_resume_smoke.log` |
+| `retr_resume_smoke` | `pass` | `ok` | `0.25` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/retr_resume_smoke.log` |
+| `metadata_smoke` | `pass` | `ok` | `0.12` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/metadata_smoke.log` |
+| `list_smoke` | `pass` | `ok` | `0.22` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/list_smoke.log` |
+| `token_auth_smoke` | `pass` | `ok` | `0.22` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/token_auth_smoke.log` |
+| `tls_control_smoke` | `pass` | `ok` | `0.42` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/tls_control_smoke.log` |
+| `data_tls_smoke` | `pass` | `ok` | `1.77` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/data_tls_smoke.log` |
+| `tree_upload_smoke` | `pass` | `ok` | `0.32` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/tree_upload_smoke.log` |
+| `tree_download_smoke` | `pass` | `ok` | `0.46` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/tree_download_smoke.log` |
+| `tree_resume_smoke` | `pass` | `ok` | `0.75` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/tree_resume_smoke.log` |
+| `tree_parallel_smoke` | `pass` | `ok` | `0.92` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/tree_parallel_smoke.log` |
+| `tree_changed_file_smoke` | `pass` | `ok` | `4.21` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/tree_changed_file_smoke.log` |
+| `tree_edge_cases_smoke` | `pass` | `ok` | `8.55` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/tree_edge_cases_smoke.log` |
+| `tree_manifest_corrupt_smoke` | `pass` | `ok` | `0.18` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/tree_manifest_corrupt_smoke.log` |
+| `alpha_demo_local` | `pass` | `ok` | `3.24` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/alpha_demo_local.log` |
+| `tree_private_smoke` | `pass` | `ok` | `4.30` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/tree_private_smoke.log` |
+| `alpha_demo_private` | `pass` | `ok` | `6.17` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/alpha_demo_private.log` |
+| `private_token_auth_smoke` | `pass` | `ok` | `0.28` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/private_token_auth_smoke.log` |
+| `private_tls_control_smoke` | `pass` | `ok` | `1.03` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/private_tls_control_smoke.log` |
+| `private_data_tls_smoke` | `pass` | `ok` | `2.03` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/private_data_tls_smoke.log` |
+| `alpha_soak_smoke` | `pass` | `ok` | `6.52` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/alpha_soak_smoke.log` |
+| `private_baseline_matrix` | `pass` | `ok` | `337.51` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/private_baseline_matrix.log` |
+| `remote_artifact_sync` | `pass` | `ok` | `0.99` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/remote_artifact_sync.log` |
+| `remote_artifact_sync_check` | `pass` | `ok` | `0.45` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/remote_artifact_sync_check.log` |
+| `remote_artifact_final_sync` | `pass` | `ok` | `0.97` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/remote_artifact_final_sync.log` |
+| `remote_artifact_final_verify` | `pass` | `ok` | `0.46` | `/root/projects/GridFlux/tools/perf/results/20260520T181655Z_alpha-release-gate/remote_artifact_final_verify.log` |
 
 ## Private Baseline
 
-- Raw CSV: `tools/perf/results/20260520T170114Z_gridftp-private-matrix-smoke.csv`
-- Summary CSV: `tools/perf/results/20260520T170114Z_gridftp-private-matrix-smoke-summary.csv`
+- Raw CSV: `tools/perf/results/20260520T181844Z_gridftp-private-matrix-smoke.csv`
+- Summary CSV: `tools/perf/results/20260520T181844Z_gridftp-private-matrix-smoke-summary.csv`
 - Fail count: `0`
 - Summary rows: `8`
 
 Default baseline rows:
 
-- direction=retr throughput_median=3.526560 spread_pct=34.031464
-- direction=stor throughput_median=1.384190 spread_pct=28.010605
+- direction=retr throughput_median=3.665830 spread_pct=22.987700
+- direction=stor throughput_median=1.453000 spread_pct=33.674535
 
 ## Artifact Sync
 
-- Manifest: `tools/perf/results/20260520T165925Z_alpha-artifacts.json`
-- Artifacts: `2610`
-- Sync: checked=`2611` synced=`3` missing=`0` mismatch=`0` pre_missing=`1` pre_mismatch=`2` post_missing=`0` post_mismatch=`0` status=`pass`
-- Verify: checked=`2611` missing=`0` mismatch=`0` status=`pass`
-- Local freshness: checked=`2610` stale=`0` status=`pass`
+- Manifest: `tools/perf/results/20260520T181655Z_alpha-artifacts.json`
+- Artifacts: `2774`
+- Sync: checked=`2775` synced=`3` missing=`0` mismatch=`0` pre_missing=`1` pre_mismatch=`2` post_missing=`0` post_mismatch=`0` status=`pass`
+- Verify: checked=`2775` missing=`0` mismatch=`0` status=`pass`
+- Local freshness: checked=`2774` stale=`0` status=`pass`
 
 ## Alpha Readiness
 

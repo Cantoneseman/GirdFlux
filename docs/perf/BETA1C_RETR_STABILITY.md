@@ -1,29 +1,29 @@
 # Beta 1C RETR Stability
 
-Generated: 2026-05-20T16:48:28Z
+Generated: 2026-05-20T18:25:32Z
 
 ## Executive Summary
 
 Beta 1C re-checks the RETR path on the existing two cloud servers and closes the beta performance investigation without changing defaults. The matrix isolates POSIX off/off scaling, a required/required TLS data point, an io_uring data point, and a crc32c verified_chunks opt-in comparison.
 
-- RETR summary median/best throughput: `10.727 / 15.310 Gbps`.
-- RETR median p95/spread: `10.727 Gbps / 0.0%`.
-- Sender network-send stage/elapsed ratio median: `164.9%`.
-- Receiver download temp-write stage/elapsed ratio median: `225.4%`.
-- Receiver final verify / rename share medians: `15.9%` / `0.2%`.
-- Dirty/Writeback correlation: Pearson r `-0.230` across `10` paired RETR rows.
+- RETR summary median/best throughput: `9.991 / 16.536 Gbps`.
+- RETR median p95/spread: `9.991 Gbps / 0.0%`.
+- Sender network-send stage/elapsed ratio median: `130.1%`.
+- Receiver download temp-write stage/elapsed ratio median: `198.1%`.
+- Receiver final verify / rename share medians: `16.2%` / `0.2%`.
+- Dirty/Writeback correlation: Pearson r `-0.332` across `10` paired RETR rows.
 - Stage ratios are computed from existing aggregate multi-stream stage counters divided by transfer elapsed time; values above 100% indicate parallel per-connection work and should be read as dominance indicators, not exclusive wall-time shares.
 
 ## Inputs
 
-- `tools/perf/results/20260520T164808Z_gridftp-private-matrix-smoke.csv`
-- `tools/perf/results/20260520T164818Z_gridftp-private-matrix-smoke.csv`
-- `tools/perf/results/20260520T164821Z_gridftp-private-matrix-smoke.csv`
-- `tools/perf/results/20260520T164824Z_gridftp-private-matrix-smoke.csv`
-- `tools/perf/results/20260520T164808Z_gridftp-private-matrix-smoke-summary.csv`
-- `tools/perf/results/20260520T164818Z_gridftp-private-matrix-smoke-summary.csv`
-- `tools/perf/results/20260520T164821Z_gridftp-private-matrix-smoke-summary.csv`
-- `tools/perf/results/20260520T164824Z_gridftp-private-matrix-smoke-summary.csv`
+- `tools/perf/results/20260520T182513Z_gridftp-private-matrix-smoke.csv`
+- `tools/perf/results/20260520T182523Z_gridftp-private-matrix-smoke.csv`
+- `tools/perf/results/20260520T182526Z_gridftp-private-matrix-smoke.csv`
+- `tools/perf/results/20260520T182528Z_gridftp-private-matrix-smoke.csv`
+- `tools/perf/results/20260520T182513Z_gridftp-private-matrix-smoke-summary.csv`
+- `tools/perf/results/20260520T182523Z_gridftp-private-matrix-smoke-summary.csv`
+- `tools/perf/results/20260520T182526Z_gridftp-private-matrix-smoke-summary.csv`
+- `tools/perf/results/20260520T182528Z_gridftp-private-matrix-smoke-summary.csv`
 
 ## Result Counts
 
@@ -34,45 +34,45 @@ Beta 1C re-checks the RETR path on the existing two cloud servers and closes the
 
 | case | median Gbps | p95 Gbps | spread % | sender send ratio | source read | sender checksum | recv temp write ratio | final verify | rename |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| bytes=67108864 backend=io_uring tls=off/off conn=4 checksum=crc32c fv=full | 8.853 | 8.853 | 0.0 | 154.4% | 33.8% | 15.4% | 225.8% | 22.9% | 0.2% |
-| bytes=67108864 backend=posix tls=off/off conn=1 checksum=crc32c fv=full | 10.913 | 10.913 | 0.0 | 31.5% | 18.0% | 14.4% | 41.9% | 28.0% | 0.2% |
-| bytes=67108864 backend=posix tls=off/off conn=1 checksum=none fv=full | 15.014 | 15.014 | 0.0 | 61.5% | 27.9% | 0.0% | 79.4% | 0.0% | 1.0% |
-| bytes=67108864 backend=posix tls=off/off conn=4 checksum=crc32c fv=full | 10.097 | 10.097 | 0.0 | 169.9% | 29.2% | 19.9% | 225.1% | 25.4% | 0.2% |
-| bytes=67108864 backend=posix tls=off/off conn=4 checksum=crc32c fv=full | 10.542 | 10.542 | 0.0 | 160.0% | 30.8% | 17.7% | 206.1% | 26.6% | 0.3% |
-| bytes=67108864 backend=posix tls=off/off conn=4 checksum=crc32c fv=verified_chunks | 13.682 | 13.682 | 0.0 | 190.0% | 42.2% | 27.3% | 282.8% | 0.0% | 0.4% |
-| bytes=67108864 backend=posix tls=off/off conn=4 checksum=none fv=full | 15.310 | 15.310 | 0.0 | 202.9% | 39.8% | 0.0% | 258.2% | 0.0% | 1.2% |
-| bytes=67108864 backend=posix tls=off/off conn=8 checksum=crc32c fv=full | 9.548 | 9.548 | 0.0 | 237.6% | 23.6% | 17.8% | 325.9% | 24.0% | 0.2% |
-| bytes=67108864 backend=posix tls=off/off conn=8 checksum=none fv=full | 14.817 | 14.817 | 0.0 | 275.5% | 50.3% | 0.0% | 456.2% | 0.0% | 1.0% |
-| bytes=67108864 backend=posix tls=required/required conn=4 checksum=crc32c fv=full | 3.511 | 3.511 | 0.0 | 59.6% | 9.2% | 8.2% | 33.4% | 8.9% | 0.1% |
+| bytes=67108864 backend=io_uring tls=off/off conn=4 checksum=crc32c fv=full | 8.547 | 8.547 | 0.0 | 115.0% | 31.5% | 13.7% | 204.6% | 23.2% | 0.2% |
+| bytes=67108864 backend=posix tls=off/off conn=1 checksum=crc32c fv=full | 9.958 | 9.958 | 0.0 | 34.7% | 17.8% | 13.2% | 44.3% | 26.3% | 0.2% |
+| bytes=67108864 backend=posix tls=off/off conn=1 checksum=none fv=full | 16.536 | 16.536 | 0.0 | 58.8% | 30.0% | 0.0% | 72.1% | 0.0% | 1.1% |
+| bytes=67108864 backend=posix tls=off/off conn=4 checksum=crc32c fv=full | 10.025 | 10.025 | 0.0 | 145.1% | 22.1% | 17.9% | 190.7% | 26.5% | 0.2% |
+| bytes=67108864 backend=posix tls=off/off conn=4 checksum=crc32c fv=full | 9.696 | 9.696 | 0.0 | 113.3% | 35.0% | 23.3% | 191.6% | 26.1% | 0.2% |
+| bytes=67108864 backend=posix tls=off/off conn=4 checksum=crc32c fv=verified_chunks | 13.326 | 13.326 | 0.0 | 197.8% | 34.9% | 20.2% | 288.5% | 0.0% | 0.2% |
+| bytes=67108864 backend=posix tls=off/off conn=4 checksum=none fv=full | 14.318 | 14.318 | 0.0 | 223.8% | 36.8% | 0.0% | 315.7% | 0.0% | 1.1% |
+| bytes=67108864 backend=posix tls=off/off conn=8 checksum=crc32c fv=full | 9.677 | 9.677 | 0.0 | 148.8% | 29.5% | 15.3% | 372.9% | 25.9% | 0.2% |
+| bytes=67108864 backend=posix tls=off/off conn=8 checksum=none fv=full | 13.474 | 13.474 | 0.0 | 292.1% | 35.9% | 0.0% | 476.5% | 0.0% | 1.3% |
+| bytes=67108864 backend=posix tls=required/required conn=4 checksum=crc32c fv=full | 3.424 | 3.424 | 0.0 | 75.3% | 8.2% | 5.2% | 63.8% | 9.2% | 0.1% |
 
 
 ## Connections Scaling
 
 | case | conn1 | conn4 | conn8 | 4 vs 1 | 8 vs 4 |
 | --- | --- | --- | --- | --- | --- |
-| bytes=67108864 checksum=crc32c | 10.913 | 10.542 | 9.548 | -3.4% | -9.4% |
-| bytes=67108864 checksum=none | 15.014 | 15.310 | 14.817 | +2.0% | -3.2% |
+| bytes=67108864 checksum=crc32c | 9.958 | 9.696 | 9.677 | -2.6% | -0.2% |
+| bytes=67108864 checksum=none | 16.536 | 14.318 | 13.474 | -13.4% | -5.9% |
 
 
 ## TLS/Data TLS Overhead
 
 | case | off/off Gbps | required/required Gbps | delta |
 | --- | --- | --- | --- |
-| bytes=67108864 conn=4 checksum=crc32c | 10.542 | 3.511 | -66.7% |
+| bytes=67108864 conn=4 checksum=crc32c | 9.696 | 3.424 | -64.7% |
 
 
 ## Final Verify Policy Opt-In
 
 | case | full Gbps | verified_chunks Gbps | delta | full fv share | verified fv share |
 | --- | --- | --- | --- | --- | --- |
-| bytes=67108864 conn=4 | 10.542 | 13.682 | 29.8% | 26.6% | 0.0% |
+| bytes=67108864 conn=4 | 9.696 | 13.326 | 37.4% | 26.1% | 0.0% |
 
 
 ## POSIX vs io_uring
 
 | case | POSIX Gbps | io_uring Gbps | delta |
 | --- | --- | --- | --- |
-| bytes=67108864 conn=4 checksum=crc32c | 10.542 | 8.853 | -16.0% |
+| bytes=67108864 conn=4 checksum=crc32c | 9.696 | 8.547 | -11.8% |
 
 
 ## Required Answers
@@ -88,11 +88,11 @@ Beta 1C re-checks the RETR path on the existing two cloud servers and closes the
 
 ## Recommendation
 
-- RETR median/best summary throughput: `10.727 / 15.310 Gbps`; median spread `0.0%`.
+- RETR median/best summary throughput: `9.991 / 16.536 Gbps`; median spread `0.0%`.
 - Dominant-stage count: sender network send `1`, receiver temp write `9` across `10` passing summary rows.
-- TLS/data TLS median delta: `-66.7%`.
-- verified_chunks median delta: `29.8%`.
-- Dirty/Writeback correlation: Pearson r `-0.230` across `10` paired RETR rows.
+- TLS/data TLS median delta: `-64.7%`.
+- verified_chunks median delta: `37.4%`.
+- Dirty/Writeback correlation: Pearson r `-0.332` across `10` paired RETR rows.
 - Recommendation: do not add user-space queue; investigate receiver download temp-write and storage/system behavior before RETR feature work.
 - Default policy remains unchanged.
 
