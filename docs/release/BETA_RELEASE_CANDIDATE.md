@@ -1,8 +1,8 @@
 # GridFlux Beta Release Candidate
 
-- Timestamp: `2026-05-21T04:27:47Z`
+- Timestamp: `2026-05-21T04:29:36Z`
 - Result: `pass`
-- Source tree hash: `969eb2c7725b05b81ec54224526fefa8a55f00a4c58b9d6f63a1f2a51aa6ade0`
+- Source tree hash: `808dea9466069bd185deeefda3c541bab8dec78c53403e6ed630a3e97fd986c8`
 
 ## Default Strategy
 
@@ -60,7 +60,7 @@
 
 ## Artifact Closure
 
-- Manifest: `tools/perf/results/20260521T042746Z_beta-release-candidate-artifacts.json`
+- Manifest: `tools/perf/results/20260521T042935Z_beta-release-candidate-artifacts.json`
 - Artifact count: `2858`
 - Freshness: checked=`2858` stale=`0` status=`pass`
 - Sync: checked=`2859` missing=`0` mismatch=`0` status=`pass`

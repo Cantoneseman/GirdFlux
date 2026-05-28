@@ -23,20 +23,26 @@ std::string finalVerifyPolicyName(FinalVerifyPolicy policy) {
 }
 
 bool canUseVerifiedChunksFinalVerify(FinalVerifyPolicy requested,
-                                     checksum::ChecksumAlgorithm algorithm,
-                                     std::uint64_t totalSize, std::uint64_t verifiedBytes,
-                                     bool hasMissingRanges) noexcept {
+                                     checksum::ChecksumAlgorithm algorithm, std::uint64_t totalSize,
+                                     std::uint64_t verifiedBytes, bool hasMissingRanges) noexcept {
     return requested == FinalVerifyPolicy::VerifiedChunks &&
-           algorithm != checksum::ChecksumAlgorithm::None && !hasMissingRanges &&
+           algorithm == checksum::ChecksumAlgorithm::Crc32c && !hasMissingRanges &&
            verifiedBytes == totalSize;
+}
+
+bool canUseCurrentSessionVerifiedChunksFinalVerify(
+    FinalVerifyPolicy requested, checksum::ChecksumAlgorithm algorithm, std::uint64_t totalSize,
+    std::uint64_t verifiedBytes, bool hasMissingRanges, std::uint64_t loadedVerifiedChunks,
+    std::uint64_t removedCorruptChunks) noexcept {
+    return loadedVerifiedChunks == 0 && removedCorruptChunks == 0 &&
+           canUseVerifiedChunksFinalVerify(requested, algorithm, totalSize, verifiedBytes,
+                                           hasMissingRanges);
 }
 
 bool canCommitWithVerifiedChunksFinalVerify(FinalVerifyPolicy requested,
                                             checksum::ChecksumAlgorithm algorithm,
-                                            std::uint64_t totalSize,
-                                            std::uint64_t verifiedBytes,
-                                            bool hasMissingRanges,
-                                            bool manifestFlushOk) noexcept {
+                                            std::uint64_t totalSize, std::uint64_t verifiedBytes,
+                                            bool hasMissingRanges, bool manifestFlushOk) noexcept {
     return manifestFlushOk && canUseVerifiedChunksFinalVerify(requested, algorithm, totalSize,
                                                               verifiedBytes, hasMissingRanges);
 }

@@ -132,19 +132,22 @@ std::string serializeRanges(const std::vector<core::chunk::CompletedRange>& rang
     return output.str();
 }
 
-std::string serializeVerifiedChunks(const std::vector<ChunkChecksumRecord>& records) {
+std::string serializeVerifiedChunksSorted(const std::vector<ChunkChecksumRecord>& records) {
     std::ostringstream output;
-    const std::vector<ChunkChecksumRecord> sorted = sortedRecords(records);
-    for (std::size_t index = 0; index < sorted.size(); ++index) {
+    for (std::size_t index = 0; index < records.size(); ++index) {
         if (index != 0) {
             output << ',';
         }
-        output << sorted[index].chunkId << ':' << sorted[index].offset << ':'
-               << sorted[index].length << ':'
-               << checksum::checksumAlgorithmName(sorted[index].checksum.algorithm) << ':'
-               << hex32(sorted[index].checksum.value);
+        output << records[index].chunkId << ':' << records[index].offset << ':'
+               << records[index].length << ':'
+               << checksum::checksumAlgorithmName(records[index].checksum.algorithm) << ':'
+               << hex32(records[index].checksum.value);
     }
     return output.str();
+}
+
+std::string serializeVerifiedChunks(const std::vector<ChunkChecksumRecord>& records) {
+    return serializeVerifiedChunksSorted(sortedRecords(records));
 }
 
 common::Result<std::vector<core::chunk::CompletedRange>> parseRanges(const std::string& text,
@@ -282,7 +285,7 @@ std::string buildManifestBody(const DownloadManifest& manifest,
     output << "updated_at_unix_ns=" << manifest.updatedAtUnixNanos << '\n';
     output << "state=" << manifestStateName(manifest.state) << '\n';
     output << "completed_ranges=" << serializeRanges(ranges) << '\n';
-    output << "verified_chunks=" << serializeVerifiedChunks(manifest.verifiedChunks) << '\n';
+    output << "verified_chunks=" << serializeVerifiedChunksSorted(manifest.verifiedChunks) << '\n';
     return output.str();
 }
 
@@ -336,11 +339,35 @@ common::Result<std::string> serializeDownloadManifest(const DownloadManifest& ma
             "download manifest chunk_size must be greater than zero");
     }
 
-    auto completed = completedFromVerified(manifest.verifiedChunks, manifest.totalSize);
+    DownloadManifest prepared = manifest;
+    prepared.verifiedChunks = sortedRecords(manifest.verifiedChunks);
+    auto completed = completedFromVerified(prepared.verifiedChunks, manifest.totalSize);
     if (!completed.isOk()) {
         return completed.status();
     }
-    const std::string body = buildManifestBody(manifest, completed.value().ranges());
+    const std::string body = buildManifestBody(prepared, completed.value().ranges());
+    const std::uint32_t bodyChecksum =
+        checksum::crc32c(reinterpret_cast<const std::uint8_t*>(body.data()), body.size());
+    return body + "manifest_body_crc32c=" + hex32(bodyChecksum) + '\n';
+}
+
+common::Result<std::string> serializePreparedDownloadManifest(
+    const DownloadManifest& manifest) {
+    if (manifest.version != kDownloadManifestVersion) {
+        return common::Status::invalidArgument("unsupported download manifest version");
+    }
+    if (!isValidTransferId(manifest.transferId)) {
+        return common::Status::invalidArgument("invalid transfer_id");
+    }
+    if (manifest.sourcePath.empty() || manifest.targetPath.empty() || manifest.tempPath.empty()) {
+        return common::Status::invalidArgument("download manifest paths must not be empty");
+    }
+    if (manifest.chunkSize == 0) {
+        return common::Status::invalidArgument(
+            "download manifest chunk_size must be greater than zero");
+    }
+
+    const std::string body = buildManifestBody(manifest, manifest.completedRanges);
     const std::uint32_t bodyChecksum =
         checksum::crc32c(reinterpret_cast<const std::uint8_t*>(body.data()), body.size());
     return body + "manifest_body_crc32c=" + hex32(bodyChecksum) + '\n';
@@ -499,6 +526,45 @@ common::Status saveDownloadManifestAtomic(const std::string& path,
         return serialized.status();
     }
 
+    const std::string tempPath = path + ".tmp." + std::to_string(::getpid());
+    const int fd = ::open(tempPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (fd < 0) {
+        return systemStatus("open download manifest temp", errno);
+    }
+
+    const common::Status writeStatus =
+        writeAll(fd, serialized.value().data(), serialized.value().size());
+    if (!writeStatus.isOk()) {
+        (void)::close(fd);
+        (void)storage::PosixFile::removePath(tempPath);
+        return writeStatus;
+    }
+    if (::close(fd) != 0) {
+        const int closeError = errno;
+        (void)storage::PosixFile::removePath(tempPath);
+        return systemStatus("close download manifest temp", closeError);
+    }
+    const common::Status renameStatus = storage::PosixFile::renamePath(tempPath, path);
+    if (!renameStatus.isOk()) {
+        (void)storage::PosixFile::removePath(tempPath);
+        return renameStatus;
+    }
+    return common::Status::ok();
+}
+
+common::Status savePreparedDownloadManifestAtomic(
+    const std::string& path, const DownloadManifest& manifest,
+    core::metrics::TransferPhaseStats* phaseStats) {
+    core::metrics::ScopedPhaseTimer serializeTimer(
+        phaseStats, core::metrics::TransferPhase::ManifestSerialize);
+    auto serialized = serializePreparedDownloadManifest(manifest);
+    serializeTimer.stop();
+    if (!serialized.isOk()) {
+        return serialized.status();
+    }
+
+    core::metrics::ScopedPhaseTimer writeTimer(
+        phaseStats, core::metrics::TransferPhase::ManifestWrite, serialized.value().size());
     const std::string tempPath = path + ".tmp." + std::to_string(::getpid());
     const int fd = ::open(tempPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
     if (fd < 0) {

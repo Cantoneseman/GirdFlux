@@ -26,6 +26,8 @@
 | [100G_MIGRATION_CHECKLIST.md](docs/perf/100G_MIGRATION_CHECKLIST.md) | 100G 迁移前置检查清单，不执行迁移或 100G 测试 |
 | [BASELINE_FTP_GRIDFTP_SMOKE.md](docs/perf/BASELINE_FTP_GRIDFTP_SMOKE.md) | 普通 FTP / 系统包 GridFTP 轻量对比摸底，不属于正式 release gate |
 | [FTP_GRIDFTP_GRIDFLUX_COMPARISON.md](docs/perf/FTP_GRIDFTP_GRIDFLUX_COMPARISON.md) | 普通 FTP、原生 GridFTP、当前 GridFlux 三方吞吐对比 |
+| [GRIDFTP_VS_GRIDFLUX_CLOUD_COMPARISON.md](docs/perf/GRIDFTP_VS_GRIDFLUX_CLOUD_COMPARISON.md) | Beta 云服务器原生 GridFTP vs GridFlux 完整对比实验 |
+| [CLOUD_DISK_BOTTLENECK_PROOF.md](docs/perf/CLOUD_DISK_BOTTLENECK_PROOF.md) | 阿里云双机分层归因实验：网络、CRC32C、storage、STOR/RETR 阶段对照 |
 | [ALPHA_LIMITATIONS.md](docs/release/ALPHA_LIMITATIONS.md) | 完整 alpha 限制清单与后续路线 |
 | [BETA_LIMITATIONS.md](docs/release/BETA_LIMITATIONS.md) | Beta 限制清单、默认策略和 100G 前置边界 |
 | [BETA_RELEASE_GATE.md](docs/release/BETA_RELEASE_GATE.md) | Beta gate 验收报告 |
@@ -36,13 +38,13 @@
 
 ## 项目状态
 
-**当前阶段：** Beta 1E — 长时间稳定性与迁移前冻结
+**当前阶段：** Beta 针对性归因实验 — 云盘 / 文件系统 / OS writeback bottleneck proof
 
 **技术栈：** C++20 · epoll 网络基线 · POSIX file IO 默认后端 · 可选 file-IO-only io_uring · CMake · Linux only
 
 **目标场景：** 专线 TB 级（主线）· 虚拟网络 · 广域网
 
-**下一步：** 跑 Beta long soak standard、Beta freeze check、Beta Gate 和 Beta RC，冻结当前云服务器 Beta 候选版。当前不迁移 100G、不做 100G 测试、不改默认策略；迁移前必须先完成 `iperf3`、storage bench、memory sink 和 CRC32C benchmark，100G 上先跑 10GiB smoke 再跑 100GiB repeat。`verified_chunks`、io_uring、bounded/dirty_poll、preallocate full 均继续只作为 opt-in。
+**下一步：** 在现有两台云服务器私网上运行 cloud disk bottleneck proof：用 iperf3、CRC32C、memory/sink、storage bench、GridFlux STOR/RETR 阶段指标证明当前 STOR 是否主要受硬盘写入 / 文件系统 / OS writeback 限制。当前不迁移 100G、不做 100G 测试、不改默认策略；结论只能代表当前云服务器环境。`verified_chunks`、io_uring、bounded/dirty_poll、preallocate full 均继续只作为 opt-in。
 
 ## AI 协作
 

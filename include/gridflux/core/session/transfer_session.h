@@ -56,6 +56,8 @@ class TransferSession {
     [[nodiscard]] std::vector<chunk::CompletedRange> missingRanges() const;
     [[nodiscard]] std::uint64_t bytesCompleted() const noexcept;
     [[nodiscard]] const TransferSessionStats& stats() const noexcept;
+    [[nodiscard]] std::uint64_t verifiedChunkCount() const noexcept;
+    [[nodiscard]] std::uint64_t completedRangeCount() const noexcept;
     [[nodiscard]] checksum::ChecksumBackend checksumBackend() const noexcept;
     [[nodiscard]] ManifestFlushPolicy manifestFlushPolicy() const noexcept;
     [[nodiscard]] std::uint64_t manifestFlushIntervalChunks() const noexcept;
@@ -71,6 +73,8 @@ class TransferSession {
     ManifestFlushPolicy manifestFlushPolicy_ = ManifestFlushPolicy::EveryNChunks;
     std::uint64_t manifestFlushIntervalChunks_ = kDefaultManifestFlushIntervalChunks;
     std::uint64_t dirtyVerifiedChunks_ = 0;
+    bool verifiedChunksSorted_ = true;
+    bool completedRangesDirty_ = false;
     TransferSessionStats stats_;
     metrics::TransferPhaseStats* phaseStats_ = nullptr;
 };

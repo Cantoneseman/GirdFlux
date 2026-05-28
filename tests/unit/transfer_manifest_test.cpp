@@ -52,6 +52,35 @@ TEST(TransferManifestTest, SerializesAndParsesStableTextFormat) {
     EXPECT_EQ(parsed.value().verifiedChunks[0].checksum.value, 0x11111111U);
 }
 
+TEST(TransferManifestTest, PreparedSerializerKeepsSuppliedRangesAndSortedRecords) {
+    gridflux::checkpoint::TransferManifest manifest;
+    manifest.transferId = "phase2c";
+    manifest.outputPath = "/tmp/out";
+    manifest.tempPath = "/tmp/out.part.phase2c";
+    manifest.totalSize = 4096;
+    manifest.chunkSize = 1024;
+    manifest.createdAtUnixNanos = 1;
+    manifest.updatedAtUnixNanos = 2;
+    manifest.state = gridflux::checkpoint::ManifestState::Transferring;
+    manifest.completedRanges = {{0, 1024}, {2048, 4096}};
+    manifest.verifiedChunks = {
+        {0, 0, 1024, {gridflux::checksum::ChecksumAlgorithm::Crc32c, 0x11111111U}},
+        {2, 2048, 2048, {gridflux::checksum::ChecksumAlgorithm::Crc32c, 0x22222222U}},
+    };
+
+    const auto serialized = gridflux::checkpoint::serializePreparedTransferManifest(manifest);
+    ASSERT_TRUE(serialized.isOk()) << serialized.status().message();
+    EXPECT_NE(serialized.value().find("completed_ranges=0-1024,2048-4096"),
+              std::string::npos);
+
+    const auto parsed = gridflux::checkpoint::parseTransferManifest(serialized.value());
+    ASSERT_TRUE(parsed.isOk()) << parsed.status().message();
+    ASSERT_EQ(parsed.value().completedRanges.size(), 2U);
+    EXPECT_EQ(parsed.value().completedRanges[1].begin, 2048U);
+    ASSERT_EQ(parsed.value().verifiedChunks.size(), 2U);
+    EXPECT_EQ(parsed.value().verifiedChunks[0].offset, 0U);
+}
+
 TEST(TransferManifestTest, RejectsCorruptManifest) {
     EXPECT_FALSE(gridflux::checkpoint::parseTransferManifest("not-a-manifest\n").isOk());
 

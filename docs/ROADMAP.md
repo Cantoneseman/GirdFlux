@@ -2,15 +2,20 @@
 
 ## 当前状态
 
-**阶段：** Beta 1E — 长时间稳定性与迁移前冻结
+**阶段：** Lab Beta Freeze 已收口 — 下一阶段分支决策
 
-**已完成：** 项目设计、技术选型、工程规范制定、CMake 工程骨架初始化、GoogleTest 工具链测试、本机与<redacted>二构建验证、GridFTP 源码学习经验整理入设计文档、Phase 1.0 多连接 TCP sink 与本机 loopback 验证、Phase 1.1 性能基线脚本与 loopback smoke matrix、Phase 1.2A offset-aware 单文件传输闭环、Phase 1.2B 文件传输健壮性、Phase 1.3A 文件性能基线自动化、Phase 2A manifest/range-based 断点续传核心、Phase 2B CRC32C chunk checksum 与损坏注入验证、Phase 2C CRC32C backend 自动选择、manifest 批量 flush、恢复统计与 checksum benchmark、Phase 3A GridFTP 风格控制面 STOR 上传与 REST/GFID resume 映射、Phase 3B GridFTP 风格控制面 framed RETR 完整下载、Phase 3C 下载端 manifest/verified_chunks 与 RETR REST/GFID resume、Phase 3D 控制面 SIZE/MDTM/CWD/CDUP/LIST/NLST 与测试工具收敛。
+**当前结论：** Lab Beta freeze closeout 已完成。Beta-ready=`yes`，但只覆盖当前文档化默认策略；100G-ready=`no`。默认策略保持：anonymous、TLS off、data TLS off、POSIX file I/O、`final_verify_policy=full`、`manifest_flush_interval_chunks=256`、`preallocate=off`、`posix_write_strategy=auto`。`verified_chunks`、io_uring、TLS/data TLS、heavy profile 和 100GiB repeat 均不是默认。
 
-**已完成补充：** Phase 4A 私网 GridFTP-like framed STOR/RETR 性能矩阵脚本、环境指标采集、smoke 矩阵、代表性 1GiB 样本和初步瓶颈判断；Phase 4B 阶段级诊断指标、host/link baseline、download manifest 批量 flush、final verify opt-in policy 和瓶颈报告；Phase 4C 原生 storage benchmark、temp preallocation opt-in、私网矩阵 repeat/summary CSV 和 verified_chunks 可靠性护栏；Phase 4D 文件 IO backend 抽象前置、POSIX file IO advice/buffering 选项、IO call 指标和 storage bench summary；Phase 4E 重型 1GiB repeat=3 storage/private matrix、POSIX knob 默认策略判断和 io_uring Phase 4F 设计闸门；Phase 4F 可选 file-IO-only io_uring backend 原型、CMake/liburing 探测、无 liburing stub fallback、脚本 backend 扫描维度和默认 POSIX 回归验证；Phase 4G 在真实 liburing 环境下完成 POSIX/io_uring storage bench 与私网 STOR/RETR 对照，并新增公开发布脱敏/export 工具链；Phase 4H 完成 file-IO-only io_uring queue depth / batching opt-in prototype、CSV 指标扩展和 smoke/1GiB sample；Phase 4I 完成 storage bench wrapper 修复、1GiB repeat=3 storage/private heavy matrix 和 queue-depth gate 报告；Phase 4J 完成 POSIX storage/writeback、checksum、manifest flush 和 final verify 路径诊断，新增双侧 sender/receiver 阶段字段、manifest flush policy 与 commit sync policy opt-in 诊断参数，以及 Phase 4J median 分析报告；Phase 4K 完成 POSIX temp write/writeback 专项优化实验，新增 POSIX write syscall 级指标、`posix_write_strategy=auto|direct|coalesced` opt-in 策略、storage/private matrix 维度和 Phase 4K median gate 报告；Phase 4L 完成 repeat=5 稳定性矩阵、环境/页缓存 sidecar、summary spread/p95 稳定性标记、RETR sender/receiver 双端瓶颈报告和 opt-in 推荐矩阵。
+**关键证据：** Lab Beta RC release profile `32/32 pass`，resume/fallback safety `4/4 pass`，combined RC `fail_count=0`、`sha_mismatch=0`；Final Verify Gate 通过并保持默认 `full`；CRC32C Cost Review 完成 preliminary；Manifest Flush 已收口，默认 interval 从 `16` 提升到 `256`；100G Readiness Recheck 证明当前实验室 TCP/RDMA/storage/PCIe/NUMA/space 仍是前置 blocker。
 
-**未开始：** 系统级文件传输调优、raw FTP stream STOR/RETR、GridFTP GSI、MLST/MLSD、网络 io_uring、生产级目录同步。
+**当前边界：** 不改 STOR/RETR framed protocol，不改 manifest v2 / body CRC / resume 事实源，不默认 `verified_chunks`，不默认 io_uring，不做 DPDK/RDMA data path/QUIC/FEC，不跑 heavy/100GiB，不能宣称 100G-ready。
 
-**下一步：** 跑 Beta long soak standard、Beta freeze check、Beta Gate 和 Beta RC，冻结当前云服务器 Beta 候选版。Beta 1C RETR focused matrix 已通过，Beta 1B storage/system writeback 归因已收口，FTP / native GridFTP / GridFlux 三方对比已完成；结论是不改变默认策略、不默认启用 verified_chunks/io_uring/bounded/dirty_poll/preallocate full。当前不迁移 100G、不做 100G 测试；迁移前必须先完成 `iperf3`、storage bench、memory sink 和 CRC32C benchmark，100G 上先跑 10GiB smoke 再跑 100GiB repeat。
+**下一步二选一：**
+
+- A. `100G readiness / baseline lift`：先修或解释 main NIC PCIe x8 downgrade，提升 TCP/RDMA，找到接近 8-12GB/s 的本地存储路径，完成 NUMA/IRQ/socket buffer before/after，再考虑 20GiB/100GiB 扩大验证。
+- B. `CRC32C opt-in prototype`：只做 opt-in threaded/pipelined checksum worker 原型，对照 Stage C 数据；不改变默认 checksum、默认 `final_verify_policy=full` 或 `verified_chunks` opt-in 边界。
+
+**已完成概览：** 项目设计、工程骨架、Phase 1/2/3、Phase 4A-4L、Lab Beta 2B/2C/2D/2E、Lab Beta 3A、Lab Beta RC Gate、100G Readiness Recheck 和 Beta Freeze 文档收口均已完成。详细历史见 `docs/PROJECT_STATE.md`、`docs/archive/PROJECT_STATE_HISTORY_20260524.md` 和 `docs/perf/RESULTS_INDEX.md`。
 
 ---
 

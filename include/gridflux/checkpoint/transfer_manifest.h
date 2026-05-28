@@ -50,6 +50,8 @@ struct TransferManifest {
 
 [[nodiscard]] common::Result<std::string> serializeTransferManifest(
     const TransferManifest& manifest);
+[[nodiscard]] common::Result<std::string> serializePreparedTransferManifest(
+    const TransferManifest& manifest);
 [[nodiscard]] common::Result<TransferManifest> parseTransferManifest(const std::string& text);
 
 [[nodiscard]] const char* manifestStateName(ManifestState state) noexcept;

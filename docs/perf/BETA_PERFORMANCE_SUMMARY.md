@@ -80,6 +80,40 @@ cloud storage stack:
 Manifest flush, final verify, and rename/commit remain visible in reports, but
 they are not the primary STOR bottleneck in the current environment.
 
+## Cloud Disk Bottleneck Proof
+
+Beta follow-up adds `tools/perf/run_cloud_disk_bottleneck_proof.py` for a
+targeted attribution run on the current Alibaba Cloud pair. It collects
+bidirectional iperf3, CRC32C hardware/software/auto, memory/sink if available,
+`gridflux-storage-bench` write/read, and aligned GridFlux STOR/RETR stage
+metrics in one window. The generated report is
+`docs/perf/CLOUD_DISK_BOTTLENECK_PROOF.md`.
+
+The proof rule is intentionally conservative: network and CRC32C must be far
+above STOR, storage write must be the same order as STOR, STOR temp-write wall
+share must exceed 60%, and data receive share must remain small before the
+report labels the current STOR bottleneck as cloud disk/writeback dominated.
+This remains an Alibaba Cloud conclusion only, not a 100G certification.
+
+## Cloud Disk Bottleneck Proof Status
+
+| run | size | result | verdict | use |
+| --- | ---: | --- | --- | --- |
+| `20260521T130648Z` | 64MiB | pass | `inconclusive_or_mixed` | toolchain smoke only |
+| `20260521T145615Z` | 1GiB/4GiB repeat=3 | pass | `inconclusive_or_mixed` | formal attribution |
+
+The focused run confirms a strong negative case for network and CRC32C hardware
+as STOR bottlenecks: private TCP reached `15.695 Gbps`, CRC32C hardware reached
+`47.821 Gbps`, and GridFlux transfer hash mismatches were `0`. It also shows
+native storage write median `0.954 Gbps` and GridFlux STOR e2e median
+`0.977 Gbps`, so STOR remains in the same order as the storage path. However,
+the conservative proof rule did not flip to `cloud_disk_writeback_dominated`
+because focused STOR temp-write wall share median was `37.3%`, below the 60%
+threshold, while data receive share stayed small at `1.1%`. The formal verdict
+therefore remains mixed: current Alibaba Cloud storage/writeback is a major
+limiting context, but this run does not prove it is the only dominant STOR
+stage under the strict rule.
+
 ## RETR Summary
 
 Beta 1C RETR focused validation passed correctness and hash checks. The dominant

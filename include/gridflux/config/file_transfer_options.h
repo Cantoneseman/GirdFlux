@@ -9,6 +9,7 @@
 #include "gridflux/core/session/final_verify_policy.h"
 #include "gridflux/core/session/manifest_flush_policy.h"
 #include "gridflux/core/session/receiver_writeback.h"
+#include "gridflux/core/session/transfer_session_config.h"
 #include "gridflux/core/io/tls_socket.h"
 #include "gridflux/storage/file_io.h"
 #include "gridflux/storage/preallocate_mode.h"
@@ -35,7 +36,8 @@ struct FileTransferOptions {
     checksum::ChecksumBackend checksumBackend = checksum::ChecksumBackend::Auto;
     core::session::ManifestFlushPolicy manifestFlushPolicy =
         core::session::ManifestFlushPolicy::EveryNChunks;
-    std::uint64_t manifestFlushIntervalChunks = 16;
+    std::uint64_t manifestFlushIntervalChunks =
+        core::session::kDefaultManifestFlushIntervalChunks;
     core::session::FinalVerifyPolicy finalVerifyPolicy = core::session::FinalVerifyPolicy::Full;
     core::session::CommitSyncPolicy commitSyncPolicy = core::session::CommitSyncPolicy::None;
     core::session::ReceiverWritebackConfig receiverWriteback;

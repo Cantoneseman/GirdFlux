@@ -175,8 +175,7 @@ double receiverBackpressureSeconds(const TransferState& transfer) noexcept {
     return static_cast<double>(transfer.receiverBackpressureNanos) / 1000000000.0;
 }
 
-void appendReceiverWritebackStats(std::ostream& stream,
-                                  const config::FileTransferOptions& options,
+void appendReceiverWritebackStats(std::ostream& stream, const config::FileTransferOptions& options,
                                   const TransferState& transfer) {
     stream << " receiver_write_profile="
            << session::receiverWriteProfileName(options.receiverWriteback.profile)
@@ -190,7 +189,8 @@ void appendReceiverWritebackStats(std::ostream& stream,
 }
 
 void writeReceiverWritebackEvent(const config::FileTransferOptions& options,
-                                 const TransferState& transfer, double elapsedSeconds) {
+                                 const TransferState& transfer, double elapsedSeconds,
+                                 const std::string& finalVerifyPolicyEffective) {
     if (options.eventLogPath.empty()) {
         return;
     }
@@ -208,14 +208,40 @@ void writeReceiverWritebackEvent(const config::FileTransferOptions& options,
     record.attributes = {
         {"receiver_write_profile",
          session::receiverWriteProfileName(options.receiverWriteback.profile)},
-        {"receiver_max_pending_bytes",
-         std::to_string(options.receiverWriteback.maxPendingBytes)},
+        {"receiver_max_pending_bytes", std::to_string(options.receiverWriteback.maxPendingBytes)},
         {"receiver_write_yield_policy",
          session::receiverWriteYieldPolicyName(options.receiverWriteback.yieldPolicy)},
         {"receiver_pending_bytes_max", std::to_string(transfer.receiverPendingBytesMax)},
         {"receiver_backpressure_count", std::to_string(transfer.receiverBackpressureCount)},
         {"receiver_backpressure_seconds", std::to_string(receiverBackpressureSeconds(transfer))},
         {"receiver_write_yield_count", std::to_string(transfer.receiverWriteYieldCount)},
+        {"checksum_seconds",
+         std::to_string(transfer.phaseStats.seconds(metrics::TransferPhase::Checksum))},
+        {"final_verify_seconds",
+         std::to_string(transfer.phaseStats.seconds(metrics::TransferPhase::FinalVerify))},
+        {"temp_write_seconds",
+         std::to_string(transfer.phaseStats.seconds(metrics::TransferPhase::Write))},
+        {"data_receive_seconds",
+         std::to_string(transfer.phaseStats.seconds(metrics::TransferPhase::Recv))},
+        {"manifest_flush_seconds",
+         std::to_string(transfer.phaseStats.seconds(metrics::TransferPhase::ManifestFlush))},
+        {"manifest_sort_seconds",
+         std::to_string(transfer.phaseStats.seconds(metrics::TransferPhase::ManifestSort))},
+        {"manifest_serialize_seconds",
+         std::to_string(transfer.phaseStats.seconds(metrics::TransferPhase::ManifestSerialize))},
+        {"manifest_write_seconds",
+         std::to_string(transfer.phaseStats.seconds(metrics::TransferPhase::ManifestWrite))},
+        {"manifest_bytes_written",
+         std::to_string(transfer.phaseStats.bytes(metrics::TransferPhase::ManifestWrite))},
+        {"verified_chunk_count", std::to_string(transfer.session.verifiedChunkCount())},
+        {"completed_range_count", std::to_string(transfer.session.completedRangeCount())},
+        {"bytes_checksummed",
+         std::to_string(transfer.phaseStats.bytes(metrics::TransferPhase::Checksum))},
+        {"bytes_final_verified",
+         std::to_string(transfer.phaseStats.bytes(metrics::TransferPhase::FinalVerify))},
+        {"final_verify_policy_requested",
+         session::finalVerifyPolicyName(options.finalVerifyPolicy)},
+        {"final_verify_policy_effective", finalVerifyPolicyEffective},
     };
     (void)metrics::writeEventLog(options.eventLogPath, record);
 }
@@ -335,8 +361,7 @@ common::Status sendResumeResponse(FileServerConnection& connection, TransferStat
     header.payloadSize = static_cast<std::uint32_t>(encodedPayload.value().size());
     header.totalSize = transfer.totalSize;
     if (connection.socket.valid()) {
-        return sendFrame(&connection.socket, header, encodedPayload.value(),
-                         &transfer.phaseStats);
+        return sendFrame(&connection.socket, header, encodedPayload.value(), &transfer.phaseStats);
     }
     return sendFrame(connection.context.fd(), header, encodedPayload.value(), &transfer.phaseStats);
 }
@@ -436,9 +461,8 @@ common::Status openOutputForSession(TransferState& transfer,
         }
         transfer.outputFile = std::move(outputResult.value());
         transfer.outputOpen = true;
-        const common::Status adviceStatus =
-            storage::applyFileIoAdvice(transfer.outputFile, options.fileIo.advice, 0,
-                                       transfer.totalSize);
+        const common::Status adviceStatus = storage::applyFileIoAdvice(
+            transfer.outputFile, options.fileIo.advice, 0, transfer.totalSize);
         if (!adviceStatus.isOk()) {
             transfer.errorCode = protocol::FrameStatusCode::WriteFailed;
             return adviceStatus;
@@ -455,7 +479,8 @@ common::Status openOutputForSession(TransferState& transfer,
     transfer.outputFile = std::move(outputResult.value());
     transfer.outputOpen = true;
     if (transfer.totalSize > 0 && options.preallocateMode == storage::PreallocateMode::Full) {
-        const common::Status preallocateStatus = transfer.outputFile.preallocate(transfer.totalSize);
+        const common::Status preallocateStatus =
+            transfer.outputFile.preallocate(transfer.totalSize);
         if (!preallocateStatus.isOk()) {
             transfer.errorCode = protocol::FrameStatusCode::WriteFailed;
             return preallocateStatus;
@@ -466,9 +491,8 @@ common::Status openOutputForSession(TransferState& transfer,
         transfer.errorCode = protocol::FrameStatusCode::WriteFailed;
         return resizeStatus;
     }
-    const common::Status adviceStatus =
-        storage::applyFileIoAdvice(transfer.outputFile, options.fileIo.advice, 0,
-                                   transfer.totalSize);
+    const common::Status adviceStatus = storage::applyFileIoAdvice(
+        transfer.outputFile, options.fileIo.advice, 0, transfer.totalSize);
     if (!adviceStatus.isOk()) {
         transfer.errorCode = protocol::FrameStatusCode::WriteFailed;
         return adviceStatus;
@@ -514,17 +538,15 @@ common::Status initializeSession(TransferState& transfer,
         return common::Status::ok();
     }
 
-    auto sessionResult = payloadResume
-                             ? session::TransferSession::resume(
-                                   options.path, payload.transferId, payload.totalSize,
-                                   payload.chunkSize, payload.checksumAlgorithm,
-                                   options.checksumBackend, options.manifestFlushPolicy,
-                                   options.manifestFlushIntervalChunks)
-                             : session::TransferSession::createNew(
-                                   options.path, payload.transferId, payload.totalSize,
-                                   payload.chunkSize, payload.checksumAlgorithm,
-                                   options.checksumBackend, options.manifestFlushPolicy,
-                                   options.manifestFlushIntervalChunks);
+    auto sessionResult =
+        payloadResume ? session::TransferSession::resume(
+                            options.path, payload.transferId, payload.totalSize, payload.chunkSize,
+                            payload.checksumAlgorithm, options.checksumBackend,
+                            options.manifestFlushPolicy, options.manifestFlushIntervalChunks)
+                      : session::TransferSession::createNew(
+                            options.path, payload.transferId, payload.totalSize, payload.chunkSize,
+                            payload.checksumAlgorithm, options.checksumBackend,
+                            options.manifestFlushPolicy, options.manifestFlushIntervalChunks);
     if (!sessionResult.isOk()) {
         transfer.errorCode = sessionResult.status().message().find("manifest") != std::string::npos
                                  ? protocol::FrameStatusCode::ManifestCorrupt
@@ -800,12 +822,10 @@ common::Status readFromConnection(FileServerConnection& connection, TransferStat
                 connection.encodedHeader.size() - connection.headerBytesRead;
             ssize_t received = 0;
             {
-                metrics::ScopedPhaseTimer timer(&transfer.phaseStats,
-                                                metrics::TransferPhase::Recv);
-                received =
-                    ::recv(connection.context.fd(),
-                           connection.encodedHeader.data() + connection.headerBytesRead, remaining,
-                           0);
+                metrics::ScopedPhaseTimer timer(&transfer.phaseStats, metrics::TransferPhase::Recv);
+                received = ::recv(connection.context.fd(),
+                                  connection.encodedHeader.data() + connection.headerBytesRead,
+                                  remaining, 0);
                 if (received > 0) {
                     timer.addBytes(static_cast<std::uint64_t>(received));
                 }
@@ -849,8 +869,7 @@ common::Status readFromConnection(FileServerConnection& connection, TransferStat
             metrics::ScopedPhaseTimer timer(&transfer.phaseStats, metrics::TransferPhase::Recv);
             received =
                 ::recv(connection.context.fd(),
-                       connection.payloadBuffer.data() + connection.payloadBytesRead, remaining,
-                       0);
+                       connection.payloadBuffer.data() + connection.payloadBytesRead, remaining, 0);
             if (received > 0) {
                 timer.addBytes(static_cast<std::uint64_t>(received));
             }
@@ -901,10 +920,9 @@ common::Status readFromTlsConnection(FileServerConnection& connection, TransferS
         if (connection.readState == ReadState::Header) {
             const std::size_t remaining =
                 connection.encodedHeader.size() - connection.headerBytesRead;
-            const common::Status readStatus =
-                readAllBlocking(&connection.socket,
-                                connection.encodedHeader.data() + connection.headerBytesRead,
-                                remaining, &transfer.phaseStats);
+            const common::Status readStatus = readAllBlocking(
+                &connection.socket, connection.encodedHeader.data() + connection.headerBytesRead,
+                remaining, &transfer.phaseStats);
             if (!readStatus.isOk()) {
                 transfer.errorCode = protocol::FrameStatusCode::InternalError;
                 return readStatus;
@@ -920,10 +938,9 @@ common::Status readFromTlsConnection(FileServerConnection& connection, TransferS
         const std::size_t remaining =
             static_cast<std::size_t>(connection.currentHeader.payloadSize) -
             connection.payloadBytesRead;
-        const common::Status readStatus =
-            readAllBlocking(&connection.socket,
-                            connection.payloadBuffer.data() + connection.payloadBytesRead,
-                            remaining, &transfer.phaseStats);
+        const common::Status readStatus = readAllBlocking(
+            &connection.socket, connection.payloadBuffer.data() + connection.payloadBytesRead,
+            remaining, &transfer.phaseStats);
         if (!readStatus.isOk()) {
             transfer.errorCode = protocol::FrameStatusCode::InternalError;
             return readStatus;
@@ -1043,8 +1060,7 @@ common::Status runFileTransferServerOnListenerTls(const config::FileTransferOpti
                 connection.writer = std::make_unique<storage::BufferedFileWriter>(
                     transfer.outputFile, options.fileIo, &transfer.fileIoStats);
             }
-            const common::Status readStatus =
-                readFromTlsConnection(connection, transfer, options);
+            const common::Status readStatus = readFromTlsConnection(connection, transfer, options);
             if (!readStatus.isOk()) {
                 (void)sendStatusToConnections(connections, protocol::FrameType::Error,
                                               transfer.errorCode, transfer.totalSize, true);
@@ -1067,9 +1083,11 @@ common::Status runFileTransferServerOnListenerTls(const config::FileTransferOpti
     }
 
     std::string finalVerifyPolicyEffective = "full";
-    if (session::canUseVerifiedChunksFinalVerify(
+    const session::TransferSessionStats& preFinalStats = transfer.session.stats();
+    if (session::canUseCurrentSessionVerifiedChunksFinalVerify(
             options.finalVerifyPolicy, transfer.checksumAlgorithm, transfer.totalSize,
-            transfer.session.bytesCompleted(), false)) {
+            transfer.session.bytesCompleted(), false, preFinalStats.loadedVerifiedChunks,
+            preFinalStats.removedCorruptChunks)) {
         const common::Status flushBeforeSkipStatus = transfer.session.flushManifest();
         if (!flushBeforeSkipStatus.isOk()) {
             markFailedBestEffort(transfer);
@@ -1077,8 +1095,8 @@ common::Status runFileTransferServerOnListenerTls(const config::FileTransferOpti
         }
         finalVerifyPolicyEffective = "verified_chunks";
     } else {
-        metrics::ScopedPhaseTimer timer(&transfer.phaseStats,
-                                        metrics::TransferPhase::FinalVerify, transfer.totalSize);
+        metrics::ScopedPhaseTimer timer(&transfer.phaseStats, metrics::TransferPhase::FinalVerify,
+                                        transfer.totalSize);
         const common::Status finalVerifyStatus =
             transfer.session.verifyTempChunks(transfer.outputFile);
         timer.stop();
@@ -1109,8 +1127,7 @@ common::Status runFileTransferServerOnListenerTls(const config::FileTransferOpti
     }
 
     {
-        metrics::ScopedPhaseTimer timer(&transfer.phaseStats,
-                                        metrics::TransferPhase::RenameCommit);
+        metrics::ScopedPhaseTimer timer(&transfer.phaseStats, metrics::TransferPhase::RenameCommit);
         const common::Status renameStatus =
             storage::PosixFile::renamePath(transfer.session.manifest().tempPath, options.path);
         if (!renameStatus.isOk()) {
@@ -1156,15 +1173,15 @@ common::Status runFileTransferServerOnListenerTls(const config::FileTransferOpti
               << " verified_bytes=" << transfer.session.bytesCompleted()
               << " loaded_verified_chunks=" << stats.loadedVerifiedChunks
               << " removed_corrupt_chunks=" << stats.removedCorruptChunks
-              << " missing_chunks=" << stats.missingChunks
-              << " manifest_flush_policy="
+              << " missing_chunks=" << stats.missingChunks << " manifest_flush_policy="
               << session::manifestFlushPolicyName(transfer.session.manifestFlushPolicy())
               << " manifest_flush_interval_chunks="
               << transfer.session.manifestFlushIntervalChunks()
               << " legacy_manifest_flush_policy=every_"
               << transfer.session.manifestFlushIntervalChunks() << "_chunks"
-              << " manifest_flush_count=" << stats.manifestFlushCount
-              << " final_verify_policy="
+              << " manifest_flush_count=" << stats.manifestFlushCount << " final_verify_policy="
+              << session::finalVerifyPolicyName(options.finalVerifyPolicy)
+              << " final_verify_policy_requested="
               << session::finalVerifyPolicyName(options.finalVerifyPolicy)
               << " final_verify_policy_effective=" << finalVerifyPolicyEffective
               << " commit_sync_policy=" << session::commitSyncPolicyName(options.commitSyncPolicy)
@@ -1183,9 +1200,14 @@ common::Status runFileTransferServerOnListenerTls(const config::FileTransferOpti
     appendReceiverWritebackStats(std::cout, options, transfer);
     metrics::appendPhaseStats(std::cout, transfer.phaseStats);
     metrics::appendStorReceiverAliases(std::cout, transfer.phaseStats);
+    metrics::appendChecksumFinalVerifyAliases(std::cout, transfer.phaseStats);
+    metrics::appendManifestDetailAliases(std::cout, transfer.phaseStats,
+                                         transfer.session.verifiedChunkCount(),
+                                         transfer.session.completedRangeCount());
     storage::appendFileIoStats(std::cout, transfer.fileIoStats);
     std::cout << '\n' << std::flush;
-    writeReceiverWritebackEvent(options, transfer, transfer.counter.elapsedSeconds(end));
+    writeReceiverWritebackEvent(options, transfer, transfer.counter.elapsedSeconds(end),
+                                finalVerifyPolicyEffective);
     return common::Status::ok();
 }
 
@@ -1323,9 +1345,11 @@ common::Status runFileTransferServerOnListener(const config::FileTransferOptions
     }
 
     std::string finalVerifyPolicyEffective = "full";
-    if (session::canUseVerifiedChunksFinalVerify(
+    const session::TransferSessionStats& preFinalStats = transfer.session.stats();
+    if (session::canUseCurrentSessionVerifiedChunksFinalVerify(
             options.finalVerifyPolicy, transfer.checksumAlgorithm, transfer.totalSize,
-            transfer.session.bytesCompleted(), false)) {
+            transfer.session.bytesCompleted(), false, preFinalStats.loadedVerifiedChunks,
+            preFinalStats.removedCorruptChunks)) {
         const common::Status flushBeforeSkipStatus = transfer.session.flushManifest();
         if (!flushBeforeSkipStatus.isOk()) {
             (void)sendStatusToConnections(connections, protocol::FrameType::Error,
@@ -1336,8 +1360,8 @@ common::Status runFileTransferServerOnListener(const config::FileTransferOptions
         }
         finalVerifyPolicyEffective = "verified_chunks";
     } else {
-        metrics::ScopedPhaseTimer timer(&transfer.phaseStats,
-                                        metrics::TransferPhase::FinalVerify, transfer.totalSize);
+        metrics::ScopedPhaseTimer timer(&transfer.phaseStats, metrics::TransferPhase::FinalVerify,
+                                        transfer.totalSize);
         const common::Status finalVerifyStatus =
             transfer.session.verifyTempChunks(transfer.outputFile);
         timer.stop();
@@ -1383,8 +1407,7 @@ common::Status runFileTransferServerOnListener(const config::FileTransferOptions
     }
 
     {
-        metrics::ScopedPhaseTimer timer(&transfer.phaseStats,
-                                        metrics::TransferPhase::RenameCommit);
+        metrics::ScopedPhaseTimer timer(&transfer.phaseStats, metrics::TransferPhase::RenameCommit);
         const common::Status renameStatus =
             storage::PosixFile::renamePath(transfer.session.manifest().tempPath, options.path);
         if (!renameStatus.isOk()) {
@@ -1441,15 +1464,15 @@ common::Status runFileTransferServerOnListener(const config::FileTransferOptions
               << " verified_bytes=" << transfer.session.bytesCompleted()
               << " loaded_verified_chunks=" << stats.loadedVerifiedChunks
               << " removed_corrupt_chunks=" << stats.removedCorruptChunks
-              << " missing_chunks=" << stats.missingChunks
-              << " manifest_flush_policy="
+              << " missing_chunks=" << stats.missingChunks << " manifest_flush_policy="
               << session::manifestFlushPolicyName(transfer.session.manifestFlushPolicy())
               << " manifest_flush_interval_chunks="
               << transfer.session.manifestFlushIntervalChunks()
               << " legacy_manifest_flush_policy=every_"
               << transfer.session.manifestFlushIntervalChunks() << "_chunks"
-              << " manifest_flush_count=" << stats.manifestFlushCount
-              << " final_verify_policy="
+              << " manifest_flush_count=" << stats.manifestFlushCount << " final_verify_policy="
+              << session::finalVerifyPolicyName(options.finalVerifyPolicy)
+              << " final_verify_policy_requested="
               << session::finalVerifyPolicyName(options.finalVerifyPolicy)
               << " final_verify_policy_effective=" << finalVerifyPolicyEffective
               << " commit_sync_policy=" << session::commitSyncPolicyName(options.commitSyncPolicy)
@@ -1468,9 +1491,14 @@ common::Status runFileTransferServerOnListener(const config::FileTransferOptions
     appendReceiverWritebackStats(std::cout, options, transfer);
     metrics::appendPhaseStats(std::cout, transfer.phaseStats);
     metrics::appendStorReceiverAliases(std::cout, transfer.phaseStats);
+    metrics::appendChecksumFinalVerifyAliases(std::cout, transfer.phaseStats);
+    metrics::appendManifestDetailAliases(std::cout, transfer.phaseStats,
+                                         transfer.session.verifiedChunkCount(),
+                                         transfer.session.completedRangeCount());
     storage::appendFileIoStats(std::cout, transfer.fileIoStats);
     std::cout << '\n' << std::flush;
-    writeReceiverWritebackEvent(options, transfer, transfer.counter.elapsedSeconds(end));
+    writeReceiverWritebackEvent(options, transfer, transfer.counter.elapsedSeconds(end),
+                                finalVerifyPolicyEffective);
 
     return common::Status::ok();
 }

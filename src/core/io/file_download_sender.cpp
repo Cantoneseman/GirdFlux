@@ -78,8 +78,7 @@ common::Result<protocol::FrameHeader> recvHeader(FramedDataSocket* socket,
                                                  std::uint32_t maxPayloadSize,
                                                  metrics::TransferPhaseStats* phaseStats) {
     protocol::EncodedFrameHeader encoded{};
-    const common::Status recvStatus =
-        recvAll(socket, encoded.data(), encoded.size(), phaseStats);
+    const common::Status recvStatus = recvAll(socket, encoded.data(), encoded.size(), phaseStats);
     if (!recvStatus.isOk()) {
         return recvStatus;
     }
@@ -95,10 +94,8 @@ common::Result<protocol::FrameHeader> recvHeader(FramedDataSocket* socket,
     return decoded.value();
 }
 
-common::Result<std::vector<chunk::CompletedRange>> waitForResumeResponse(FramedDataSocket* socket,
-                                                                         std::uint32_t bufferSize,
-                                                                         metrics::TransferPhaseStats*
-                                                                             phaseStats) {
+common::Result<std::vector<chunk::CompletedRange>> waitForResumeResponse(
+    FramedDataSocket* socket, std::uint32_t bufferSize, metrics::TransferPhaseStats* phaseStats) {
     auto header = recvHeader(socket, bufferSize, phaseStats);
     if (!header.isOk()) {
         return header.status();
@@ -183,8 +180,7 @@ bool shouldSendChunk(const chunk::ChunkRange& chunk,
 common::Status sendChunk(FramedDataSocket* socket, const FileDownloadSenderOptions& options,
                          const storage::PosixFile& inputFile, const chunk::ChunkRange& chunk,
                          checksum::ChecksumBackend checksumBackend, std::uint64_t totalSize,
-                         std::vector<std::uint8_t>& buffer,
-                         metrics::TransferPhaseStats* phaseStats,
+                         std::vector<std::uint8_t>& buffer, metrics::TransferPhaseStats* phaseStats,
                          const storage::FileIoContext& fileIoContext,
                          storage::FileIoStats* fileIoStats) {
     checksum::ChecksumComputer checksumComputer(options.checksumAlgorithm, checksumBackend);
@@ -196,8 +192,7 @@ common::Status sendChunk(FramedDataSocket* socket, const FileDownloadSenderOptio
             static_cast<std::uint32_t>(std::min<std::uint64_t>(remaining, buffer.size()));
         common::Status readStatus;
         {
-            metrics::ScopedPhaseTimer timer(phaseStats, metrics::TransferPhase::Read,
-                                            payloadSize);
+            metrics::ScopedPhaseTimer timer(phaseStats, metrics::TransferPhase::Read, payloadSize);
             readStatus = storage::readAtAll(inputFile, completed, buffer.data(), payloadSize,
                                             fileIoContext, fileIoStats);
         }
@@ -221,7 +216,8 @@ common::Status sendChunk(FramedDataSocket* socket, const FileDownloadSenderOptio
         if (!headerStatus.isOk()) {
             return headerStatus;
         }
-        const common::Status payloadStatus = sendAll(socket, buffer.data(), payloadSize, phaseStats);
+        const common::Status payloadStatus =
+            sendAll(socket, buffer.data(), payloadSize, phaseStats);
         if (!payloadStatus.isOk()) {
             return payloadStatus;
         }
@@ -283,9 +279,9 @@ common::Status sendStream(FramedDataSocket connection, const FileDownloadSenderO
             stats->skippedBytes += chunk.length;
             continue;
         }
-        const common::Status sendStatus = sendChunk(&connection, options, inputFile, chunk,
-                                                    checksumBackend, totalSize, buffer,
-                                                    phaseStats, fileIoContext, fileIoStats);
+        const common::Status sendStatus =
+            sendChunk(&connection, options, inputFile, chunk, checksumBackend, totalSize, buffer,
+                      phaseStats, fileIoContext, fileIoStats);
         if (!sendStatus.isOk()) {
             return sendStatus;
         }
@@ -438,6 +434,7 @@ common::Status runFramedFileSenderOnListener(const FileDownloadSenderOptions& op
               << " data_tls_mode=" << dataTlsModeName(options.dataTlsMode);
     metrics::appendPhaseStats(std::cout, phaseStats);
     metrics::appendRetrSenderAliases(std::cout, phaseStats);
+    metrics::appendChecksumFinalVerifyAliases(std::cout, phaseStats);
     storage::appendFileIoStats(std::cout, fileIoStats);
     std::cout << '\n' << std::flush;
     return common::Status::ok();

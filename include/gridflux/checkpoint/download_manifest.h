@@ -8,6 +8,7 @@
 #include "gridflux/checksum/checksum.h"
 #include "gridflux/common/status.h"
 #include "gridflux/core/chunk/range_list.h"
+#include "gridflux/core/metrics/transfer_phase_stats.h"
 
 namespace gridflux::checkpoint {
 
@@ -35,9 +36,14 @@ struct DownloadManifest {
 
 [[nodiscard]] common::Result<std::string> serializeDownloadManifest(
     const DownloadManifest& manifest);
+[[nodiscard]] common::Result<std::string> serializePreparedDownloadManifest(
+    const DownloadManifest& manifest);
 [[nodiscard]] common::Result<DownloadManifest> parseDownloadManifest(const std::string& text);
 [[nodiscard]] common::Status saveDownloadManifestAtomic(const std::string& path,
                                                         const DownloadManifest& manifest);
+[[nodiscard]] common::Status savePreparedDownloadManifestAtomic(
+    const std::string& path, const DownloadManifest& manifest,
+    core::metrics::TransferPhaseStats* phaseStats);
 [[nodiscard]] common::Result<DownloadManifest> loadDownloadManifest(const std::string& path);
 
 }  // namespace gridflux::checkpoint

@@ -21,11 +21,12 @@ enum class FinalVerifyPolicy {
                                                    std::uint64_t totalSize,
                                                    std::uint64_t verifiedBytes,
                                                    bool hasMissingRanges) noexcept;
-[[nodiscard]] bool canCommitWithVerifiedChunksFinalVerify(FinalVerifyPolicy requested,
-                                                          checksum::ChecksumAlgorithm algorithm,
-                                                          std::uint64_t totalSize,
-                                                          std::uint64_t verifiedBytes,
-                                                          bool hasMissingRanges,
-                                                          bool manifestFlushOk) noexcept;
+[[nodiscard]] bool canUseCurrentSessionVerifiedChunksFinalVerify(
+    FinalVerifyPolicy requested, checksum::ChecksumAlgorithm algorithm, std::uint64_t totalSize,
+    std::uint64_t verifiedBytes, bool hasMissingRanges, std::uint64_t loadedVerifiedChunks,
+    std::uint64_t removedCorruptChunks) noexcept;
+[[nodiscard]] bool canCommitWithVerifiedChunksFinalVerify(
+    FinalVerifyPolicy requested, checksum::ChecksumAlgorithm algorithm, std::uint64_t totalSize,
+    std::uint64_t verifiedBytes, bool hasMissingRanges, bool manifestFlushOk) noexcept;
 
 }  // namespace gridflux::core::session

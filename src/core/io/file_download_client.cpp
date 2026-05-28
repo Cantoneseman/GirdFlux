@@ -22,6 +22,7 @@
 #include "gridflux/core/chunk/chunk_planner.h"
 #include "gridflux/core/io/framed_data_socket.h"
 #include "gridflux/core/io/socket_utils.h"
+#include "gridflux/core/metrics/event_log.h"
 #include "gridflux/core/metrics/transfer_phase_stats.h"
 #include "gridflux/core/protocol/frame.h"
 #include "gridflux/core/session/download_session.h"
@@ -71,6 +72,54 @@ common::Status systemStatus(const char* operation, int errorNumber) {
                                        errorNumber);
 }
 
+void writeDownloadReceiverSummaryEvent(const config::FileDownloadOptions& options,
+                                       const SharedDownloadState& state,
+                                       std::uint64_t receivedBytes, double elapsedSeconds,
+                                       const std::string& finalVerifyPolicyEffective) {
+    if (options.eventLogPath.empty()) {
+        return;
+    }
+
+    metrics::EventRecord record;
+    record.component = "gridflux-file-download-client";
+    record.event = "download_receiver_summary";
+    record.transferId = options.transferId;
+    record.direction = "download";
+    record.path = options.path;
+    record.result = "pass";
+    record.errorCode = metrics::ErrorCode::Ok;
+    record.elapsedSeconds = elapsedSeconds;
+    record.bytes = receivedBytes;
+    record.attributes = {
+        {"checksum_seconds",
+         std::to_string(state.phaseStats.seconds(metrics::TransferPhase::Checksum))},
+        {"final_verify_seconds",
+         std::to_string(state.phaseStats.seconds(metrics::TransferPhase::FinalVerify))},
+        {"download_temp_write_seconds",
+         std::to_string(state.phaseStats.seconds(metrics::TransferPhase::Write))},
+        {"manifest_flush_seconds",
+         std::to_string(state.phaseStats.seconds(metrics::TransferPhase::ManifestFlush))},
+        {"manifest_sort_seconds",
+         std::to_string(state.phaseStats.seconds(metrics::TransferPhase::ManifestSort))},
+        {"manifest_serialize_seconds",
+         std::to_string(state.phaseStats.seconds(metrics::TransferPhase::ManifestSerialize))},
+        {"manifest_write_seconds",
+         std::to_string(state.phaseStats.seconds(metrics::TransferPhase::ManifestWrite))},
+        {"manifest_bytes_written",
+         std::to_string(state.phaseStats.bytes(metrics::TransferPhase::ManifestWrite))},
+        {"verified_chunk_count", std::to_string(state.session.verifiedChunkCount())},
+        {"completed_range_count", std::to_string(state.session.completedRangeCount())},
+        {"bytes_checksummed",
+         std::to_string(state.phaseStats.bytes(metrics::TransferPhase::Checksum))},
+        {"bytes_final_verified",
+         std::to_string(state.phaseStats.bytes(metrics::TransferPhase::FinalVerify))},
+        {"final_verify_policy_requested",
+         session::finalVerifyPolicyName(options.finalVerifyPolicy)},
+        {"final_verify_policy_effective", finalVerifyPolicyEffective},
+    };
+    (void)metrics::writeEventLog(options.eventLogPath, record);
+}
+
 common::Status setReceiveTimeout(int fd) {
     timeval timeout{};
     timeout.tv_sec = 60;
@@ -111,8 +160,7 @@ common::Result<protocol::FrameHeader> recvHeader(FramedDataSocket* socket,
                                                  std::uint32_t maxPayloadSize,
                                                  metrics::TransferPhaseStats* phaseStats) {
     protocol::EncodedFrameHeader encoded{};
-    const common::Status recvStatus =
-        recvAll(socket, encoded.data(), encoded.size(), phaseStats);
+    const common::Status recvStatus = recvAll(socket, encoded.data(), encoded.size(), phaseStats);
     if (!recvStatus.isOk()) {
         return recvStatus;
     }
@@ -139,8 +187,7 @@ common::Status sendStatusFrame(FramedDataSocket* socket, protocol::FrameType typ
 }
 
 common::Status sendResumeResponse(FramedDataSocket* socket, std::uint32_t streamId,
-                                  std::uint64_t totalSize,
-                                  std::uint32_t bufferSize,
+                                  std::uint64_t totalSize, std::uint32_t bufferSize,
                                   const std::vector<chunk::CompletedRange>& missingRanges,
                                   metrics::TransferPhaseStats* phaseStats) {
     protocol::ResumeResponsePayload response;
@@ -219,8 +266,8 @@ common::Result<std::vector<chunk::CompletedRange>> prepareDownloadSession(
         if (options.resume) {
             auto resumed = session::DownloadSession::resume(
                 options.path, sourcePath, options.transferId, totalSize, chunkSize,
-                options.checksumAlgorithm, checksumBackend,
-                options.manifestFlushPolicy, options.manifestFlushIntervalChunks);
+                options.checksumAlgorithm, checksumBackend, options.manifestFlushPolicy,
+                options.manifestFlushIntervalChunks);
             if (!resumed.isOk()) {
                 return resumed.status();
             }
@@ -232,8 +279,7 @@ common::Result<std::vector<chunk::CompletedRange>> prepareDownloadSession(
             }
             state->outputFile = std::move(fileResult.value());
             const common::Status adviceStatus =
-                storage::applyFileIoAdvice(state->outputFile, options.fileIo.advice, 0,
-                                           totalSize);
+                storage::applyFileIoAdvice(state->outputFile, options.fileIo.advice, 0, totalSize);
             if (!adviceStatus.isOk()) {
                 return adviceStatus;
             }
@@ -268,8 +314,8 @@ common::Result<std::vector<chunk::CompletedRange>> prepareDownloadSession(
             }
             auto created = session::DownloadSession::createNew(
                 options.path, sourcePath, options.transferId, totalSize, chunkSize,
-                options.checksumAlgorithm, checksumBackend,
-                options.manifestFlushPolicy, options.manifestFlushIntervalChunks);
+                options.checksumAlgorithm, checksumBackend, options.manifestFlushPolicy,
+                options.manifestFlushIntervalChunks);
             if (!created.isOk()) {
                 return created.status();
             }
@@ -301,8 +347,7 @@ common::Result<std::vector<chunk::CompletedRange>> prepareDownloadSession(
                 return resizeStatus;
             }
             const common::Status adviceStatus =
-                storage::applyFileIoAdvice(state->outputFile, options.fileIo.advice, 0,
-                                           totalSize);
+                storage::applyFileIoAdvice(state->outputFile, options.fileIo.advice, 0, totalSize);
             if (!adviceStatus.isOk()) {
                 return adviceStatus;
             }
@@ -329,7 +374,8 @@ common::Result<std::vector<chunk::CompletedRange>> prepareDownloadSession(
 common::Status receiveStream(const config::FileDownloadOptions& options,
                              checksum::ChecksumBackend checksumBackend, SharedDownloadState* state,
                              DownloadStats* stats) {
-    auto connectionResult = connectFramedDataSocket(options.host.c_str(), options.port, options.dataTlsMode, options.dataTls);
+    auto connectionResult = connectFramedDataSocket(options.host.c_str(), options.port,
+                                                    options.dataTlsMode, options.dataTls);
     if (!connectionResult.isOk()) {
         return connectionResult.status();
     }
@@ -341,8 +387,7 @@ common::Status receiveStream(const config::FileDownloadOptions& options,
 
     std::uint32_t streamId = 0;
     auto session =
-        readSessionInit(&connection, options.bufferSize, options, &streamId,
-                        &state->phaseStats);
+        readSessionInit(&connection, options.bufferSize, options, &streamId, &state->phaseStats);
     if (!session.isOk()) {
         (void)sendStatusFrame(&connection, protocol::FrameType::Error,
                               protocol::FrameStatusCode::InvalidFrame, 0, &state->phaseStats);
@@ -375,8 +420,8 @@ common::Status receiveStream(const config::FileDownloadOptions& options,
     }
 
     const common::Status responseStatus =
-        sendResumeResponse(&connection, streamId, session.value().totalSize,
-                           options.bufferSize, missingRanges.value(), &state->phaseStats);
+        sendResumeResponse(&connection, streamId, session.value().totalSize, options.bufferSize,
+                           missingRanges.value(), &state->phaseStats);
     if (!responseStatus.isOk()) {
         return responseStatus;
     }
@@ -433,8 +478,7 @@ common::Status receiveStream(const config::FileDownloadOptions& options,
                 return common::Status::invalidArgument("DATA payload exceeds buffer");
             }
             const common::Status recvStatus =
-                recvAll(&connection, buffer.data(), header.value().payloadSize,
-                        &state->phaseStats);
+                recvAll(&connection, buffer.data(), header.value().payloadSize, &state->phaseStats);
             if (!recvStatus.isOk()) {
                 return recvStatus;
             }
@@ -442,8 +486,8 @@ common::Status receiveStream(const config::FileDownloadOptions& options,
             {
                 metrics::ScopedPhaseTimer timer(&state->phaseStats, metrics::TransferPhase::Write,
                                                 header.value().payloadSize);
-                writeStatus = writer.write(header.value().offset, buffer.data(),
-                                           header.value().payloadSize);
+                writeStatus =
+                    writer.write(header.value().offset, buffer.data(), header.value().payloadSize);
             }
             if (!writeStatus.isOk()) {
                 (void)sendStatusFrame(&connection, protocol::FrameType::Error,
@@ -603,9 +647,11 @@ common::Status runFileDownloadClient(const config::FileDownloadOptions& options)
         return common::Status::runtimeError("download is missing verified chunks");
     }
     std::string finalVerifyPolicyEffective = "full";
-    if (session::canUseVerifiedChunksFinalVerify(options.finalVerifyPolicy,
-                                                 options.checksumAlgorithm, state.knownTotalSize,
-                                                 state.session.bytesCompleted(), false)) {
+    const session::DownloadSessionStats& preFinalStats = state.session.stats();
+    if (session::canUseCurrentSessionVerifiedChunksFinalVerify(
+            options.finalVerifyPolicy, options.checksumAlgorithm, state.knownTotalSize,
+            state.session.bytesCompleted(), false, preFinalStats.loadedVerifiedChunks,
+            preFinalStats.removedCorruptChunks)) {
         const common::Status flushStatus = state.session.flushManifest();
         if (!flushStatus.isOk()) {
             (void)state.session.markFailed();
@@ -657,7 +703,8 @@ common::Status runFileDownloadClient(const config::FileDownloadOptions& options)
             (void)state.session.markFailed();
             return renameStatus;
         }
-        const common::Status syncStatus = applyCommitSyncPolicy(options.path, options.commitSyncPolicy);
+        const common::Status syncStatus =
+            applyCommitSyncPolicy(options.path, options.commitSyncPolicy);
         if (!syncStatus.isOk()) {
             (void)state.session.markFailed();
             return syncStatus;
@@ -692,12 +739,13 @@ common::Status runFileDownloadClient(const config::FileDownloadOptions& options)
               << " removed_corrupt_chunks=" << state.session.stats().removedCorruptChunks
               << " manifest_flush_policy="
               << session::manifestFlushPolicyName(state.session.manifestFlushPolicy())
-              << " manifest_flush_interval_chunks="
-              << state.session.manifestFlushIntervalChunks()
+              << " manifest_flush_interval_chunks=" << state.session.manifestFlushIntervalChunks()
               << " legacy_manifest_flush_policy=every_"
               << state.session.manifestFlushIntervalChunks() << "_chunks"
               << " manifest_flush_count=" << state.session.stats().manifestFlushCount
               << " final_verify_policy="
+              << session::finalVerifyPolicyName(options.finalVerifyPolicy)
+              << " final_verify_policy_requested="
               << session::finalVerifyPolicyName(options.finalVerifyPolicy)
               << " final_verify_policy_effective=" << finalVerifyPolicyEffective
               << " commit_sync_policy=" << session::commitSyncPolicyName(options.commitSyncPolicy)
@@ -715,8 +763,14 @@ common::Status runFileDownloadClient(const config::FileDownloadOptions& options)
               << " data_tls_mode=" << dataTlsModeName(options.dataTlsMode);
     metrics::appendPhaseStats(std::cout, state.phaseStats);
     metrics::appendRetrReceiverAliases(std::cout, state.phaseStats);
+    metrics::appendChecksumFinalVerifyAliases(std::cout, state.phaseStats);
+    metrics::appendManifestDetailAliases(std::cout, state.phaseStats,
+                                         state.session.verifiedChunkCount(),
+                                         state.session.completedRangeCount());
     storage::appendFileIoStats(std::cout, state.fileIoStats);
     std::cout << '\n';
+    writeDownloadReceiverSummaryEvent(options, state, receivedBytes, counter.elapsedSeconds(end),
+                                      finalVerifyPolicyEffective);
     return common::Status::ok();
 }
 

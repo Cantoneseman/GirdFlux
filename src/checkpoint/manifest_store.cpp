@@ -75,6 +75,47 @@ common::Status ManifestStore::saveAtomic(const std::string& path,
     return common::Status::ok();
 }
 
+common::Status ManifestStore::saveAtomicPrepared(
+    const std::string& path, const TransferManifest& manifest,
+    core::metrics::TransferPhaseStats* phaseStats) {
+    core::metrics::ScopedPhaseTimer serializeTimer(
+        phaseStats, core::metrics::TransferPhase::ManifestSerialize);
+    auto serialized = serializePreparedTransferManifest(manifest);
+    serializeTimer.stop();
+    if (!serialized.isOk()) {
+        return serialized.status();
+    }
+
+    core::metrics::ScopedPhaseTimer writeTimer(
+        phaseStats, core::metrics::TransferPhase::ManifestWrite, serialized.value().size());
+    const std::string tempPath = path + ".tmp." + std::to_string(::getpid());
+    const int fd = ::open(tempPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (fd < 0) {
+        return systemStatus("open manifest temp", errno);
+    }
+
+    const common::Status writeStatus =
+        writeAll(fd, serialized.value().data(), serialized.value().size());
+    if (!writeStatus.isOk()) {
+        (void)::close(fd);
+        (void)storage::PosixFile::removePath(tempPath);
+        return writeStatus;
+    }
+
+    if (::close(fd) != 0) {
+        const int closeError = errno;
+        (void)storage::PosixFile::removePath(tempPath);
+        return systemStatus("close manifest temp", closeError);
+    }
+
+    const common::Status renameStatus = storage::PosixFile::renamePath(tempPath, path);
+    if (!renameStatus.isOk()) {
+        (void)storage::PosixFile::removePath(tempPath);
+        return renameStatus;
+    }
+    return common::Status::ok();
+}
+
 common::Result<TransferManifest> ManifestStore::load(const std::string& path) {
     std::ifstream input(path);
     if (!input) {

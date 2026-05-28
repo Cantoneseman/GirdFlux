@@ -41,7 +41,8 @@ TEST(FileTransferOptionsTest, AppliesServerDefaults) {
     EXPECT_EQ(result.value().checksumBackend, gridflux::checksum::ChecksumBackend::Auto);
     EXPECT_EQ(result.value().manifestFlushPolicy,
               gridflux::core::session::ManifestFlushPolicy::EveryNChunks);
-    EXPECT_EQ(result.value().manifestFlushIntervalChunks, 16U);
+    EXPECT_EQ(result.value().manifestFlushIntervalChunks,
+              gridflux::core::session::kDefaultManifestFlushIntervalChunks);
     EXPECT_EQ(result.value().finalVerifyPolicy,
               gridflux::core::session::FinalVerifyPolicy::Full);
     EXPECT_EQ(result.value().commitSyncPolicy,
@@ -206,6 +207,14 @@ TEST(FileTransferOptionsTest, ParsesServerFlags) {
     EXPECT_EQ(result.value().fileIo.posixWriteStrategy,
               gridflux::storage::PosixWriteStrategy::Coalesced);
     EXPECT_EQ(result.value().eventLogPath, "/tmp/gridflux-file-server-events.jsonl");
+}
+
+TEST(FileTransferOptionsTest, DefaultsManifestFlushIntervalTo256WhenUnspecified) {
+    const auto result = parse({"gridflux-file-server", "--output", "/tmp/out"},
+                              gridflux::config::FileTransferRole::Server);
+
+    ASSERT_TRUE(result.isOk()) << result.status().message();
+    EXPECT_EQ(result.value().manifestFlushIntervalChunks, 256U);
 }
 
 TEST(FileTransferOptionsTest, ParsesClientResume) {

@@ -9,7 +9,7 @@
 
 namespace gridflux::core::session {
 
-inline constexpr std::uint64_t kDefaultManifestFlushIntervalChunks = 16;
+inline constexpr std::uint64_t kDefaultManifestFlushIntervalChunks = 256;
 
 struct TransferSessionConfig {
     std::string transferId;

@@ -279,6 +279,7 @@ if(GRIDFLUX_BUILD_TESTS)
         tests/unit/file_download_options_test.cpp
         tests/unit/file_io_test.cpp
         tests/unit/file_transfer_options_test.cpp
+        tests/unit/framed_data_socket_test.cpp
         tests/unit/frame_test.cpp
         tests/unit/manifest_store_test.cpp
         tests/unit/posix_file_test.cpp
@@ -429,6 +430,18 @@ if(GRIDFLUX_BUILD_TESTS)
     add_test(
         NAME gridflux_beta1b_stor_writeback_helper_behavior
         COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/perf/test_beta1b_stor_writeback.py
+    )
+    add_test(
+        NAME gridflux_gridftp_vs_gridflux_cloud_helper_behavior
+        COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/perf/test_gridftp_vs_gridflux_cloud.py
+    )
+    add_test(
+        NAME gridflux_cloud_disk_bottleneck_proof_helper_behavior
+        COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/perf/test_cloud_disk_bottleneck_proof.py
+    )
+    add_test(
+        NAME gridflux_lab_gridflux_profile_helper_behavior
+        COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/perf/test_lab_gridflux_profile.py
     )
     add_test(
         NAME gridflux_beta_release_helper_behavior

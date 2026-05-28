@@ -31,7 +31,8 @@ TEST(FileDownloadOptionsTest, ParsesRequiredAndDefaults) {
     EXPECT_EQ(parsed.value().checksumAlgorithm, ChecksumAlgorithm::Crc32c);
     EXPECT_EQ(parsed.value().checksumBackend, ChecksumBackend::Auto);
     EXPECT_EQ(parsed.value().manifestFlushPolicy, ManifestFlushPolicy::EveryNChunks);
-    EXPECT_EQ(parsed.value().manifestFlushIntervalChunks, 16U);
+    EXPECT_EQ(parsed.value().manifestFlushIntervalChunks,
+              gridflux::core::session::kDefaultManifestFlushIntervalChunks);
     EXPECT_EQ(parsed.value().finalVerifyPolicy, FinalVerifyPolicy::Full);
     EXPECT_EQ(parsed.value().commitSyncPolicy, CommitSyncPolicy::None);
     EXPECT_EQ(parsed.value().preallocateMode, gridflux::storage::PreallocateMode::Off);
@@ -136,6 +137,14 @@ TEST(FileDownloadOptionsTest, ParsesExplicitOptions) {
     EXPECT_TRUE(parsed.value().resume);
     EXPECT_EQ(parsed.value().maxChunks, 3U);
     std::filesystem::remove(ca);
+}
+
+TEST(FileDownloadOptionsTest, DefaultsManifestFlushIntervalTo256WhenUnspecified) {
+    const char* argv[] = {"gridflux-file-download-client", "--output", "/tmp/out.bin",
+                          "--transfer-id", "download-token"};
+    auto parsed = parseFileDownloadOptions(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.isOk()) << parsed.status().message();
+    EXPECT_EQ(parsed.value().manifestFlushIntervalChunks, 256U);
 }
 
 TEST(FileDownloadOptionsTest, RejectsInvalidOptions) {

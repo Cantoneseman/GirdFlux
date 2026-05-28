@@ -14,6 +14,9 @@ enum class TransferPhase {
     Write,
     Checksum,
     ManifestFlush,
+    ManifestSort,
+    ManifestSerialize,
+    ManifestWrite,
     ResumePrecheck,
     FinalVerify,
     RenameCommit,
@@ -43,6 +46,9 @@ class TransferPhaseStats {
     Counters write_;
     Counters checksum_;
     Counters manifestFlush_;
+    Counters manifestSort_;
+    Counters manifestSerialize_;
+    Counters manifestWrite_;
     Counters resumePrecheck_;
     Counters finalVerify_;
     Counters renameCommit_;
@@ -72,5 +78,9 @@ void appendPhaseStats(std::ostream& stream, const TransferPhaseStats& stats);
 void appendStorReceiverAliases(std::ostream& stream, const TransferPhaseStats& stats);
 void appendRetrSenderAliases(std::ostream& stream, const TransferPhaseStats& stats);
 void appendRetrReceiverAliases(std::ostream& stream, const TransferPhaseStats& stats);
+void appendChecksumFinalVerifyAliases(std::ostream& stream, const TransferPhaseStats& stats);
+void appendManifestDetailAliases(std::ostream& stream, const TransferPhaseStats& stats,
+                                 std::uint64_t verifiedChunkCount,
+                                 std::uint64_t completedRangeCount);
 
 }  // namespace gridflux::core::metrics

@@ -33,6 +33,14 @@ bool sameChecksum(const checksum::ChecksumValue& left,
     return left.algorithm == right.algorithm && left.value == right.value;
 }
 
+bool precedesOrEquals(const checkpoint::ChunkChecksumRecord& left,
+                      const checkpoint::ChunkChecksumRecord& right) noexcept {
+    if (left.offset != right.offset) {
+        return left.offset < right.offset;
+    }
+    return left.chunkId <= right.chunkId;
+}
+
 void sortVerifiedChunks(std::vector<checkpoint::ChunkChecksumRecord>* records) {
     std::sort(records->begin(), records->end(),
               [](const checkpoint::ChunkChecksumRecord& left,
@@ -186,10 +194,19 @@ common::Result<DownloadSession> DownloadSession::resume(
 
 common::Status DownloadSession::save() {
     manifest_.updatedAtUnixNanos = checkpoint::nowUnixNanos();
-    manifest_.completedRanges = completed_.ranges();
-    sortVerifiedChunks(&manifest_.verifiedChunks);
     metrics::ScopedPhaseTimer timer(phaseStats_, metrics::TransferPhase::ManifestFlush);
-    const common::Status status = checkpoint::saveDownloadManifestAtomic(manifestPath_, manifest_);
+    if (!verifiedChunksSorted_) {
+        metrics::ScopedPhaseTimer sortTimer(phaseStats_, metrics::TransferPhase::ManifestSort);
+        sortVerifiedChunks(&manifest_.verifiedChunks);
+        sortTimer.stop();
+        verifiedChunksSorted_ = true;
+    }
+    if (completedRangesDirty_) {
+        manifest_.completedRanges = completed_.ranges();
+        completedRangesDirty_ = false;
+    }
+    const common::Status status =
+        checkpoint::savePreparedDownloadManifestAtomic(manifestPath_, manifest_, phaseStats_);
     timer.stop();
     if (status.isOk()) {
         dirtyVerifiedChunks_ = 0;
@@ -230,9 +247,13 @@ common::Status DownloadSession::recordVerifiedChunk(std::uint64_t chunkId, std::
     if (!insertStatus.isOk()) {
         return insertStatus;
     }
-    manifest_.verifiedChunks.push_back(
-        checkpoint::ChunkChecksumRecord{chunkId, offset, length, checksumValue});
-    manifest_.completedRanges = completed_.ranges();
+    checkpoint::ChunkChecksumRecord newRecord{chunkId, offset, length, checksumValue};
+    if (!manifest_.verifiedChunks.empty() &&
+        !precedesOrEquals(manifest_.verifiedChunks.back(), newRecord)) {
+        verifiedChunksSorted_ = false;
+    }
+    manifest_.verifiedChunks.push_back(newRecord);
+    completedRangesDirty_ = true;
     manifest_.state = checkpoint::ManifestState::Transferring;
     dirtyVerifiedChunks_ += 1;
     stats_.resentBytes += length;
@@ -282,6 +303,8 @@ common::Status DownloadSession::verifyTempChunks(const storage::PosixFile& tempF
     manifest_.verifiedChunks = std::move(kept);
     completed_ = std::move(verified);
     manifest_.completedRanges = completed_.ranges();
+    verifiedChunksSorted_ = true;
+    completedRangesDirty_ = false;
     manifest_.state = checkpoint::ManifestState::Transferring;
     stats_.verifiedBytes = completed_.bytesCompleted();
     stats_.missingChunks = completed_.missingRanges(manifest_.totalSize).size();
@@ -308,6 +331,14 @@ std::uint64_t DownloadSession::bytesCompleted() const noexcept {
 }
 
 const DownloadSessionStats& DownloadSession::stats() const noexcept { return stats_; }
+
+std::uint64_t DownloadSession::verifiedChunkCount() const noexcept {
+    return manifest_.verifiedChunks.size();
+}
+
+std::uint64_t DownloadSession::completedRangeCount() const noexcept {
+    return completedRangesDirty_ ? completed_.ranges().size() : manifest_.completedRanges.size();
+}
 
 checksum::ChecksumBackend DownloadSession::checksumBackend() const noexcept {
     return checksumBackend_;

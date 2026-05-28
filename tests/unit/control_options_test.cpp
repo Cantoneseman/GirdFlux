@@ -49,7 +49,7 @@ TEST(ControlOptionsTest, ParsesDefaultsAndRequiredRoot) {
     EXPECT_EQ(parsed.value().checksumAlgorithm, ChecksumAlgorithm::Crc32c);
     EXPECT_EQ(parsed.value().checksumBackend, ChecksumBackend::Auto);
     EXPECT_EQ(parsed.value().manifestFlushPolicy, ManifestFlushPolicy::EveryNChunks);
-    EXPECT_EQ(parsed.value().manifestFlushIntervalChunks, 16U);
+    EXPECT_EQ(parsed.value().manifestFlushIntervalChunks, 256U);
     EXPECT_EQ(parsed.value().finalVerifyPolicy, FinalVerifyPolicy::Full);
     EXPECT_EQ(parsed.value().commitSyncPolicy, CommitSyncPolicy::None);
     EXPECT_EQ(parsed.value().receiverWriteback.profile, ReceiverWriteProfile::Default);

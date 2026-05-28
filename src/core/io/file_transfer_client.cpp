@@ -62,11 +62,11 @@ common::Status recvAll(FramedDataSocket* socket, std::uint8_t* data, std::size_t
     return socket->readAll(data, length);
 }
 
-common::Result<protocol::FrameHeader> recvHeader(FramedDataSocket* socket, std::uint32_t maxPayloadSize,
+common::Result<protocol::FrameHeader> recvHeader(FramedDataSocket* socket,
+                                                 std::uint32_t maxPayloadSize,
                                                  metrics::TransferPhaseStats* phaseStats) {
     protocol::EncodedFrameHeader encoded{};
-    const common::Status recvStatus =
-        recvAll(socket, encoded.data(), encoded.size(), phaseStats);
+    const common::Status recvStatus = recvAll(socket, encoded.data(), encoded.size(), phaseStats);
     if (!recvStatus.isOk()) {
         return recvStatus;
     }
@@ -106,8 +106,8 @@ std::string generateTransferId() {
 }
 
 common::Result<std::vector<chunk::CompletedRange>> sendSessionInitAndReadMissingRanges(
-    FramedDataSocket* socket, const config::FileTransferOptions& options, const std::string& transferId,
-    std::uint32_t streamId, std::uint64_t totalSize,
+    FramedDataSocket* socket, const config::FileTransferOptions& options,
+    const std::string& transferId, std::uint32_t streamId, std::uint64_t totalSize,
     metrics::TransferPhaseStats* phaseStats) {
     protocol::SessionInitPayload init;
     init.mode = options.resume ? protocol::SessionMode::Resume : protocol::SessionMode::New;
@@ -188,8 +188,7 @@ common::Status sendChunkRange(FramedDataSocket* socket, const storage::PosixFile
 
         common::Status readStatus;
         {
-            metrics::ScopedPhaseTimer timer(phaseStats, metrics::TransferPhase::Read,
-                                            payloadSize);
+            metrics::ScopedPhaseTimer timer(phaseStats, metrics::TransferPhase::Read, payloadSize);
             readStatus = storage::readAtAll(inputFile, completed, buffer.data(), payloadSize,
                                             fileIoContext, fileIoStats);
         }
@@ -218,7 +217,8 @@ common::Status sendChunkRange(FramedDataSocket* socket, const storage::PosixFile
             return headerStatus;
         }
 
-        const common::Status payloadStatus = sendAll(socket, buffer.data(), payloadSize, phaseStats);
+        const common::Status payloadStatus =
+            sendAll(socket, buffer.data(), payloadSize, phaseStats);
         if (!payloadStatus.isOk()) {
             return payloadStatus;
         }
@@ -276,7 +276,7 @@ common::Status sendStream(const config::FileTransferOptions& options,
                           const storage::FileIoContext& fileIoContext,
                           storage::FileIoStats* fileIoStats) {
     auto connectionResult = connectFramedDataSocket(options.host.c_str(), options.port,
-                                                   options.dataTlsMode, options.dataTls);
+                                                    options.dataTlsMode, options.dataTls);
     if (!connectionResult.isOk()) {
         return connectionResult.status();
     }
@@ -286,8 +286,8 @@ common::Status sendStream(const config::FileTransferOptions& options,
         return timeoutStatus;
     }
 
-    auto missingRanges = sendSessionInitAndReadMissingRanges(
-        &connection, options, transferId, streamId, totalSize, phaseStats);
+    auto missingRanges = sendSessionInitAndReadMissingRanges(&connection, options, transferId,
+                                                             streamId, totalSize, phaseStats);
     if (!missingRanges.isOk()) {
         return missingRanges.status();
     }
@@ -330,10 +330,10 @@ common::Status sendStream(const config::FileTransferOptions& options,
             streamSent += end - begin;
             if (options.hasDuplicateCorruptChunk &&
                 options.duplicateCorruptChunk == chunk.chunkId) {
-                const common::Status duplicateStatus = sendChunkRange(
-                    &connection, inputFile, chunk, begin, end, streamId, totalSize,
-                    options.checksumAlgorithm, checksumBackend, true, fileIoContext, buffer,
-                    phaseStats, fileIoStats);
+                const common::Status duplicateStatus =
+                    sendChunkRange(&connection, inputFile, chunk, begin, end, streamId, totalSize,
+                                   options.checksumAlgorithm, checksumBackend, true, fileIoContext,
+                                   buffer, phaseStats, fileIoStats);
                 if (!duplicateStatus.isOk()) {
                     return duplicateStatus;
                 }
@@ -425,10 +425,10 @@ common::Status runFileTransferClient(const config::FileTransferOptions& options)
 
     for (std::uint32_t streamId = 0; streamId < options.connections; ++streamId) {
         threads.emplace_back([&, streamId]() {
-            statuses[streamId] = sendStream(options, inputFile, chunks, transferId, streamId,
-                                            resolvedBackend.value(), totalSize, chunksStarted,
-                                            &streamStats[streamId], &phaseStats, fileIoContext,
-                                            &fileIoStats);
+            statuses[streamId] =
+                sendStream(options, inputFile, chunks, transferId, streamId,
+                           resolvedBackend.value(), totalSize, chunksStarted,
+                           &streamStats[streamId], &phaseStats, fileIoContext, &fileIoStats);
         });
     }
 
@@ -478,6 +478,8 @@ common::Status runFileTransferClient(const config::FileTransferOptions& options)
                      storage::effectivePosixWriteStrategy(options.fileIo))
               << " data_tls_mode=" << dataTlsModeName(options.dataTlsMode);
     metrics::appendPhaseStats(std::cout, phaseStats);
+    metrics::appendRetrSenderAliases(std::cout, phaseStats);
+    metrics::appendChecksumFinalVerifyAliases(std::cout, phaseStats);
     storage::appendFileIoStats(std::cout, fileIoStats);
     std::cout << '\n';
 

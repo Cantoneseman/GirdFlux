@@ -44,6 +44,36 @@ TEST(DownloadManifestTest, SerializesAndParsesStableTextFormat) {
     ASSERT_EQ(parsed.value().verifiedChunks.size(), 2U);
 }
 
+TEST(DownloadManifestTest, PreparedSerializerKeepsSuppliedRangesAndSortedRecords) {
+    gridflux::checkpoint::DownloadManifest manifest;
+    manifest.transferId = "download-phase2c";
+    manifest.sourcePath = "source.bin";
+    manifest.targetPath = "/tmp/out";
+    manifest.tempPath = "/tmp/out.part.download-phase2c";
+    manifest.totalSize = 4096;
+    manifest.chunkSize = 1024;
+    manifest.createdAtUnixNanos = 1;
+    manifest.updatedAtUnixNanos = 2;
+    manifest.state = gridflux::checkpoint::ManifestState::Transferring;
+    manifest.completedRanges = {{0, 1024}, {2048, 4096}};
+    manifest.verifiedChunks = {
+        {0, 0, 1024, {gridflux::checksum::ChecksumAlgorithm::Crc32c, 0x11111111U}},
+        {2, 2048, 2048, {gridflux::checksum::ChecksumAlgorithm::Crc32c, 0x22222222U}},
+    };
+
+    const auto serialized = gridflux::checkpoint::serializePreparedDownloadManifest(manifest);
+    ASSERT_TRUE(serialized.isOk()) << serialized.status().message();
+    EXPECT_NE(serialized.value().find("completed_ranges=0-1024,2048-4096"),
+              std::string::npos);
+
+    const auto parsed = gridflux::checkpoint::parseDownloadManifest(serialized.value());
+    ASSERT_TRUE(parsed.isOk()) << parsed.status().message();
+    ASSERT_EQ(parsed.value().completedRanges.size(), 2U);
+    EXPECT_EQ(parsed.value().completedRanges[1].begin, 2048U);
+    ASSERT_EQ(parsed.value().verifiedChunks.size(), 2U);
+    EXPECT_EQ(parsed.value().verifiedChunks[0].offset, 0U);
+}
+
 TEST(DownloadManifestTest, RejectsCorruptBodyChecksum) {
     gridflux::checkpoint::DownloadManifest manifest;
     manifest.transferId = "download-corrupt";

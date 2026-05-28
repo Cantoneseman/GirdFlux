@@ -130,19 +130,22 @@ std::vector<ChunkChecksumRecord> sortedRecords(const std::vector<ChunkChecksumRe
     return sorted;
 }
 
-std::string serializeVerifiedChunks(const std::vector<ChunkChecksumRecord>& records) {
+std::string serializeVerifiedChunksSorted(const std::vector<ChunkChecksumRecord>& records) {
     std::ostringstream output;
-    const std::vector<ChunkChecksumRecord> sorted = sortedRecords(records);
-    for (std::size_t index = 0; index < sorted.size(); ++index) {
+    for (std::size_t index = 0; index < records.size(); ++index) {
         if (index != 0) {
             output << ',';
         }
-        output << sorted[index].chunkId << ':' << sorted[index].offset << ':'
-               << sorted[index].length << ':'
-               << checksum::checksumAlgorithmName(sorted[index].checksum.algorithm) << ':'
-               << hex32(sorted[index].checksum.value);
+        output << records[index].chunkId << ':' << records[index].offset << ':'
+               << records[index].length << ':'
+               << checksum::checksumAlgorithmName(records[index].checksum.algorithm) << ':'
+               << hex32(records[index].checksum.value);
     }
     return output.str();
+}
+
+std::string serializeVerifiedChunks(const std::vector<ChunkChecksumRecord>& records) {
+    return serializeVerifiedChunksSorted(sortedRecords(records));
 }
 
 common::Result<std::vector<core::chunk::CompletedRange>> parseRanges(const std::string& text,
@@ -283,7 +286,7 @@ std::string buildManifestBody(const TransferManifest& manifest,
     output << "updated_at_unix_ns=" << manifest.updatedAtUnixNanos << '\n';
     output << "state=" << manifestStateName(manifest.state) << '\n';
     output << "completed_ranges=" << serializeRanges(ranges) << '\n';
-    output << "verified_chunks=" << serializeVerifiedChunks(manifest.verifiedChunks) << '\n';
+    output << "verified_chunks=" << serializeVerifiedChunksSorted(manifest.verifiedChunks) << '\n';
     return output.str();
 }
 
@@ -357,11 +360,34 @@ common::Result<std::string> serializeTransferManifest(const TransferManifest& ma
         return common::Status::invalidArgument("manifest chunk_size must be greater than zero");
     }
 
-    auto completed = completedFromVerified(manifest.verifiedChunks, manifest.totalSize);
+    TransferManifest prepared = manifest;
+    prepared.verifiedChunks = sortedRecords(manifest.verifiedChunks);
+    auto completed = completedFromVerified(prepared.verifiedChunks, manifest.totalSize);
     if (!completed.isOk()) {
         return completed.status();
     }
-    const std::string body = buildManifestBody(manifest, completed.value().ranges());
+    const std::string body = buildManifestBody(prepared, completed.value().ranges());
+    const std::uint32_t bodyChecksum =
+        checksum::crc32c(reinterpret_cast<const std::uint8_t*>(body.data()), body.size());
+    return body + "manifest_body_crc32c=" + hex32(bodyChecksum) + '\n';
+}
+
+common::Result<std::string> serializePreparedTransferManifest(
+    const TransferManifest& manifest) {
+    if (manifest.version != kTransferManifestVersion) {
+        return common::Status::invalidArgument("serializer only writes manifest version 2");
+    }
+    if (!isValidTransferId(manifest.transferId)) {
+        return common::Status::invalidArgument("invalid transfer_id");
+    }
+    if (manifest.outputPath.empty() || manifest.tempPath.empty()) {
+        return common::Status::invalidArgument("manifest paths must not be empty");
+    }
+    if (manifest.chunkSize == 0) {
+        return common::Status::invalidArgument("manifest chunk_size must be greater than zero");
+    }
+
+    const std::string body = buildManifestBody(manifest, manifest.completedRanges);
     const std::uint32_t bodyChecksum =
         checksum::crc32c(reinterpret_cast<const std::uint8_t*>(body.data()), body.size());
     return body + "manifest_body_crc32c=" + hex32(bodyChecksum) + '\n';

@@ -44,6 +44,12 @@ STAGE_FIELDS = [
     "stage_checksum_bytes",
     "stage_manifest_flush_seconds",
     "stage_manifest_flush_bytes",
+    "stage_manifest_sort_seconds",
+    "stage_manifest_sort_bytes",
+    "stage_manifest_serialize_seconds",
+    "stage_manifest_serialize_bytes",
+    "stage_manifest_write_seconds",
+    "stage_manifest_write_bytes",
     "stage_resume_precheck_seconds",
     "stage_resume_precheck_bytes",
     "stage_final_verify_seconds",
@@ -95,6 +101,7 @@ ROLE_METRIC_FIELDS = [
     "manifest_flush_policy",
     "manifest_flush_interval_chunks",
     "final_verify_policy",
+    "final_verify_policy_requested",
     "final_verify_policy_effective",
     "commit_sync_policy",
     "preallocate",
@@ -116,8 +123,19 @@ PHASE_ALIAS_FIELDS = [
     "checksum_bytes",
     "manifest_flush_seconds",
     "manifest_flush_bytes",
+    "manifest_sort_seconds",
+    "manifest_sort_bytes",
+    "manifest_serialize_seconds",
+    "manifest_serialize_bytes",
+    "manifest_write_seconds",
+    "manifest_write_bytes",
+    "manifest_bytes_written",
+    "verified_chunk_count",
+    "completed_range_count",
     "final_verify_seconds",
     "final_verify_bytes",
+    "bytes_checksummed",
+    "bytes_final_verified",
     "finalize_rename_seconds",
     "finalize_rename_bytes",
     "rename_commit_seconds",
@@ -163,6 +181,7 @@ CSV_FIELDS = [
     "manifest_flush_interval_chunks",
     "commit_sync_policy",
     "final_verify_policy",
+    "final_verify_policy_requested",
     "final_verify_policy_effective",
     *STAGE_FIELDS,
     *PHASE_ALIAS_FIELDS,
@@ -1144,6 +1163,7 @@ def initial_row(args: argparse.Namespace, case: Case, env: EnvironmentSnapshot, 
         "manifest_flush_interval_chunks": str(case.manifest_flush_interval_chunks),
         "commit_sync_policy": case.commit_sync_policy,
         "final_verify_policy": case.final_verify_policy,
+        "final_verify_policy_requested": case.final_verify_policy,
         "final_verify_policy_effective": "",
         "receiver_pending_bytes_max": "",
         "receiver_backpressure_count": "",
@@ -1211,6 +1231,14 @@ def metric_value(metrics: dict[str, str], field: str) -> str:
             or metrics.get("stage_rename_commit_seconds")
             or metrics.get("finalize_rename_seconds", "")
         )
+    if field == "bytes_checksummed":
+        return metrics.get("bytes_checksummed") or metrics.get("checksum_bytes") or metrics.get(
+            "stage_checksum_bytes", ""
+        )
+    if field == "bytes_final_verified":
+        return metrics.get("bytes_final_verified") or metrics.get(
+            "final_verify_bytes"
+        ) or metrics.get("stage_final_verify_bytes", "")
     return metrics.get(field, "")
 
 
@@ -1236,6 +1264,9 @@ def fill_metrics(row: dict[str, str], direction: str, server_text: str, client_t
     )
     row["commit_sync_policy"] = metrics.get("commit_sync_policy", row["commit_sync_policy"])
     row["final_verify_policy"] = metrics.get("final_verify_policy", row["final_verify_policy"])
+    row["final_verify_policy_requested"] = metrics.get(
+        "final_verify_policy_requested", row["final_verify_policy"]
+    )
     row["final_verify_policy_effective"] = metrics.get("final_verify_policy_effective", "")
     row["preallocate"] = metrics.get("preallocate", row["preallocate"])
     row["file_io_backend"] = metrics.get("file_io_backend", row["file_io_backend"])
@@ -1279,6 +1310,7 @@ def fill_metrics(row: dict[str, str], direction: str, server_text: str, client_t
             "manifest_flush_policy": "manifest_flush_policy",
             "manifest_flush_interval_chunks": "manifest_flush_interval_chunks",
             "final_verify_policy": "final_verify_policy",
+            "final_verify_policy_requested": "final_verify_policy_requested",
             "final_verify_policy_effective": "final_verify_policy_effective",
             "commit_sync_policy": "commit_sync_policy",
             "preallocate": "preallocate",
@@ -1322,6 +1354,7 @@ SUMMARY_GROUP_FIELDS = [
     "manifest_flush_interval_chunks",
     "commit_sync_policy",
     "final_verify_policy",
+    "final_verify_policy_requested",
     "final_verify_policy_effective",
 ]
 
@@ -1440,6 +1473,7 @@ def summarize_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
             row["manifest_flush_interval_chunks"],
             row["commit_sync_policy"],
             row["final_verify_policy"],
+            row["final_verify_policy_requested"],
             row["final_verify_policy_effective"],
         )
         groups.setdefault(key, []).append(row)
@@ -1929,6 +1963,11 @@ def process_check(remote: str) -> tuple[str, str]:
         check=False,
     ).stdout.strip()
     remote_output_text = run_remote(remote, f"pgrep -af {pattern} || true", check=False).stdout.strip()
+    process_pattern = re.compile(r"gridflux-gridftp-server|gridflux-file-")
+    local = "\n".join(line for line in local.splitlines() if process_pattern.search(line))
+    remote_output_text = "\n".join(
+        line for line in remote_output_text.splitlines() if process_pattern.search(line)
+    )
     return local, remote_output_text
 
 
@@ -1958,7 +1997,7 @@ def main() -> int:
         default="every_n_chunks",
     )
     parser.add_argument("--manifest-flush-policies", help="comma list: every_n_chunks,final_only")
-    parser.add_argument("--manifest-flush-interval-chunks", type=int, default=16)
+    parser.add_argument("--manifest-flush-interval-chunks", type=int, default=256)
     parser.add_argument("--manifest-flush-interval-chunks-list", help="comma list of chunk counts")
     parser.add_argument("--commit-sync-policy", choices=["none", "fsync_file", "fsync_file_and_dir"], default="none")
     parser.add_argument("--commit-sync-policies", help="comma list: none,fsync_file,fsync_file_and_dir")

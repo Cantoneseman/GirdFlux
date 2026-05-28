@@ -120,6 +120,53 @@ TEST(TransferSessionTest, FlushesManifestAfterConfiguredVerifiedChunkInterval) {
     cleanupSessionFiles(path, transferId);
 }
 
+TEST(TransferSessionTest, SavesOutOfOrderChunksSortedAndResumeRangesStayCorrect) {
+    const std::string path = outputPath("gridflux-session-out-of-order");
+    const std::string transferId = "session-out-of-order";
+    cleanupSessionFiles(path, transferId);
+
+    auto created = gridflux::core::session::TransferSession::createNew(
+        path, transferId, 4096, 1024, gridflux::checksum::ChecksumAlgorithm::Crc32c,
+        gridflux::checksum::ChecksumBackend::Auto,
+        gridflux::core::session::ManifestFlushPolicy::EveryNChunks, 16);
+    ASSERT_TRUE(created.isOk()) << created.status().message();
+
+    ASSERT_TRUE(created.value()
+                    .recordVerifiedChunk(
+                        2, 2048, 1024,
+                        {gridflux::checksum::ChecksumAlgorithm::Crc32c, 0x22222222U})
+                    .isOk());
+    ASSERT_TRUE(created.value()
+                    .recordVerifiedChunk(
+                        0, 0, 1024,
+                        {gridflux::checksum::ChecksumAlgorithm::Crc32c, 0x11111111U})
+                    .isOk());
+    ASSERT_TRUE(created.value().flushManifest().isOk());
+
+    auto loaded = gridflux::checkpoint::ManifestStore::load(created.value().manifestPath());
+    ASSERT_TRUE(loaded.isOk()) << loaded.status().message();
+    ASSERT_EQ(loaded.value().verifiedChunks.size(), 2U);
+    EXPECT_EQ(loaded.value().verifiedChunks[0].offset, 0U);
+    EXPECT_EQ(loaded.value().verifiedChunks[1].offset, 2048U);
+    ASSERT_EQ(loaded.value().completedRanges.size(), 2U);
+    EXPECT_EQ(loaded.value().completedRanges[0].begin, 0U);
+    EXPECT_EQ(loaded.value().completedRanges[0].end, 1024U);
+    EXPECT_EQ(loaded.value().completedRanges[1].begin, 2048U);
+    EXPECT_EQ(loaded.value().completedRanges[1].end, 3072U);
+
+    auto resumed = gridflux::core::session::TransferSession::resume(
+        path, transferId, 4096, 1024, gridflux::checksum::ChecksumAlgorithm::Crc32c);
+    ASSERT_TRUE(resumed.isOk()) << resumed.status().message();
+    const auto missing = resumed.value().missingRanges();
+    ASSERT_EQ(missing.size(), 2U);
+    EXPECT_EQ(missing[0].begin, 1024U);
+    EXPECT_EQ(missing[0].end, 2048U);
+    EXPECT_EQ(missing[1].begin, 3072U);
+    EXPECT_EQ(missing[1].end, 4096U);
+
+    cleanupSessionFiles(path, transferId);
+}
+
 TEST(TransferSessionTest, FinalOnlyManifestFlushDefersUntilForcedFlush) {
     const std::string path = outputPath("gridflux-session-final-only-flush");
     const std::string transferId = "session-final-only-flush";
@@ -247,16 +294,16 @@ TEST(TransferSessionTest, RejectsChecksumMismatchForDuplicateChunk) {
 }
 
 TEST(TransferSessionTest, FinalVerifyPolicyEligibilityIsStrict) {
-    using gridflux::core::session::FinalVerifyPolicy;
     using gridflux::core::session::canCommitWithVerifiedChunksFinalVerify;
+    using gridflux::core::session::canUseCurrentSessionVerifiedChunksFinalVerify;
     using gridflux::core::session::canUseVerifiedChunksFinalVerify;
+    using gridflux::core::session::FinalVerifyPolicy;
 
     EXPECT_TRUE(canUseVerifiedChunksFinalVerify(FinalVerifyPolicy::VerifiedChunks,
-                                                gridflux::checksum::ChecksumAlgorithm::Crc32c,
-                                                1024, 1024, false));
-    EXPECT_FALSE(canUseVerifiedChunksFinalVerify(FinalVerifyPolicy::Full,
-                                                 gridflux::checksum::ChecksumAlgorithm::Crc32c,
-                                                 1024, 1024, false));
+                                                gridflux::checksum::ChecksumAlgorithm::Crc32c, 1024,
+                                                1024, false));
+    EXPECT_FALSE(canUseVerifiedChunksFinalVerify(
+        FinalVerifyPolicy::Full, gridflux::checksum::ChecksumAlgorithm::Crc32c, 1024, 1024, false));
     EXPECT_FALSE(canUseVerifiedChunksFinalVerify(FinalVerifyPolicy::VerifiedChunks,
                                                  gridflux::checksum::ChecksumAlgorithm::None, 1024,
                                                  1024, false));
@@ -266,6 +313,15 @@ TEST(TransferSessionTest, FinalVerifyPolicyEligibilityIsStrict) {
     EXPECT_FALSE(canUseVerifiedChunksFinalVerify(FinalVerifyPolicy::VerifiedChunks,
                                                  gridflux::checksum::ChecksumAlgorithm::Crc32c,
                                                  1024, 1024, true));
+    EXPECT_TRUE(canUseCurrentSessionVerifiedChunksFinalVerify(
+        FinalVerifyPolicy::VerifiedChunks, gridflux::checksum::ChecksumAlgorithm::Crc32c, 1024,
+        1024, false, 0, 0));
+    EXPECT_FALSE(canUseCurrentSessionVerifiedChunksFinalVerify(
+        FinalVerifyPolicy::VerifiedChunks, gridflux::checksum::ChecksumAlgorithm::Crc32c, 1024,
+        1024, false, 1, 0));
+    EXPECT_FALSE(canUseCurrentSessionVerifiedChunksFinalVerify(
+        FinalVerifyPolicy::VerifiedChunks, gridflux::checksum::ChecksumAlgorithm::Crc32c, 1024,
+        1024, false, 0, 1));
     EXPECT_TRUE(canCommitWithVerifiedChunksFinalVerify(
         FinalVerifyPolicy::VerifiedChunks, gridflux::checksum::ChecksumAlgorithm::Crc32c, 1024,
         1024, false, true));

@@ -54,6 +54,12 @@ TransferPhaseStats::Counters& TransferPhaseStats::counters(TransferPhase phase) 
             return checksum_;
         case TransferPhase::ManifestFlush:
             return manifestFlush_;
+        case TransferPhase::ManifestSort:
+            return manifestSort_;
+        case TransferPhase::ManifestSerialize:
+            return manifestSerialize_;
+        case TransferPhase::ManifestWrite:
+            return manifestWrite_;
         case TransferPhase::ResumePrecheck:
             return resumePrecheck_;
         case TransferPhase::FinalVerify:
@@ -66,8 +72,8 @@ TransferPhaseStats::Counters& TransferPhaseStats::counters(TransferPhase phase) 
     return overall_;
 }
 
-const TransferPhaseStats::Counters& TransferPhaseStats::counters(TransferPhase phase) const
-    noexcept {
+const TransferPhaseStats::Counters& TransferPhaseStats::counters(
+    TransferPhase phase) const noexcept {
     switch (phase) {
         case TransferPhase::Recv:
             return recv_;
@@ -81,6 +87,12 @@ const TransferPhaseStats::Counters& TransferPhaseStats::counters(TransferPhase p
             return checksum_;
         case TransferPhase::ManifestFlush:
             return manifestFlush_;
+        case TransferPhase::ManifestSort:
+            return manifestSort_;
+        case TransferPhase::ManifestSerialize:
+            return manifestSerialize_;
+        case TransferPhase::ManifestWrite:
+            return manifestWrite_;
         case TransferPhase::ResumePrecheck:
             return resumePrecheck_;
         case TransferPhase::FinalVerify:
@@ -119,6 +131,9 @@ void appendPhaseStats(std::ostream& stream, const TransferPhaseStats& stats) {
     appendPhase(stream, "write", stats, TransferPhase::Write);
     appendPhase(stream, "checksum", stats, TransferPhase::Checksum);
     appendPhase(stream, "manifest_flush", stats, TransferPhase::ManifestFlush);
+    appendPhase(stream, "manifest_sort", stats, TransferPhase::ManifestSort);
+    appendPhase(stream, "manifest_serialize", stats, TransferPhase::ManifestSerialize);
+    appendPhase(stream, "manifest_write", stats, TransferPhase::ManifestWrite);
     appendPhase(stream, "resume_precheck", stats, TransferPhase::ResumePrecheck);
     appendPhase(stream, "final_verify", stats, TransferPhase::FinalVerify);
     appendPhase(stream, "rename_commit", stats, TransferPhase::RenameCommit);
@@ -145,6 +160,22 @@ void appendRetrReceiverAliases(std::ostream& stream, const TransferPhaseStats& s
     appendAlias(stream, "manifest_flush", stats, TransferPhase::ManifestFlush);
     appendAlias(stream, "final_verify", stats, TransferPhase::FinalVerify);
     appendAlias(stream, "finalize_rename", stats, TransferPhase::RenameCommit);
+}
+
+void appendChecksumFinalVerifyAliases(std::ostream& stream, const TransferPhaseStats& stats) {
+    stream << " bytes_checksummed=" << stats.bytes(TransferPhase::Checksum)
+           << " bytes_final_verified=" << stats.bytes(TransferPhase::FinalVerify);
+}
+
+void appendManifestDetailAliases(std::ostream& stream, const TransferPhaseStats& stats,
+                                 std::uint64_t verifiedChunkCount,
+                                 std::uint64_t completedRangeCount) {
+    appendAlias(stream, "manifest_sort", stats, TransferPhase::ManifestSort);
+    appendAlias(stream, "manifest_serialize", stats, TransferPhase::ManifestSerialize);
+    appendAlias(stream, "manifest_write", stats, TransferPhase::ManifestWrite);
+    stream << " manifest_bytes_written=" << stats.bytes(TransferPhase::ManifestWrite)
+           << " verified_chunk_count=" << verifiedChunkCount
+           << " completed_range_count=" << completedRangeCount;
 }
 
 }  // namespace gridflux::core::metrics
